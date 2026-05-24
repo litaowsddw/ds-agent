@@ -134,6 +134,7 @@ apps/
         agent.py
         identity.py
         mcp.py
+        memory.py
         skill.py
         session.py
         workflow.py
@@ -149,6 +150,7 @@ apps/
         health.py
         identity.py
         mcp.py
+        memory.py
         runtime.py
         sessions.py
         skills.py
@@ -158,6 +160,7 @@ apps/
         agent.py
         identity.py
         mcp.py
+        memory.py
         session.py
         skill.py
         workflow.py
@@ -167,6 +170,7 @@ apps/
         agent_store.py
         identity_store.py
         mcp_store.py
+        memory_store.py
         rbac.py
         session_store.py
         skill_store.py
@@ -181,6 +185,7 @@ apps/
       test_identity_store.py
       test_llm_gateway.py
       test_mcp_store.py
+      test_memory_store.py
       test_rate_limiter.py
       test_session_store.py
       test_skill_store.py
@@ -336,4 +341,15 @@ docs/MODULE_12_PROMPT_COMPILER.md
 apps/api/app/gateway/rate_limiter.py
 apps/api/tests/test_rate_limiter.py
 docs/MODULE_13_RATE_LIMITING.md
+```
+
+## 20. 模块 14 已落地文件
+
+```text
+apps/api/app/domain/memory.py
+apps/api/app/services/memory_store.py
+apps/api/app/schemas/memory.py
+apps/api/app/routes/memory.py
+apps/api/tests/test_memory_store.py
+docs/MODULE_14_MEMORY_MANAGER.md
 ```

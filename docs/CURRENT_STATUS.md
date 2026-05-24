@@ -25,6 +25,7 @@
 - Gateway + LLM Provider MVP：`apps/api/app/gateway/llm.py`
 - Prompt Compiler + prefix hash MVP：`packages/runtime/prompt_compiler.py`
 - Gateway 限流 MVP：`apps/api/app/gateway/rate_limiter.py`
+- Memory Manager MVP：`apps/api/app/services/memory_store.py`
 
 ## 已验证
 
@@ -40,10 +41,12 @@
 
 ## 下一步
 
-模块 14：Memory Manager MVP。
+模块 15：RAG MVP。
 
 计划新增：
 
-- 长期记忆写入。
-- 按 org/agent 隔离召回。
-- Memory 与 Context Engine 集成。
+- Knowledge Base。
+- Document。
+- Chunk。
+- 简单关键词检索 fallback。
+- 后续替换 pgvector。

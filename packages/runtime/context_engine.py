@@ -80,6 +80,7 @@ class ContextEngine:
         current_input: str,
         token_budget: int,
         skill_summaries: list[dict[str, str]] | None = None,
+        memories: list[dict[str, Any]] | None = None,
     ) -> dict[str, object]:
         """从 Agent Workspace 和 Session 历史组装上下文。
 
@@ -90,6 +91,7 @@ class ContextEngine:
             current_input: 当前回合输入。
             token_budget: 本次上下文 token 预算。
             skill_summaries: 可用 Skill 摘要，只包含名称和描述，不包含完整 SKILL.md。
+            memories: 召回的长期记忆摘要。
         """
 
         # stable_workspace_text 是 Agent 稳定上下文，应该尽量保持顺序和内容稳定。
@@ -104,6 +106,9 @@ class ContextEngine:
         # skill_summary_text 是可用 Skill 摘要，避免把完整 Skill 指令塞进上下文。
         skill_summary_text = self._format_skill_summaries(skill_summaries or [])
 
+        # memory_text 是长期记忆摘要，按召回顺序注入。
+        memory_text = self._format_memories(memories or [])
+
         sections = [
             ContextSection(
                 name="workspace",
@@ -114,6 +119,11 @@ class ContextEngine:
                 name="skill_summaries",
                 content=skill_summary_text,
                 estimated_tokens=self._estimate_tokens(skill_summary_text),
+            ),
+            ContextSection(
+                name="memories",
+                content=memory_text,
+                estimated_tokens=self._estimate_tokens(memory_text),
             ),
             ContextSection(
                 name="compact_summary",
@@ -201,6 +211,21 @@ class ContextEngine:
             description = skill.get("description", "")
             scope = skill.get("scope", "")
             lines.append(f"- {name} [{scope}]: {description}")
+
+        return "\n".join(lines)
+
+    def _format_memories(self, memories: list[dict[str, Any]]) -> str:
+        """格式化长期记忆摘要。"""
+
+        if not memories:
+            return "暂无召回记忆。"
+
+        lines: list[str] = []
+        for memory in memories:
+            memory_type = str(memory.get("memory_type", "memory"))
+            summary = str(memory.get("summary", ""))
+            confidence = memory.get("confidence", "")
+            lines.append(f"- [{memory_type}] {summary} (confidence={confidence})")
 
         return "\n".join(lines)
 

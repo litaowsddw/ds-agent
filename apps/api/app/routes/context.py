@@ -9,6 +9,7 @@ from fastapi import APIRouter, HTTPException, Query
 from apps.api.app.services.agent_store import agent_store
 from apps.api.app.services.session_store import session_store
 from apps.api.app.services.skill_store import skill_store
+from apps.api.app.services.memory_store import memory_store
 from packages.runtime.context_engine import ContextEngine
 
 router = APIRouter()
@@ -34,6 +35,12 @@ async def assemble_session_context(
             actor_user_id=actor_user_id,
             agent_id=session.agent_id,
         )
+        memories = memory_store.recall_memories(
+            actor_user_id=actor_user_id,
+            agent_id=session.agent_id,
+            query=current_input,
+            limit=5,
+        )
     except PermissionError as exc:
         raise HTTPException(status_code=403, detail=str(exc)) from exc
     except ValueError as exc:
@@ -52,6 +59,16 @@ async def assemble_session_context(
         for message in messages
     ]
 
+    # memory_dicts 是传给 Runtime 包的轻量记忆结构。
+    memory_dicts = [
+        {
+            "memory_type": memory.memory_type.value,
+            "summary": memory.summary,
+            "confidence": memory.confidence,
+        }
+        for memory in memories
+    ]
+
     engine = ContextEngine()
     return engine.assemble_from_session(
         workspace_files=workspace_files,
@@ -60,4 +77,5 @@ async def assemble_session_context(
         current_input=current_input,
         token_budget=token_budget,
         skill_summaries=skill_summaries,
+        memories=memory_dicts,
     )
