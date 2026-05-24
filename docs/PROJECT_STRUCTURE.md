@@ -140,6 +140,7 @@ apps/
         workflow_run.py
       gateway/
         llm.py
+        rate_limiter.py
       main.py
       routes/
         agents.py
@@ -180,6 +181,7 @@ apps/
       test_identity_store.py
       test_llm_gateway.py
       test_mcp_store.py
+      test_rate_limiter.py
       test_session_store.py
       test_skill_store.py
       test_workflow_store.py
@@ -326,4 +328,12 @@ packages/runtime/prompt_compiler.py
 apps/api/app/gateway/llm.py
 apps/api/tests/test_llm_gateway.py
 docs/MODULE_12_PROMPT_COMPILER.md
+```
+
+## 19. 模块 13 已落地文件
+
+```text
+apps/api/app/gateway/rate_limiter.py
+apps/api/tests/test_rate_limiter.py
+docs/MODULE_13_RATE_LIMITING.md
 ```

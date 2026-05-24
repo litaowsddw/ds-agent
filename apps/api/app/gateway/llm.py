@@ -10,6 +10,7 @@ from datetime import datetime
 from typing import Any, Protocol
 
 from apps.api.app.domain.identity import new_id, utc_now
+from apps.api.app.gateway.rate_limiter import LocalTokenBucketRateLimiter, RateLimitExceeded, rate_limiter
 from packages.runtime.prompt_compiler import PromptContextCompiler
 
 
@@ -144,7 +145,11 @@ class OpenAICompatibleProvider:
 class LLMGateway:
     """LLM 统一网关。"""
 
-    def __init__(self, providers: dict[str, LLMProvider] | None = None) -> None:
+    def __init__(
+        self,
+        providers: dict[str, LLMProvider] | None = None,
+        limiter: LocalTokenBucketRateLimiter | None = None,
+    ) -> None:
         # providers 保存 Provider 注册表，key 是 provider 名称。
         self.providers = providers or {"mock": MockLLMProvider()}
 
@@ -153,6 +158,9 @@ class LLMGateway:
 
         # prompt_compiler 负责编译 Reasonix 风格三段式 Prompt。
         self.prompt_compiler = PromptContextCompiler()
+
+        # limiter 是 Gateway 调用前的统一限流器。
+        self.limiter = limiter or rate_limiter
 
     def generate(self, request: LLMCallRequest) -> LLMCallResponse:
         """执行一次 LLM 调用并记录日志。"""
@@ -164,7 +172,12 @@ class LLMGateway:
             raise GatewayProviderError(error_message)
 
         try:
+            self._check_rate_limit(request=request)
             response = provider.generate(request)
+        except RateLimitExceeded as exc:
+            error_message = self._normalize_error(exc)
+            self._append_log(request=request, status="failed", usage={}, error_message=error_message)
+            raise
         except Exception as exc:
             error_message = self._normalize_error(exc)
             self._append_log(request=request, status="failed", usage={}, error_message=error_message)
@@ -289,6 +302,24 @@ class LLMGateway:
                 metadata=request.metadata,
             )
         )
+
+    def _check_rate_limit(self, request: LLMCallRequest) -> None:
+        """检查 LLM 调用限流。"""
+
+        # scope 是调用来源，用于支持 org/agent/workflow 等后续维度。
+        scope = str(request.metadata.get("scope", "global"))
+
+        # provider_key 限制单 Provider 请求速率。
+        provider_key = f"llm:provider:{request.provider}"
+
+        # model_key 限制单模型请求速率。
+        model_key = f"llm:model:{request.provider}:{request.model}"
+
+        # scope_key 限制业务范围请求速率。
+        scope_key = f"llm:scope:{scope}"
+
+        for key in (provider_key, model_key, scope_key):
+            self.limiter.require(key=key, tokens=1)
 
     def _normalize_error(self, exc: Exception) -> str:
         """标准化 Provider 错误。"""
