@@ -8,6 +8,7 @@ from fastapi import FastAPI
 
 from apps.api.app.routes.agents import router as agents_router
 from apps.api.app.routes.context import router as context_router
+from apps.api.app.routes.gateway import router as gateway_router
 from apps.api.app.routes.identity import router as identity_router
 from apps.api.app.routes.mcp import router as mcp_router
 from apps.api.app.routes.health import router as health_router
@@ -40,6 +41,7 @@ def create_app() -> FastAPI:
     app.include_router(mcp_router, prefix="/mcp", tags=["mcp"])
     app.include_router(workflows_router, prefix="/workflows", tags=["workflows"])
     app.include_router(workflow_runs_router, prefix="/workflow-runs", tags=["workflow-runs"])
+    app.include_router(gateway_router, prefix="/gateway", tags=["gateway"])
     app.include_router(context_router, prefix="/context", tags=["context"])
     app.include_router(runtime_router, prefix="/runtime", tags=["runtime"])
     return app

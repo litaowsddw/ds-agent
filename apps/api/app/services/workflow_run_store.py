@@ -11,13 +11,19 @@ from apps.api.app.domain.workflow_run import NodeRun, NodeRunStatus, RunStatus, 
 from apps.api.app.services.identity_store import IdentityStore, identity_store
 from apps.api.app.services.rbac import Permission
 from apps.api.app.services.workflow_store import WorkflowStore, workflow_store
+from apps.api.app.gateway.llm import LLMGateway, llm_gateway
 from packages.workflow.executor import WorkflowExecutor, WorkflowExecutionResult
 
 
 class WorkflowRunStore:
     """管理 Workflow Run 和 Node Run。"""
 
-    def __init__(self, identity: IdentityStore, workflows: WorkflowStore) -> None:
+    def __init__(
+        self,
+        identity: IdentityStore,
+        workflows: WorkflowStore,
+        gateway: LLMGateway | None = None,
+    ) -> None:
         # identity 用于运行查询和创建权限校验。
         self.identity = identity
 
@@ -30,8 +36,11 @@ class WorkflowRunStore:
         # node_runs_by_run_id 保存每次运行的节点日志。
         self.node_runs_by_run_id: dict[str, list[NodeRun]] = {}
 
-        # executor 是纯 Python 工作流执行器。
-        self.executor = WorkflowExecutor()
+        # gateway 是 LLM 统一网关，负责 Provider 调用、错误标准化和日志。
+        self.gateway = gateway or llm_gateway
+
+        # executor 是纯 Python 工作流执行器，通过可注入函数接入 Gateway。
+        self.executor = WorkflowExecutor(llm_gateway=self.gateway.generate_from_workflow_node)
 
     def create_run(
         self,
@@ -132,4 +141,3 @@ class WorkflowRunStore:
 
 # workflow_run_store 是 MVP 阶段的进程内运行存储。
 workflow_run_store = WorkflowRunStore(identity=identity_store, workflows=workflow_store)
-

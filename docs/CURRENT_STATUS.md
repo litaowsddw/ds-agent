@@ -22,6 +22,7 @@
 - Workflow DSL 与版本管理 MVP：`apps/api/app/services/workflow_store.py`
 - 前端 Workflow Editor MVP：`apps/web/features/workflows/WorkflowEditor.tsx`
 - Workflow 执行引擎 MVP：`packages/workflow/executor.py`
+- Gateway + LLM Provider MVP：`apps/api/app/gateway/llm.py`
 
 ## 已验证
 
@@ -37,11 +38,11 @@
 
 ## 下一步
 
-模块 11：Gateway + LLM Provider。
+模块 12：Prompt Context Compiler + Reasonix prefix-cache 友好设计增强。
 
 计划新增：
 
-- OpenAI-compatible Provider Adapter。
-- Gateway 调用日志。
-- Provider 错误标准化。
-- LLM 节点从 mock 改为 Gateway 调用接口。
+- Workflow LLM 节点接入稳定 Prompt 编译。
+- prefix hash 记录到 LLM 日志。
+- immutable prefix / append-only log / current turn 分层。
+- cache hit token 指标字段贯通。

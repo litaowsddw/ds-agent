@@ -138,10 +138,13 @@ apps/
         session.py
         workflow.py
         workflow_run.py
+      gateway/
+        llm.py
       main.py
       routes/
         agents.py
         context.py
+        gateway.py
         health.py
         identity.py
         mcp.py
@@ -158,6 +161,7 @@ apps/
         skill.py
         workflow.py
         workflow_run.py
+        gateway.py
       services/
         agent_store.py
         identity_store.py
@@ -174,6 +178,7 @@ apps/
       test_health.py
       test_identity_api.py
       test_identity_store.py
+      test_llm_gateway.py
       test_mcp_store.py
       test_session_store.py
       test_skill_store.py
@@ -302,4 +307,14 @@ apps/worker/app/tasks/workflow.py
 apps/worker/tests/test_workflow_task.py
 packages/workflow/executor.py
 docs/MODULE_10_WORKFLOW_EXECUTION.md
+```
+
+## 17. 模块 11 已落地文件
+
+```text
+apps/api/app/gateway/llm.py
+apps/api/app/routes/gateway.py
+apps/api/app/schemas/gateway.py
+apps/api/tests/test_llm_gateway.py
+docs/MODULE_11_GATEWAY_LLM.md
 ```

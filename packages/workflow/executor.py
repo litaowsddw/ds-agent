@@ -9,7 +9,11 @@ from __future__ import annotations
 
 from dataclasses import dataclass, field
 from time import perf_counter
-from typing import Any
+from typing import Any, Callable
+
+
+# LLMGatewayCall 是工作流执行器调用 LLM Gateway 的函数签名。
+LLMGatewayCall = Callable[[dict[str, Any], dict[str, Any]], dict[str, Any]]
 
 
 @dataclass(slots=True)
@@ -57,6 +61,17 @@ class WorkflowExecutionResult:
 
 class WorkflowExecutor:
     """执行发布后的 Workflow DSL。"""
+
+    def __init__(self, llm_gateway: LLMGatewayCall | None = None) -> None:
+        """初始化执行器。
+
+        参数：
+            llm_gateway: 可选 LLM 调用函数。API 服务会注入真实 Gateway；
+                Worker 或单元测试未注入时使用本地 mock fallback。
+        """
+
+        # llm_gateway 是 LLM 节点的唯一调用入口，避免执行器直接依赖具体 Provider。
+        self.llm_gateway = llm_gateway or self._mock_llm_gateway
 
     def execute(
         self,
@@ -130,12 +145,7 @@ class WorkflowExecutor:
             if node_type == "start":
                 output_data = {"input": node_input.get("workflow_input", {})}
             elif node_type == "llm":
-                # MVP 阶段使用 mock LLM 输出，模块 11 会替换为 Gateway Provider 调用。
-                prompt = str(config.get("prompt", ""))
-                output_data = {
-                    "text": f"[mock-llm] {prompt}".strip(),
-                    "upstream": node_input.get("upstream", {}),
-                }
+                output_data = self.llm_gateway(config, node_input)
             elif node_type == "end":
                 output_data = {"result": node_input.get("upstream", {})}
             else:
@@ -232,3 +242,28 @@ class WorkflowExecutor:
 
         return executed_nodes[-1].output_data
 
+    def _mock_llm_gateway(
+        self,
+        config: dict[str, Any],
+        node_input: dict[str, Any],
+    ) -> dict[str, Any]:
+        """本地 mock LLM Gateway。
+
+        该 fallback 只用于 Worker 未注入 Gateway 或单元测试场景。生产 API 执行路径会
+        注入 `apps.api.app.gateway.llm.LLMGateway`。
+        """
+
+        # prompt 是 LLM 节点配置中的提示词。
+        prompt = str(config.get("prompt", ""))
+
+        return {
+            "text": f"[mock-llm] {prompt}".strip(),
+            "provider": "mock",
+            "model": str(config.get("model", "mock-model")),
+            "upstream": node_input.get("upstream", {}),
+            "usage": {
+                "prompt_tokens": max(1, len(prompt) // 4),
+                "completion_tokens": 8,
+                "cache_hit_tokens": 0,
+            },
+        }

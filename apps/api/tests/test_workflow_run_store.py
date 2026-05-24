@@ -1,6 +1,7 @@
 """WorkflowRunStore 测试。"""
 
 from apps.api.app.domain.workflow_run import RunStatus
+from apps.api.app.gateway.llm import LLMGateway, MockLLMProvider
 from apps.api.app.services.agent_store import AgentStore
 from apps.api.app.services.identity_store import IdentityStore
 from apps.api.app.services.workflow_run_store import WorkflowRunStore
@@ -27,7 +28,8 @@ def test_workflow_run_executes_start_llm_end() -> None:
     identity = IdentityStore()
     agent_store = AgentStore(identity=identity)
     workflow_store = WorkflowStore(identity=identity, agents=agent_store)
-    run_store = WorkflowRunStore(identity=identity, workflows=workflow_store)
+    gateway = LLMGateway(providers={"mock": MockLLMProvider()})
+    run_store = WorkflowRunStore(identity=identity, workflows=workflow_store, gateway=gateway)
 
     owner = identity.register_user("run-owner@example.com", "Owner", "password123")
     organization = identity.create_organization(owner.user_id, "Run 组织")
@@ -46,4 +48,4 @@ def test_workflow_run_executes_start_llm_end() -> None:
     assert run.status == RunStatus.SUCCEEDED
     assert [node_run.node_id for node_run in node_runs] == ["start", "llm", "end"]
     assert run.output_data["result"]["llm"]["text"].startswith("[mock-llm]")
-
+    assert gateway.list_logs()[0].metadata["source"] == "workflow_node"
