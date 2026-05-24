@@ -10,6 +10,7 @@ from datetime import datetime
 from typing import Any, Protocol
 
 from apps.api.app.domain.identity import new_id, utc_now
+from packages.runtime.prompt_compiler import PromptContextCompiler
 
 
 class LLMProvider(Protocol):
@@ -37,6 +38,9 @@ class LLMCallRequest:
 
     # metadata 保存调用来源，不能放密钥。
     metadata: dict[str, Any] = field(default_factory=dict)
+
+    # prefix_hash 是 Reasonix 风格稳定前缀 hash，用于观测 prefix-cache 命中。
+    prefix_hash: str = ""
 
 
 @dataclass(slots=True)
@@ -74,6 +78,9 @@ class LLMCallLog:
 
     # prompt_preview 是提示词预览，避免日志写入过长内容。
     prompt_preview: str
+
+    # prefix_hash 是稳定前缀 hash，后续可关联 provider cache hit tokens。
+    prefix_hash: str
 
     # status 是调用状态，succeeded 或 failed。
     status: str
@@ -144,6 +151,9 @@ class LLMGateway:
         # call_logs 保存调用日志，MVP 阶段使用内存存储。
         self.call_logs: list[LLMCallLog] = []
 
+        # prompt_compiler 负责编译 Reasonix 风格三段式 Prompt。
+        self.prompt_compiler = PromptContextCompiler()
+
     def generate(self, request: LLMCallRequest) -> LLMCallResponse:
         """执行一次 LLM 调用并记录日志。"""
 
@@ -181,8 +191,13 @@ class LLMGateway:
         # model 是节点配置中的模型，默认 mock-model。
         model = str(config.get("model", "mock-model"))
 
-        # prompt 是节点配置中的提示词。后续 Prompt Compiler 会在这里接入。
-        prompt = str(config.get("prompt", ""))
+        compiled_prompt = self._compile_workflow_prompt(config=config, node_input=node_input)
+
+        # prompt 是编译后的完整 Prompt。
+        prompt = str(compiled_prompt["compiled_prompt"])
+
+        # prefix_hash 是稳定前缀的 hash。
+        prefix_hash = str(compiled_prompt["prefix_hash"])
 
         request = LLMCallRequest(
             provider=provider,
@@ -196,6 +211,7 @@ class LLMGateway:
                 "source": "workflow_node",
                 "upstream_node_count": len(node_input.get("upstream", {})),
             },
+            prefix_hash=prefix_hash,
         )
         response = self.generate(request)
         return {
@@ -204,7 +220,44 @@ class LLMGateway:
             "model": response.model,
             "usage": response.usage,
             "upstream": node_input.get("upstream", {}),
+            "prefix_hash": prefix_hash,
         }
+
+    def _compile_workflow_prompt(
+        self,
+        config: dict[str, Any],
+        node_input: dict[str, Any],
+    ) -> dict[str, object]:
+        """编译 Workflow LLM 节点 Prompt。
+
+        Prompt 分为稳定前缀、追加历史和当前输入三段，尽量保持 DeepSeek/Reasonix
+        prefix-cache 友好。
+        """
+
+        # immutable_prefix 是稳定前缀，字段顺序由 PromptContextCompiler 固定。
+        immutable_prefix = {
+            "system_prompt": config.get("system_prompt", ""),
+            "model": config.get("model", "mock-model"),
+            "tool_schemas": config.get("tool_schemas", []),
+            "output_contract": config.get("output_contract", {}),
+        }
+
+        # append_only_log 保存上游节点输出摘要，保持追加式结构。
+        append_only_log = {
+            "upstream": node_input.get("upstream", {}),
+        }
+
+        # current_turn 保存变化最频繁的输入和用户 prompt，放在最后。
+        current_turn = {
+            "prompt": config.get("prompt", ""),
+            "workflow_input": node_input.get("workflow_input", {}),
+        }
+
+        return self.prompt_compiler.compile(
+            immutable_prefix=immutable_prefix,
+            append_only_log=append_only_log,
+            current_turn=current_turn,
+        )
 
     def list_logs(self) -> list[LLMCallLog]:
         """返回 LLM 调用日志。"""
@@ -229,6 +282,7 @@ class LLMGateway:
                 provider=request.provider,
                 model=request.model,
                 prompt_preview=prompt_preview,
+                prefix_hash=request.prefix_hash,
                 status=status,
                 usage=usage,
                 error_message=error_message,
@@ -244,4 +298,3 @@ class LLMGateway:
 
 # llm_gateway 是 API 进程默认 LLM Gateway。
 llm_gateway = LLMGateway()
-

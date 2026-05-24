@@ -318,3 +318,12 @@ apps/api/app/schemas/gateway.py
 apps/api/tests/test_llm_gateway.py
 docs/MODULE_11_GATEWAY_LLM.md
 ```
+
+## 18. 模块 12 已落地文件
+
+```text
+packages/runtime/prompt_compiler.py
+apps/api/app/gateway/llm.py
+apps/api/tests/test_llm_gateway.py
+docs/MODULE_12_PROMPT_COMPILER.md
+```

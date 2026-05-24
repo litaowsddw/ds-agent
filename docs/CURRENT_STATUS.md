@@ -23,6 +23,7 @@
 - 前端 Workflow Editor MVP：`apps/web/features/workflows/WorkflowEditor.tsx`
 - Workflow 执行引擎 MVP：`packages/workflow/executor.py`
 - Gateway + LLM Provider MVP：`apps/api/app/gateway/llm.py`
+- Prompt Compiler + prefix hash MVP：`packages/runtime/prompt_compiler.py`
 
 ## 已验证
 
@@ -38,11 +39,11 @@
 
 ## 下一步
 
-模块 12：Prompt Context Compiler + Reasonix prefix-cache 友好设计增强。
+模块 13：全局限流与并发控制。
 
 计划新增：
 
-- Workflow LLM 节点接入稳定 Prompt 编译。
-- prefix hash 记录到 LLM 日志。
-- immutable prefix / append-only log / current turn 分层。
-- cache hit token 指标字段贯通。
+- Redis token bucket 抽象。
+- 本地 fallback 限流器。
+- provider/model/org/agent 多维限流 key。
+- Gateway 调用前限流检查。

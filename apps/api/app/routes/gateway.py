@@ -52,9 +52,9 @@ def _to_log_response(log: LLMCallLog) -> LLMCallLogResponse:
         provider=log.provider,
         model=log.model,
         prompt_preview=log.prompt_preview,
+        prefix_hash=log.prefix_hash,
         status=log.status,
         usage=log.usage,
         error_message=log.error_message,
         metadata=log.metadata,
     )
-

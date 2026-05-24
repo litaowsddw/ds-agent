@@ -30,8 +30,8 @@ class LLMCallLogResponse(BaseModel):
     provider: str
     model: str
     prompt_preview: str
+    prefix_hash: str
     status: str
     usage: dict[str, int]
     error_message: str
     metadata: dict[str, Any]
-

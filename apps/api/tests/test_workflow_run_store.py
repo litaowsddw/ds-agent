@@ -48,4 +48,5 @@ def test_workflow_run_executes_start_llm_end() -> None:
     assert run.status == RunStatus.SUCCEEDED
     assert [node_run.node_id for node_run in node_runs] == ["start", "llm", "end"]
     assert run.output_data["result"]["llm"]["text"].startswith("[mock-llm]")
+    assert run.output_data["result"]["llm"]["prefix_hash"]
     assert gateway.list_logs()[0].metadata["source"] == "workflow_node"
