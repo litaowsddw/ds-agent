@@ -5,6 +5,7 @@ gateway 等模块中，避免入口文件变成难以维护的“大杂烩”。
 """
 
 from fastapi import FastAPI
+from fastapi.middleware.cors import CORSMiddleware
 
 from apps.api.app.routes.agents import router as agents_router
 from apps.api.app.routes.context import router as context_router
@@ -34,6 +35,16 @@ def create_app() -> FastAPI:
     app_version = "0.1.0"
 
     app = FastAPI(title=app_title, version=app_version)
+    app.add_middleware(
+        CORSMiddleware,
+        allow_origins=[
+            "http://localhost:3000",
+            "http://127.0.0.1:3000",
+        ],
+        allow_credentials=True,
+        allow_methods=["*"],
+        allow_headers=["*"],
+    )
     app.include_router(health_router, prefix="/health", tags=["health"])
     app.include_router(identity_router, prefix="/identity", tags=["identity"])
     app.include_router(agents_router, prefix="/agents", tags=["agents"])

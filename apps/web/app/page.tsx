@@ -1,115 +1,106 @@
-import { Activity, Bot, Boxes, GitBranch, ShieldCheck, Workflow } from "lucide-react";
+import Link from "next/link";
+import { Activity, Bot, Database, GitBranch, Network, ShieldCheck, Workflow } from "lucide-react";
 
-// capabilityItems 表示首页展示的核心能力清单，后续可以替换为从 API 读取的模块状态。
 const capabilityItems = [
-  {
-    title: "可视化工作流",
-    description: "用画布组织 Start、LLM、RAG、Tool、Condition、End 等节点。",
-    icon: Workflow
-  },
-  {
-    title: "Agent Runtime",
-    description: "按 Agent 隔离 Workspace、Session、Skill、MCP 和 Memory。",
-    icon: Bot
-  },
-  {
-    title: "异步任务调度",
-    description: "基于 Celery + Redis 支撑排队、重试、超时和后台 Agent。",
-    icon: Activity
-  },
-  {
-    title: "统一网关",
-    description: "所有 LLM、RAG、工具和 MCP 调用统一鉴权、限流、审计。",
-    icon: ShieldCheck
-  },
-  {
-    title: "Reasonix 缓存友好",
-    description: "稳定前缀、追加历史、动态输入后置，提升 prefix-cache 命中。",
-    icon: GitBranch
-  },
-  {
-    title: "模块化扩展",
-    description: "按 MVP 模块独立开发、独立测试，逐步演进到完整平台。",
-    icon: Boxes
-  }
+  { title: "可视化工作流", description: "拖拽节点、保存草稿、发布版本并立即运行。", icon: Workflow },
+  { title: "Agent 隔离", description: "按用户、组织、群组和 Agent 绑定运行边界。", icon: Bot },
+  { title: "异步执行", description: "Celery + Redis 支撑排队、重试和后台任务。", icon: Activity },
+  { title: "统一网关", description: "统一管理 LLM、RAG、工具和 MCP 调用。", icon: ShieldCheck },
+  { title: "缓存友好", description: "稳定前缀、追加历史和动态输入后置。", icon: GitBranch },
+  { title: "记忆管理", description: "长期记忆、偏好事实和上下文装配逐步完善。", icon: Database }
 ];
 
 export default function HomePage() {
-  // sidebarItems 表示工作台左侧导航项，MVP 阶段先使用静态数据。
-  const sidebarItems = ["总览", "Agent", "Workflow", "Runtime", "MCP", "Memory", "任务队列"];
-
   return (
-    <main className="min-h-screen bg-canvas">
-      <section className="border-b border-line bg-panel">
+    <main className="min-h-screen bg-[#f6f7f9] text-[#172033]">
+      <header className="border-b border-[#dfe4ee] bg-white">
         <div className="mx-auto flex max-w-7xl items-center justify-between px-6 py-4">
           <div className="flex items-center gap-3">
-            <div className="grid h-9 w-9 place-items-center rounded bg-accent text-white">
-              <Workflow size={20} />
+            <div className="grid h-10 w-10 place-items-center rounded-lg bg-[#2f6feb] text-white">
+              <Network size={20} />
             </div>
             <div>
               <h1 className="text-lg font-semibold">AgentFlow</h1>
-              <p className="text-sm text-muted">开源 Agent 工作流平台</p>
+              <p className="text-sm text-[#667085]">开源 Agent 工作流平台</p>
             </div>
           </div>
-          <div className="rounded border border-line px-3 py-1 text-sm text-muted">v0.1 骨架开发中</div>
+          <Link
+            className="rounded-md bg-[#2f6feb] px-4 py-2 text-sm font-medium text-white shadow-sm transition hover:bg-[#255dc7]"
+            href="/workflows"
+          >
+            进入工作台
+          </Link>
         </div>
+      </header>
+
+      <section className="mx-auto grid max-w-7xl grid-cols-[1fr_420px] gap-8 px-6 py-10">
+        <div className="flex min-h-[520px] flex-col justify-center border-b border-[#dfe4ee] pb-10">
+          <p className="mb-4 text-sm font-semibold text-[#2f6feb]">MVP 联调版本</p>
+          <h2 className="max-w-4xl text-4xl font-semibold leading-tight">
+            从组织、Agent 到工作流运行，一条链路完成可视化搭建与后端执行。
+          </h2>
+          <p className="mt-5 max-w-3xl text-base leading-7 text-[#667085]">
+            当前阶段聚焦可运行骨架：前端提供清爽的工作台入口，后端提供身份隔离、Agent Workspace、
+            Workflow 发布运行、Gateway 日志和限流能力。后续模块会按开发文档继续独立开发、独立测试、整体联调。
+          </p>
+          <div className="mt-7 flex gap-3">
+            <Link
+              className="rounded-md bg-[#2f6feb] px-4 py-2 text-sm font-medium text-white shadow-sm transition hover:bg-[#255dc7]"
+              href="/workflows"
+            >
+              打开工作流编辑器
+            </Link>
+            <a
+              className="rounded-md border border-[#cfd7e6] bg-white px-4 py-2 text-sm font-medium text-[#172033] transition hover:border-[#2f6feb]"
+              href="http://127.0.0.1:8000/docs"
+              target="_blank"
+            >
+              查看 API 文档
+            </a>
+          </div>
+        </div>
+
+        <aside className="self-center rounded-lg border border-[#dfe4ee] bg-white p-5 shadow-sm">
+          <div className="mb-5 flex items-center justify-between">
+            <h3 className="text-sm font-semibold">联调主链路</h3>
+            <span className="rounded-full bg-[#eef4ff] px-2.5 py-1 text-xs font-medium text-[#2f6feb]">
+              ready
+            </span>
+          </div>
+          <ol className="space-y-4 text-sm text-[#667085]">
+            <li className="flex gap-3">
+              <span className="grid h-6 w-6 shrink-0 place-items-center rounded-full bg-[#eef4ff] text-xs text-[#2f6feb]">1</span>
+              注册本地测试用户并创建组织
+            </li>
+            <li className="flex gap-3">
+              <span className="grid h-6 w-6 shrink-0 place-items-center rounded-full bg-[#eef4ff] text-xs text-[#2f6feb]">2</span>
+              创建 Agent 和默认 Workspace
+            </li>
+            <li className="flex gap-3">
+              <span className="grid h-6 w-6 shrink-0 place-items-center rounded-full bg-[#eef4ff] text-xs text-[#2f6feb]">3</span>
+              保存画布为 Workflow DSL
+            </li>
+            <li className="flex gap-3">
+              <span className="grid h-6 w-6 shrink-0 place-items-center rounded-full bg-[#eef4ff] text-xs text-[#2f6feb]">4</span>
+              发布版本并同步执行一次
+            </li>
+          </ol>
+        </aside>
       </section>
 
-      <section className="mx-auto grid max-w-7xl grid-cols-[280px_1fr] gap-6 px-6 py-6">
-        <aside className="h-[calc(100vh-120px)] border-r border-line pr-5">
-          <nav className="space-y-2">
-            {sidebarItems.map((item) => (
-              <button
-                key={item}
-                className="flex w-full items-center justify-between rounded border border-transparent px-3 py-2 text-left text-sm text-ink hover:border-line hover:bg-white"
-              >
-                <span>{item}</span>
-              </button>
-            ))}
-          </nav>
-        </aside>
-
-        <div className="space-y-6">
-          <section className="grid grid-cols-[1.1fr_0.9fr] gap-6">
-            <div className="border-b border-line pb-6">
-              <p className="mb-3 text-sm font-medium text-accent">MVP 第一阶段</p>
-              <h2 className="mb-4 text-3xl font-semibold tracking-normal">先完成可运行骨架，再逐步接入运行时能力</h2>
-              <p className="max-w-3xl text-base leading-7 text-muted">
-                当前版本聚焦 API、Worker、Runtime 抽象和工作台入口。后续每个模块独立开发、独立测试，最终形成支持多用户、
-                多 Agent、多工作流和高并发异步执行的开源框架。
-              </p>
-            </div>
-            <div className="border border-line bg-panel p-4">
-              <div className="mb-3 flex items-center justify-between">
-                <span className="text-sm font-medium">主链路</span>
-                <span className="text-xs text-muted">设计中</span>
+      <section className="mx-auto grid max-w-7xl grid-cols-3 gap-4 px-6 pb-10">
+        {capabilityItems.map((item) => {
+          const Icon = item.icon;
+          return (
+            <article key={item.title} className="rounded-lg border border-[#dfe4ee] bg-white p-5 shadow-sm">
+              <div className="mb-4 flex h-10 w-10 items-center justify-center rounded-md border border-[#dfe4ee] text-[#2f6feb]">
+                <Icon size={18} />
               </div>
-              <ol className="space-y-3 text-sm text-muted">
-                <li>1. 创建组织与 Agent</li>
-                <li>2. 配置 Workspace、Skill、MCP</li>
-                <li>3. 可视化搭建 Workflow</li>
-                <li>4. Celery 异步执行任务</li>
-                <li>5. Gateway 统一调用 LLM/RAG/Tool</li>
-                <li>6. 展示上下文、限流、缓存和运行轨迹</li>
-              </ol>
-            </div>
-          </section>
-
-          <section className="grid grid-cols-3 gap-4">
-            {capabilityItems.map((item) => {
-              const Icon = item.icon;
-              return (
-                <article key={item.title} className="border border-line bg-panel p-4">
-                  <div className="mb-4 flex h-9 w-9 items-center justify-center rounded border border-line text-accent">
-                    <Icon size={18} />
-                  </div>
-                  <h3 className="mb-2 text-sm font-semibold">{item.title}</h3>
-                  <p className="text-sm leading-6 text-muted">{item.description}</p>
-                </article>
-              );
-            })}
-          </section>
-        </div>
+              <h3 className="mb-2 text-sm font-semibold">{item.title}</h3>
+              <p className="text-sm leading-6 text-[#667085]">{item.description}</p>
+            </article>
+          );
+        })}
       </section>
     </main>
   );
