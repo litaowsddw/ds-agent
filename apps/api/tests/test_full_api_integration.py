@@ -99,6 +99,13 @@ def test_full_api_integration_chain() -> None:
     assert agent_response.status_code == 200
     agent_id = agent_response.json()["agent_id"]
 
+    agent_list_response = client.get(
+        "/agents",
+        params={"org_id": org_id, "actor_user_id": owner_user_id},
+    )
+    assert agent_list_response.status_code == 200
+    assert agent_list_response.json()[0]["agent_id"] == agent_id
+
     workspace_response = client.put(
         f"/agents/{agent_id}/workspace/file",
         json={
@@ -116,6 +123,13 @@ def test_full_api_integration_chain() -> None:
     )
     assert session_response.status_code == 200
     session_id = session_response.json()["session_id"]
+
+    session_list_response = client.get(
+        "/sessions",
+        params={"agent_id": agent_id, "actor_user_id": owner_user_id},
+    )
+    assert session_list_response.status_code == 200
+    assert session_list_response.json()[0]["session_id"] == session_id
 
     message_response = client.post(
         f"/sessions/{session_id}/messages",
@@ -166,6 +180,13 @@ def test_full_api_integration_chain() -> None:
     assert skill_summaries_response.status_code == 200
     assert skill_summaries_response.json()[0]["name"] == "workflow-reviewer"
 
+    skill_list_response = client.get(
+        "/skills",
+        params={"org_id": org_id, "actor_user_id": owner_user_id},
+    )
+    assert skill_list_response.status_code == 200
+    assert skill_list_response.json()[0]["skill_id"] == skill_id
+
     mcp_server_response = client.post(
         "/mcp/servers",
         json={
@@ -178,6 +199,13 @@ def test_full_api_integration_chain() -> None:
     )
     assert mcp_server_response.status_code == 200
     server_id = mcp_server_response.json()["server_id"]
+
+    mcp_server_list_response = client.get(
+        "/mcp/servers",
+        params={"org_id": org_id, "actor_user_id": owner_user_id},
+    )
+    assert mcp_server_list_response.status_code == 200
+    assert mcp_server_list_response.json()[0]["server_id"] == server_id
 
     mcp_tool_response = client.post(
         f"/mcp/servers/{server_id}/tools",
@@ -217,6 +245,14 @@ def test_full_api_integration_chain() -> None:
         },
     )
     assert memory_response.status_code == 200
+    memory_id = memory_response.json()["memory_id"]
+
+    memory_list_response = client.get(
+        "/memory",
+        params={"actor_user_id": owner_user_id, "agent_id": agent_id},
+    )
+    assert memory_list_response.status_code == 200
+    assert memory_list_response.json()[0]["memory_id"] == memory_id
 
     memory_recall_response = client.post(
         "/memory/recall",
@@ -273,6 +309,13 @@ def test_full_api_integration_chain() -> None:
     assert workflow_response.status_code == 200
     workflow_id = workflow_response.json()["workflow_id"]
 
+    workflow_list_response = client.get(
+        "/workflows",
+        params={"actor_user_id": owner_user_id, "org_id": org_id},
+    )
+    assert workflow_list_response.status_code == 200
+    assert workflow_list_response.json()[0]["workflow_id"] == workflow_id
+
     version_response = client.post(
         f"/workflows/{workflow_id}/publish",
         json={"actor_user_id": owner_user_id},
@@ -292,6 +335,13 @@ def test_full_api_integration_chain() -> None:
     assert run_response.status_code == 200
     assert run_response.json()["status"] == "succeeded"
     run_id = run_response.json()["run_id"]
+
+    run_list_response = client.get(
+        "/workflow-runs",
+        params={"actor_user_id": owner_user_id, "org_id": org_id},
+    )
+    assert run_list_response.status_code == 200
+    assert run_list_response.json()[0]["run_id"] == run_id
 
     node_runs_response = client.get(
         f"/workflow-runs/{run_id}/nodes",

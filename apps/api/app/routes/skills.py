@@ -35,6 +35,21 @@ async def register_skill(request: SkillRegisterRequest) -> SkillResponse:
     return _to_skill_response(skill)
 
 
+@router.get("", response_model=list[SkillResponse])
+async def list_skills(
+    org_id: str = Query(description="组织 ID"),
+    actor_user_id: str = Query(description="操作者用户 ID"),
+) -> list[SkillResponse]:
+    """列出组织内可见的 Skill。"""
+
+    try:
+        skills = skill_store.list_skills(actor_user_id=actor_user_id, org_id=org_id)
+    except PermissionError as exc:
+        raise HTTPException(status_code=403, detail=str(exc)) from exc
+
+    return [_to_skill_response(skill) for skill in skills]
+
+
 @router.put("/agents/{agent_id}/policy")
 async def set_agent_skill_policy(agent_id: str, request: AgentSkillPolicyRequest) -> dict[str, object]:
     """设置 Agent Skill 授权策略。"""

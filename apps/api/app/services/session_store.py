@@ -99,6 +99,17 @@ class SessionStore:
         self.agents.get_agent(actor_user_id=actor_user_id, agent_id=session.agent_id)
         return session
 
+    def list_sessions(self, actor_user_id: str, agent_id: str) -> list[AgentSession]:
+        """列出指定 Agent 下用户可访问的 Session。"""
+
+        agent = self.agents.get_agent(actor_user_id=actor_user_id, agent_id=agent_id)
+        sessions = [
+            session
+            for session in self.sessions_by_id.values()
+            if session.org_id == agent.org_id and session.agent_id == agent.agent_id
+        ]
+        return sorted(sessions, key=lambda session: session.updated_at, reverse=True)
+
     def set_running(self, actor_user_id: str, session_id: str) -> AgentSession:
         """把会话标记为运行中。"""
 

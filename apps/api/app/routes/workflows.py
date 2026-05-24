@@ -35,6 +35,28 @@ async def create_workflow(request: WorkflowCreateRequest) -> WorkflowResponse:
     return _to_workflow_response(workflow)
 
 
+@router.get("", response_model=list[WorkflowResponse])
+async def list_workflows(
+    actor_user_id: str = Query(description="操作者用户 ID"),
+    org_id: str | None = Query(default=None, description="组织 ID"),
+    agent_id: str | None = Query(default=None, description="Agent ID"),
+) -> list[WorkflowResponse]:
+    """列出用户可访问的 Workflow。"""
+
+    try:
+        workflows = workflow_store.list_workflows(
+            actor_user_id=actor_user_id,
+            org_id=org_id,
+            agent_id=agent_id,
+        )
+    except PermissionError as exc:
+        raise HTTPException(status_code=403, detail=str(exc)) from exc
+    except ValueError as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
+
+    return [_to_workflow_response(workflow) for workflow in workflows]
+
+
 @router.get("/{workflow_id}", response_model=WorkflowResponse)
 async def get_workflow(
     workflow_id: str,

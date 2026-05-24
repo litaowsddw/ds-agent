@@ -112,6 +112,13 @@ class MCPStore:
             if tool.org_id == agent.org_id and tool.server_id in allowed_server_ids
         ]
 
+    def list_servers(self, actor_user_id: str, org_id: str) -> list[MCPServer]:
+        """列出组织内的 MCP Server。"""
+
+        self.identity.assert_org_access(actor_user_id, org_id, Permission.ORGANIZATION_READ)
+        servers = [server for server in self.servers_by_id.values() if server.org_id == org_id]
+        return sorted(servers, key=lambda server: server.name)
+
     def assert_agent_can_call_tool(self, actor_user_id: str, agent_id: str, tool_id: str) -> MCPTool:
         """校验 Agent 是否可以调用 MCP Tool。"""
 

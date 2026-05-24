@@ -104,6 +104,36 @@ class WorkflowStore:
         self.identity.assert_org_access(actor_user_id, workflow.org_id, Permission.ORGANIZATION_READ)
         return workflow
 
+    def list_workflows(
+        self,
+        actor_user_id: str,
+        org_id: str | None = None,
+        agent_id: str | None = None,
+    ) -> list[Workflow]:
+        """列出用户可访问的 Workflow。"""
+
+        workflows = list(self.workflows_by_id.values())
+
+        if org_id is not None:
+            self.identity.assert_org_access(actor_user_id, org_id, Permission.ORGANIZATION_READ)
+            workflows = [workflow for workflow in workflows if workflow.org_id == org_id]
+        else:
+            workflows = [
+                workflow
+                for workflow in workflows
+                if self.identity.get_membership(org_id=workflow.org_id, user_id=actor_user_id) is not None
+            ]
+
+        if agent_id is not None:
+            agent = self.agents.get_agent(actor_user_id=actor_user_id, agent_id=agent_id)
+            workflows = [
+                workflow
+                for workflow in workflows
+                if workflow.agent_id == agent.agent_id and workflow.org_id == agent.org_id
+            ]
+
+        return sorted(workflows, key=lambda workflow: workflow.updated_at, reverse=True)
+
     def get_version(self, actor_user_id: str, version_id: str) -> WorkflowVersion:
         """读取 Workflow 发布版本。"""
 

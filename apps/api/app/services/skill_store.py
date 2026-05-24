@@ -108,6 +108,17 @@ class SkillStore:
         ]
         return summaries
 
+    def list_skills(self, actor_user_id: str, org_id: str) -> list[Skill]:
+        """列出组织内可见的 Skill。"""
+
+        self.identity.assert_org_access(actor_user_id, org_id, Permission.ORGANIZATION_READ)
+        skills = [
+            skill
+            for skill in self.skills_by_id.values()
+            if skill.org_id in ("", org_id)
+        ]
+        return sorted(skills, key=lambda skill: skill.name)
+
     def get_skill_content(self, actor_user_id: str, agent_id: str, skill_id: str) -> Skill:
         """读取授权 Skill 的完整内容。"""
 

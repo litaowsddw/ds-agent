@@ -33,6 +33,23 @@ async def create_session(request: SessionCreateRequest) -> SessionResponse:
     return _to_session_response(session)
 
 
+@router.get("", response_model=list[SessionResponse])
+async def list_sessions(
+    agent_id: str = Query(description="Agent ID"),
+    actor_user_id: str = Query(description="操作者用户 ID"),
+) -> list[SessionResponse]:
+    """列出 Agent 下的 Session。"""
+
+    try:
+        sessions = session_store.list_sessions(actor_user_id=actor_user_id, agent_id=agent_id)
+    except PermissionError as exc:
+        raise HTTPException(status_code=403, detail=str(exc)) from exc
+    except ValueError as exc:
+        raise HTTPException(status_code=404, detail=str(exc)) from exc
+
+    return [_to_session_response(session) for session in sessions]
+
+
 @router.get("/{session_id}", response_model=SessionResponse)
 async def get_session(
     session_id: str,

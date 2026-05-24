@@ -17,115 +17,131 @@ import {
 import {
   Activity,
   Bot,
+  Brain,
   CheckCircle2,
-  CircleDot,
-  Clock3,
   Database,
   FileText,
   GitBranch,
   Loader2,
+  MessageSquare,
   Network,
   Play,
+  Plus,
   Save,
   Server,
   ShieldCheck,
-  Workflow,
-  XCircle
+  Workflow
 } from "lucide-react";
 import { useEffect, useMemo, useState } from "react";
 
 type ApiStatus = "checking" | "online" | "offline";
-type StepStatus = "idle" | "running" | "success" | "failed";
+type ToastKind = "info" | "success" | "error";
 
-type IntegrationStep = {
-  key: string;
-  title: string;
-  description: string;
-  status: StepStatus;
-  detail: string;
-};
-
-type IntegrationState = {
+type WorkspaceState = {
   userId: string;
-  viewerId: string;
   orgId: string;
   teamId: string;
-  agentId: string;
-  sessionId: string;
-  skillId: string;
-  mcpServerId: string;
-  mcpToolId: string;
-  memoryId: string;
-  workflowId: string;
-  versionId: string;
-  runId: string;
-  runStatus: string;
-  nodeRunCount: number;
-  gatewayLogCount: number;
-  auditLogCount: number;
-  contextSectionCount: number;
-  outputPreview: string;
+  email: string;
+};
+
+type Agent = {
+  agent_id: string;
+  org_id: string;
+  team_id: string | null;
+  name: string;
+  description: string;
+};
+
+type WorkflowItem = {
+  workflow_id: string;
+  agent_id: string;
+  name: string;
+  description: string;
+  draft_definition: Record<string, unknown>;
+  published_version_id: string | null;
+};
+
+type WorkflowVersion = {
+  version_id: string;
+  version_number: number;
+};
+
+type WorkflowRun = {
+  run_id: string;
+  workflow_id: string;
+  version_id: string;
+  agent_id: string;
+  status: string;
+  output_data: Record<string, unknown>;
+  error_message: string;
+};
+
+type NodeRun = {
+  node_run_id: string;
+  node_id: string;
+  node_type: string;
+  status: string;
+  elapsed_ms: number;
+};
+
+type Skill = {
+  skill_id: string;
+  name: string;
+  description: string;
+  scope: string;
+};
+
+type MCPServer = {
+  server_id: string;
+  name: string;
+  transport: string;
+  url: string;
+};
+
+type MCPTool = {
+  tool_id: string;
+  name: string;
+  description: string;
+  risk_level: string;
+};
+
+type MemoryItem = {
+  memory_id: string;
+  memory_type: string;
+  summary: string;
+  confidence: number;
+};
+
+type SessionItem = {
+  session_id: string;
+  status: string;
+  compact_summary: string;
+};
+
+type ContextBundle = {
+  total_estimated_tokens: number;
+  need_compaction: boolean;
+  sections: Array<{ name: string; content: string; estimated_tokens: number }>;
+};
+
+type LLMCallLog = {
+  call_id: string;
+  provider: string;
+  model: string;
+  status: string;
+  prefix_hash: string;
 };
 
 type ApiErrorPayload = {
   detail?: string | { msg?: string } | Array<{ msg?: string }>;
 };
 
-type IdResponse<Key extends string> = Record<Key, string>;
-
-type WorkflowResponse = {
-  workflow_id: string;
-  published_version_id: string | null;
-};
-
-type WorkflowVersionResponse = {
-  version_id: string;
-  version_number: number;
-};
-
-type WorkflowRunResponse = {
-  run_id: string;
-  status: string;
-  output_data: Record<string, unknown>;
-};
-
-type NodeRunResponse = {
-  node_run_id: string;
-  status: string;
-};
-
-type ContextBundle = {
-  sections: Array<{ name: string; content: string; estimated_tokens: number }>;
-  total_estimated_tokens: number;
-  need_compaction: boolean;
-};
-
-type LLMCallLogResponse = {
-  call_id: string;
-  status: string;
-};
-
 const API_BASE_URL = process.env.NEXT_PUBLIC_API_BASE_URL ?? "http://127.0.0.1:8000";
 
 const initialNodes: Node[] = [
-  {
-    id: "start",
-    type: "default",
-    position: { x: 70, y: 180 },
-    data: { label: "Start" }
-  },
-  {
-    id: "llm",
-    type: "default",
-    position: { x: 360, y: 180 },
-    data: { label: "LLM" }
-  },
-  {
-    id: "end",
-    type: "default",
-    position: { x: 650, y: 180 },
-    data: { label: "End" }
-  }
+  { id: "start", type: "default", position: { x: 70, y: 180 }, data: { label: "Start" } },
+  { id: "llm", type: "default", position: { x: 360, y: 180 }, data: { label: "LLM" } },
+  { id: "end", type: "default", position: { x: 650, y: 180 }, data: { label: "End" } }
 ];
 
 const initialEdges: Edge[] = [
@@ -133,53 +149,80 @@ const initialEdges: Edge[] = [
   { id: "llm-end", source: "llm", target: "end" }
 ];
 
-const nodePalette = [
-  { label: "LLM", description: "模型推理节点", icon: Bot },
-  { label: "RAG", description: "知识检索占位", icon: Database },
-  { label: "Tool", description: "工具调用占位", icon: ShieldCheck }
-];
+const navItems = [
+  { key: "agents", label: "Agents", icon: Bot },
+  { key: "workflow", label: "Workflow", icon: Workflow },
+  { key: "runtime", label: "Runtime", icon: Brain },
+  { key: "runs", label: "Runs", icon: Activity }
+] as const;
 
-const initialIntegrationSteps: IntegrationStep[] = [
-  { key: "health", title: "API 健康检查", description: "确认 FastAPI 可访问", status: "idle", detail: "等待执行" },
-  { key: "identity", title: "用户与组织", description: "注册用户、组织、团队和成员", status: "idle", detail: "等待执行" },
-  { key: "agent", title: "Agent Workspace", description: "创建 Agent 并写入 Workspace", status: "idle", detail: "等待执行" },
-  { key: "session", title: "Session 与消息", description: "创建会话、追加消息、压缩摘要", status: "idle", detail: "等待执行" },
-  { key: "skill", title: "Skill Registry", description: "注册 Skill、授权并读取摘要", status: "idle", detail: "等待执行" },
-  { key: "mcp", title: "MCP Registry", description: "注册 MCP Server、Tool 和授权策略", status: "idle", detail: "等待执行" },
-  { key: "memory", title: "Memory Manager", description: "写入记忆并按关键词召回", status: "idle", detail: "等待执行" },
-  { key: "context", title: "Context Engine", description: "组合 Workspace、消息、Skill 和 Memory", status: "idle", detail: "等待执行" },
-  { key: "gateway", title: "Gateway + LLM", description: "通过统一网关调用 Mock LLM 并读取日志", status: "idle", detail: "等待执行" },
-  { key: "workflow", title: "Workflow 执行", description: "创建、发布、运行并读取节点日志", status: "idle", detail: "等待执行" },
-  { key: "rbac", title: "权限隔离", description: "验证 viewer 无法创建受限资源", status: "idle", detail: "等待执行" },
-  { key: "audit", title: "审计日志", description: "读取组织审计事件", status: "idle", detail: "等待执行" }
+type ActiveSection = (typeof navItems)[number]["key"];
+
+const nodePalette = [
+  { label: "LLM", description: "模型推理", icon: Bot },
+  { label: "RAG", description: "知识检索", icon: Database },
+  { label: "Tool", description: "工具调用", icon: ShieldCheck }
 ];
 
 export default function WorkflowEditor() {
-  // nodes 保存画布节点状态，React Flow 在拖拽和选择时更新它。
   const [nodes, setNodes, onNodesChange] = useNodesState(initialNodes);
-
-  // edges 保存节点连线状态，用于生成后端 Workflow DSL。
   const [edges, setEdges, onEdgesChange] = useEdgesState(initialEdges);
-
-  // selectedNodeId 保存右侧属性面板当前展示的节点 ID。
-  const [selectedNodeId, setSelectedNodeId] = useState<string>("llm");
-
-  // apiStatus 表示前端到 FastAPI 服务的健康检查结果。
+  const [activeSection, setActiveSection] = useState<ActiveSection>("agents");
   const [apiStatus, setApiStatus] = useState<ApiStatus>("checking");
-
-  // busy 表示当前是否有保存、发布或联调运行请求。
   const [busy, setBusy] = useState(false);
+  const [toast, setToast] = useState<{ kind: ToastKind; text: string }>({
+    kind: "info",
+    text: "创建一个工作空间后即可开始搭建 Agent 应用。"
+  });
 
-  // message 保存用户可见的当前操作反馈。
-  const [message, setMessage] = useState("准备就绪，点击一键全链路联调即可覆盖主要后端模块。");
+  const [workspace, setWorkspace] = useState<WorkspaceState | null>(null);
+  const [agents, setAgents] = useState<Agent[]>([]);
+  const [selectedAgentId, setSelectedAgentId] = useState("");
+  const [workflows, setWorkflows] = useState<WorkflowItem[]>([]);
+  const [selectedWorkflowId, setSelectedWorkflowId] = useState("");
+  const [versions, setVersions] = useState<WorkflowVersion[]>([]);
+  const [runs, setRuns] = useState<WorkflowRun[]>([]);
+  const [selectedRunId, setSelectedRunId] = useState("");
+  const [nodeRuns, setNodeRuns] = useState<NodeRun[]>([]);
+  const [skills, setSkills] = useState<Skill[]>([]);
+  const [mcpServers, setMcpServers] = useState<MCPServer[]>([]);
+  const [mcpTools, setMcpTools] = useState<MCPTool[]>([]);
+  const [memories, setMemories] = useState<MemoryItem[]>([]);
+  const [sessions, setSessions] = useState<SessionItem[]>([]);
+  const [contextBundle, setContextBundle] = useState<ContextBundle | null>(null);
+  const [gatewayLogs, setGatewayLogs] = useState<LLMCallLog[]>([]);
 
-  // integrationSteps 保存全链路联调每个后端模块的执行状态。
-  const [integrationSteps, setIntegrationSteps] = useState<IntegrationStep[]>(initialIntegrationSteps);
+  const [setupForm, setSetupForm] = useState({
+    email: "owner@example.com",
+    displayName: "Owner",
+    orgName: "AgentFlow 工作空间",
+    teamName: "默认团队"
+  });
+  const [agentForm, setAgentForm] = useState({
+    name: "客服助手 Agent",
+    description: "负责基于知识、工具和工作流回答用户问题。"
+  });
+  const [workspaceText, setWorkspaceText] = useState("# AGENTS\n\n你是一个可靠的业务 Agent，回答时先给结论，再给依据。\n");
+  const [workflowForm, setWorkflowForm] = useState({
+    name: "客户问题处理流",
+    description: "Start -> LLM -> End 的最小可运行工作流。",
+    input: "请总结这个客户问题，并给出下一步处理建议。"
+  });
+  const [skillForm, setSkillForm] = useState({
+    name: "workflow-reviewer",
+    description: "检查工作流结构并给出改进建议"
+  });
+  const [memoryForm, setMemoryForm] = useState("用户偏好中文、先给结论、再给验证证据。");
+  const [mcpForm, setMcpForm] = useState({
+    serverName: "知识库 MCP",
+    url: "http://localhost:18080/mcp",
+    toolName: "search_docs"
+  });
+  const [sessionInput, setSessionInput] = useState("请结合工作区、Skill、MCP 和 Memory 输出一次响应。");
 
-  // integrationState 保存本轮联调生成的后端资源 ID 和关键结果。
-  const [integrationState, setIntegrationState] = useState<IntegrationState | null>(null);
-
-  const selectedNode = nodes.find((node) => node.id === selectedNodeId);
+  const selectedAgent = agents.find((agent) => agent.agent_id === selectedAgentId) ?? null;
+  const selectedWorkflow = workflows.find((workflow) => workflow.workflow_id === selectedWorkflowId) ?? null;
+  const selectedRun = runs.find((run) => run.run_id === selectedRunId) ?? null;
 
   const workflowDraft = useMemo(() => {
     return {
@@ -198,35 +241,41 @@ export default function WorkflowEditor() {
           }
         };
       }),
-      edges: edges.map((edge) => ({
-        source: edge.source,
-        target: edge.target
-      }))
+      edges: edges.map((edge) => ({ source: edge.source, target: edge.target }))
     };
   }, [nodes, edges]);
 
   useEffect(() => {
-    let isMounted = true;
+    let mounted = true;
 
     async function checkHealth() {
       try {
-        const health = await apiRequest<{ status: string }>("/health");
-        if (isMounted) {
-          setApiStatus(health.status === "ok" ? "online" : "offline");
-        }
+        const response = await apiRequest<{ status: string }>("/health");
+        if (mounted) setApiStatus(response.status === "ok" ? "online" : "offline");
       } catch {
-        if (isMounted) {
-          setApiStatus("offline");
-        }
+        if (mounted) setApiStatus("offline");
       }
     }
 
     void checkHealth();
-
     return () => {
-      isMounted = false;
+      mounted = false;
     };
   }, []);
+
+  function showToast(kind: ToastKind, text: string) {
+    setToast({ kind, text });
+  }
+
+  function requireWorkspace() {
+    if (!workspace) throw new Error("请先创建工作空间。");
+    return workspace;
+  }
+
+  function requireAgent() {
+    if (!selectedAgentId) throw new Error("请先创建或选择 Agent。");
+    return selectedAgentId;
+  }
 
   function handleConnect(connection: Connection) {
     setEdges((currentEdges) => addEdge(connection, currentEdges));
@@ -234,7 +283,6 @@ export default function WorkflowEditor() {
 
   function addNode(label: string) {
     const nodeIndex = nodes.length + 1;
-
     setNodes((currentNodes) => [
       ...currentNodes,
       {
@@ -246,371 +294,384 @@ export default function WorkflowEditor() {
     ]);
   }
 
-  function updateStep(key: string, status: StepStatus, detail: string) {
-    setIntegrationSteps((currentSteps) =>
-      currentSteps.map((step) => (step.key === key ? { ...step, status, detail } : step))
+  async function refreshAgents(currentWorkspace = workspace) {
+    if (!currentWorkspace) return;
+    const nextAgents = await apiRequest<Agent[]>(
+      `/agents?org_id=${currentWorkspace.orgId}&actor_user_id=${currentWorkspace.userId}`
     );
+    setAgents(nextAgents);
+    if (!selectedAgentId && nextAgents[0]) setSelectedAgentId(nextAgents[0].agent_id);
   }
 
-  async function runFullIntegration() {
+  async function refreshStudioData(currentWorkspace = workspace, agentId = selectedAgentId) {
+    if (!currentWorkspace) return;
+
+    const [nextAgents, nextWorkflows, nextRuns, nextSkills, nextServers, nextLogs] = await Promise.all([
+      apiRequest<Agent[]>(`/agents?org_id=${currentWorkspace.orgId}&actor_user_id=${currentWorkspace.userId}`),
+      apiRequest<WorkflowItem[]>(`/workflows?org_id=${currentWorkspace.orgId}&actor_user_id=${currentWorkspace.userId}`),
+      apiRequest<WorkflowRun[]>(`/workflow-runs?org_id=${currentWorkspace.orgId}&actor_user_id=${currentWorkspace.userId}`),
+      apiRequest<Skill[]>(`/skills?org_id=${currentWorkspace.orgId}&actor_user_id=${currentWorkspace.userId}`),
+      apiRequest<MCPServer[]>(`/mcp/servers?org_id=${currentWorkspace.orgId}&actor_user_id=${currentWorkspace.userId}`),
+      apiRequest<LLMCallLog[]>("/gateway/llm/logs")
+    ]);
+
+    setAgents(nextAgents);
+    setWorkflows(nextWorkflows);
+    setRuns(nextRuns);
+    setSkills(nextSkills);
+    setMcpServers(nextServers);
+    setGatewayLogs(nextLogs);
+
+    const fallbackAgentId = agentId || nextAgents[0]?.agent_id || "";
+    if (fallbackAgentId) {
+      setSelectedAgentId(fallbackAgentId);
+      const [nextSessions, nextMemories, nextTools] = await Promise.all([
+        apiRequest<SessionItem[]>(`/sessions?agent_id=${fallbackAgentId}&actor_user_id=${currentWorkspace.userId}`),
+        apiRequest<MemoryItem[]>(`/memory?agent_id=${fallbackAgentId}&actor_user_id=${currentWorkspace.userId}`),
+        apiRequest<MCPTool[]>(`/mcp/agents/${fallbackAgentId}/tools?actor_user_id=${currentWorkspace.userId}`)
+      ]);
+      setSessions(nextSessions);
+      setMemories(nextMemories);
+      setMcpTools(nextTools);
+    }
+
+    if (!selectedWorkflowId && nextWorkflows[0]) setSelectedWorkflowId(nextWorkflows[0].workflow_id);
+    if (!selectedRunId && nextRuns[0]) setSelectedRunId(nextRuns[0].run_id);
+  }
+
+  async function createWorkspace() {
     setBusy(true);
-    setIntegrationState(null);
-    setIntegrationSteps(initialIntegrationSteps);
-    setMessage("正在执行完整前后端联调...");
-
     try {
-      updateStep("health", "running", "正在请求 /health");
-      const health = await apiRequest<{ status: string }>("/health");
-      updateStep("health", "success", `API 状态：${health.status}`);
-
-      updateStep("identity", "running", "正在创建用户、组织、团队和成员");
       const timestamp = Date.now();
-      const owner = await apiRequest<IdResponse<"user_id">>("/identity/users/register", {
+      const email = setupForm.email.includes("@") ? setupForm.email : `owner-${timestamp}@example.com`;
+      const user = await apiRequest<{ user_id: string }>("/identity/users/register", {
         method: "POST",
         body: {
-          email: `owner-${timestamp}@example.com`,
-          display_name: "平台管理员",
+          email: email.replace("@example.com", `-${timestamp}@example.com`),
+          display_name: setupForm.displayName,
           password: "password123"
         }
       });
-      const viewer = await apiRequest<IdResponse<"user_id">>("/identity/users/register", {
+      const organization = await apiRequest<{ org_id: string }>("/identity/organizations", {
         method: "POST",
-        body: {
-          email: `viewer-${timestamp}@example.com`,
-          display_name: "只读成员",
-          password: "password123"
-        }
+        body: { creator_user_id: user.user_id, name: setupForm.orgName }
       });
-      const organization = await apiRequest<IdResponse<"org_id">>("/identity/organizations", {
+      const team = await apiRequest<{ team_id: string }>(`/identity/organizations/${organization.org_id}/teams`, {
         method: "POST",
-        body: {
-          creator_user_id: owner.user_id,
-          name: "AgentFlow 全链路组织"
-        }
+        body: { actor_user_id: user.user_id, name: setupForm.teamName }
       });
-      const team = await apiRequest<IdResponse<"team_id">>(`/identity/organizations/${organization.org_id}/teams`, {
-        method: "POST",
-        body: {
-          actor_user_id: owner.user_id,
-          name: "研发联调组"
-        }
-      });
-      await apiRequest("/identity/organizations/" + organization.org_id + "/members", {
-        method: "POST",
-        body: {
-          actor_user_id: owner.user_id,
-          target_user_id: viewer.user_id,
-          role: "viewer",
-          team_ids: [team.team_id]
-        }
-      });
-      updateStep("identity", "success", `组织 ${organization.org_id}，团队 ${team.team_id}`);
+      const nextWorkspace = {
+        userId: user.user_id,
+        orgId: organization.org_id,
+        teamId: team.team_id,
+        email
+      };
+      setWorkspace(nextWorkspace);
+      showToast("success", "工作空间已创建，可以开始创建 Agent。");
+      await refreshStudioData(nextWorkspace, "");
+    } catch (error) {
+      showToast("error", error instanceof Error ? error.message : "创建工作空间失败。");
+    } finally {
+      setBusy(false);
+    }
+  }
 
-      updateStep("agent", "running", "正在创建 Agent 并更新 Workspace");
-      const agent = await apiRequest<IdResponse<"agent_id">>("/agents", {
+  async function createAgent() {
+    setBusy(true);
+    try {
+      const currentWorkspace = requireWorkspace();
+      const agent = await apiRequest<Agent>("/agents", {
         method: "POST",
         body: {
-          actor_user_id: owner.user_id,
-          org_id: organization.org_id,
-          team_id: team.team_id,
-          name: "全链路联调 Agent",
-          description: "用于验证用户、运行时、上下文、Skill、MCP、Memory、Gateway 与 Workflow。"
+          actor_user_id: currentWorkspace.userId,
+          org_id: currentWorkspace.orgId,
+          team_id: currentWorkspace.teamId,
+          name: agentForm.name,
+          description: agentForm.description
         }
       });
-      await apiRequest(`/agents/${agent.agent_id}/workspace/file`, {
+      setSelectedAgentId(agent.agent_id);
+      showToast("success", `Agent「${agent.name}」已创建。`);
+      await refreshStudioData(currentWorkspace, agent.agent_id);
+    } catch (error) {
+      showToast("error", error instanceof Error ? error.message : "创建 Agent 失败。");
+    } finally {
+      setBusy(false);
+    }
+  }
+
+  async function saveWorkspaceFile() {
+    setBusy(true);
+    try {
+      const currentWorkspace = requireWorkspace();
+      const agentId = requireAgent();
+      await apiRequest(`/agents/${agentId}/workspace/file`, {
         method: "PUT",
         body: {
-          actor_user_id: owner.user_id,
+          actor_user_id: currentWorkspace.userId,
           file_kind: "AGENTS.md",
-          content: "# AGENTS\n\n你是全链路联调 Agent。回答时优先给结论，并使用中文。\n"
+          content: workspaceText
         }
       });
-      await apiRequest(`/agents/${agent.agent_id}/workspace?actor_user_id=${owner.user_id}`);
-      await apiRequest(`/agents?org_id=${organization.org_id}&actor_user_id=${owner.user_id}`);
-      updateStep("agent", "success", `Agent ${agent.agent_id} 已创建`);
+      showToast("success", "Agent Workspace 已保存。");
+    } catch (error) {
+      showToast("error", error instanceof Error ? error.message : "保存 Workspace 失败。");
+    } finally {
+      setBusy(false);
+    }
+  }
 
-      updateStep("session", "running", "正在创建 Session、追加消息和压缩摘要");
-      const session = await apiRequest<IdResponse<"session_id">>("/sessions", {
+  async function createWorkflow() {
+    setBusy(true);
+    try {
+      const currentWorkspace = requireWorkspace();
+      const agentId = requireAgent();
+      const workflow = await apiRequest<WorkflowItem>("/workflows", {
         method: "POST",
         body: {
-          actor_user_id: owner.user_id,
-          agent_id: agent.agent_id,
-          queue_mode: "queue"
+          actor_user_id: currentWorkspace.userId,
+          agent_id: agentId,
+          name: workflowForm.name,
+          description: workflowForm.description,
+          draft_definition: workflowDraft
         }
       });
-      const messageResponse = await apiRequest<IdResponse<"message_id">>(`/sessions/${session.session_id}/messages`, {
-        method: "POST",
-        body: {
-          actor_user_id: owner.user_id,
-          role: "user",
-          content: "请使用 Skill、MCP、Memory 和 Workflow 完成一次全链路验证。"
-        }
-      });
-      await apiRequest(`/sessions/${session.session_id}/compact`, {
-        method: "POST",
-        body: {
-          actor_user_id: owner.user_id,
-          summary: "用户要求完成一次完整前后端联调验证。"
-        }
-      });
-      await apiRequest(`/sessions/${session.session_id}/messages?actor_user_id=${owner.user_id}`);
-      updateStep("session", "success", `Session ${session.session_id}，消息 ${messageResponse.message_id}`);
+      setSelectedWorkflowId(workflow.workflow_id);
+      showToast("success", `Workflow「${workflow.name}」已创建。`);
+      await refreshStudioData(currentWorkspace, agentId);
+    } catch (error) {
+      showToast("error", error instanceof Error ? error.message : "创建 Workflow 失败。");
+    } finally {
+      setBusy(false);
+    }
+  }
 
-      updateStep("skill", "running", "正在注册 Skill 并授权给 Agent");
-      const skill = await apiRequest<IdResponse<"skill_id">>("/skills", {
-        method: "POST",
-        body: {
-          actor_user_id: owner.user_id,
-          org_id: organization.org_id,
-          scope: "organization",
-          content:
-            "---\nname: workflow-reviewer\ndescription: 检查工作流结构并给出改进建议\n---\n\n优先检查节点顺序、输入输出和错误处理。\n",
-          team_id: team.team_id,
-          agent_id: agent.agent_id
-        }
-      });
-      await apiRequest(`/skills/agents/${agent.agent_id}/policy`, {
+  async function saveWorkflowDraft() {
+    setBusy(true);
+    try {
+      const currentWorkspace = requireWorkspace();
+      if (!selectedWorkflowId) throw new Error("请先创建或选择 Workflow。");
+      await apiRequest<WorkflowItem>(`/workflows/${selectedWorkflowId}/draft`, {
         method: "PUT",
         body: {
-          actor_user_id: owner.user_id,
-          skill_id: skill.skill_id,
-          allowed: true
+          actor_user_id: currentWorkspace.userId,
+          draft_definition: workflowDraft
         }
       });
-      const skillSummaries = await apiRequest<Array<Record<string, string>>>(
-        `/skills/agents/${agent.agent_id}/summaries?actor_user_id=${owner.user_id}`
-      );
-      await apiRequest(`/skills/agents/${agent.agent_id}/skills/${skill.skill_id}?actor_user_id=${owner.user_id}`);
-      updateStep("skill", "success", `已授权 ${skillSummaries.length} 个 Skill`);
+      showToast("success", "Workflow 草稿已保存。");
+      await refreshStudioData(currentWorkspace);
+    } catch (error) {
+      showToast("error", error instanceof Error ? error.message : "保存 Workflow 失败。");
+    } finally {
+      setBusy(false);
+    }
+  }
 
-      updateStep("mcp", "running", "正在注册 MCP Server、Tool 和授权策略");
-      const mcpServer = await apiRequest<IdResponse<"server_id">>("/mcp/servers", {
+  async function publishWorkflow() {
+    setBusy(true);
+    try {
+      const currentWorkspace = requireWorkspace();
+      if (!selectedWorkflowId) throw new Error("请先创建或选择 Workflow。");
+      const version = await apiRequest<WorkflowVersion>(`/workflows/${selectedWorkflowId}/publish`, {
+        method: "POST",
+        body: { actor_user_id: currentWorkspace.userId }
+      });
+      setVersions((currentVersions) => [version, ...currentVersions]);
+      showToast("success", `Workflow 已发布为 v${version.version_number}。`);
+      await refreshStudioData(currentWorkspace);
+    } catch (error) {
+      showToast("error", error instanceof Error ? error.message : "发布 Workflow 失败。");
+    } finally {
+      setBusy(false);
+    }
+  }
+
+  async function runWorkflow() {
+    setBusy(true);
+    try {
+      const currentWorkspace = requireWorkspace();
+      if (!selectedWorkflowId) throw new Error("请先创建或选择 Workflow。");
+      const workflow = selectedWorkflow ?? (await apiRequest<WorkflowItem>(`/workflows/${selectedWorkflowId}?actor_user_id=${currentWorkspace.userId}`));
+      const versionId = workflow.published_version_id;
+      if (!versionId) throw new Error("请先发布 Workflow，再运行。");
+      const run = await apiRequest<WorkflowRun>("/workflow-runs", {
         method: "POST",
         body: {
-          actor_user_id: owner.user_id,
-          org_id: organization.org_id,
-          name: "知识库 MCP",
-          transport: "http",
-          url: "http://localhost:18080/mcp"
+          actor_user_id: currentWorkspace.userId,
+          version_id: versionId,
+          input_data: { text: workflowForm.input },
+          async_mode: false
         }
       });
-      const mcpTool = await apiRequest<IdResponse<"tool_id">>(`/mcp/servers/${mcpServer.server_id}/tools`, {
+      setSelectedRunId(run.run_id);
+      await loadNodeRuns(run.run_id, currentWorkspace.userId);
+      showToast("success", `Workflow 已运行，状态：${run.status}。`);
+      await refreshStudioData(currentWorkspace);
+      setActiveSection("runs");
+    } catch (error) {
+      showToast("error", error instanceof Error ? error.message : "运行 Workflow 失败。");
+    } finally {
+      setBusy(false);
+    }
+  }
+
+  async function createSkill() {
+    setBusy(true);
+    try {
+      const currentWorkspace = requireWorkspace();
+      const agentId = requireAgent();
+      const skill = await apiRequest<Skill>("/skills", {
         method: "POST",
         body: {
-          actor_user_id: owner.user_id,
-          name: "search_docs",
-          description: "检索内部知识库文档",
-          input_schema: {
-            type: "object",
-            properties: {
-              query: { type: "string" }
-            }
-          },
+          actor_user_id: currentWorkspace.userId,
+          org_id: currentWorkspace.orgId,
+          scope: "organization",
+          team_id: currentWorkspace.teamId,
+          agent_id: agentId,
+          content: `---\nname: ${skillForm.name}\ndescription: ${skillForm.description}\n---\n\n优先检查输入、输出、错误处理和运行证据。\n`
+        }
+      });
+      await apiRequest(`/skills/agents/${agentId}/policy`, {
+        method: "PUT",
+        body: { actor_user_id: currentWorkspace.userId, skill_id: skill.skill_id, allowed: true }
+      });
+      showToast("success", `Skill「${skill.name}」已创建并授权。`);
+      await refreshStudioData(currentWorkspace, agentId);
+    } catch (error) {
+      showToast("error", error instanceof Error ? error.message : "创建 Skill 失败。");
+    } finally {
+      setBusy(false);
+    }
+  }
+
+  async function createMcpTool() {
+    setBusy(true);
+    try {
+      const currentWorkspace = requireWorkspace();
+      const agentId = requireAgent();
+      const server = await apiRequest<MCPServer>("/mcp/servers", {
+        method: "POST",
+        body: {
+          actor_user_id: currentWorkspace.userId,
+          org_id: currentWorkspace.orgId,
+          name: mcpForm.serverName,
+          transport: "http",
+          url: mcpForm.url
+        }
+      });
+      await apiRequest<MCPTool>(`/mcp/servers/${server.server_id}/tools`, {
+        method: "POST",
+        body: {
+          actor_user_id: currentWorkspace.userId,
+          name: mcpForm.toolName,
+          description: "检索内部知识库文档。",
+          input_schema: { type: "object", properties: { query: { type: "string" } } },
           risk_level: "low"
         }
       });
-      await apiRequest(`/mcp/agents/${agent.agent_id}/policy`, {
+      await apiRequest(`/mcp/agents/${agentId}/policy`, {
         method: "PUT",
-        body: {
-          actor_user_id: owner.user_id,
-          server_id: mcpServer.server_id,
-          allowed: true
-        }
+        body: { actor_user_id: currentWorkspace.userId, server_id: server.server_id, allowed: true }
       });
-      await apiRequest(`/mcp/agents/${agent.agent_id}/tools?actor_user_id=${owner.user_id}`);
-      await apiRequest(`/mcp/agents/${agent.agent_id}/tools/${mcpTool.tool_id}/can-call?actor_user_id=${owner.user_id}`);
-      updateStep("mcp", "success", `Tool ${mcpTool.tool_id} 可调用`);
+      showToast("success", "MCP Server 和工具已创建并授权。");
+      await refreshStudioData(currentWorkspace, agentId);
+    } catch (error) {
+      showToast("error", error instanceof Error ? error.message : "创建 MCP 失败。");
+    } finally {
+      setBusy(false);
+    }
+  }
 
-      updateStep("memory", "running", "正在写入和召回 Agent 记忆");
-      const memory = await apiRequest<IdResponse<"memory_id">>("/memory", {
+  async function createMemory() {
+    setBusy(true);
+    try {
+      const currentWorkspace = requireWorkspace();
+      const agentId = requireAgent();
+      await apiRequest<MemoryItem>("/memory", {
         method: "POST",
         body: {
-          actor_user_id: owner.user_id,
-          agent_id: agent.agent_id,
+          actor_user_id: currentWorkspace.userId,
+          agent_id: agentId,
           memory_type: "preference",
-          content: "用户偏好中文、先给结论、再给验证证据。",
-          summary: "用户偏好中文并先给结论。",
-          confidence: 0.98,
-          source: "frontend-integration"
+          content: memoryForm,
+          summary: memoryForm,
+          confidence: 0.95,
+          source: "studio"
         }
       });
-      const recalledMemories = await apiRequest<Array<Record<string, string>>>("/memory/recall", {
+      showToast("success", "Memory 已保存。");
+      await refreshStudioData(currentWorkspace, agentId);
+    } catch (error) {
+      showToast("error", error instanceof Error ? error.message : "保存 Memory 失败。");
+    } finally {
+      setBusy(false);
+    }
+  }
+
+  async function createSessionAndAssembleContext() {
+    setBusy(true);
+    try {
+      const currentWorkspace = requireWorkspace();
+      const agentId = requireAgent();
+      const session = await apiRequest<SessionItem>("/sessions", {
         method: "POST",
-        body: {
-          actor_user_id: owner.user_id,
-          agent_id: agent.agent_id,
-          query: "中文 结论",
-          limit: 5
-        }
+        body: { actor_user_id: currentWorkspace.userId, agent_id: agentId, queue_mode: "queue" }
       });
-      updateStep("memory", "success", `召回 ${recalledMemories.length} 条记忆`);
-
-      updateStep("context", "running", "正在组装 Session 上下文");
-      const contextBundle = await apiRequest<ContextBundle>(
-        `/context/sessions/${session.session_id}/assemble?actor_user_id=${owner.user_id}&current_input=${encodeURIComponent(
-          "请输出完整联调报告"
-        )}&token_budget=4096`
+      await apiRequest(`/sessions/${session.session_id}/messages`, {
+        method: "POST",
+        body: { actor_user_id: currentWorkspace.userId, role: "user", content: sessionInput }
+      });
+      const context = await apiRequest<ContextBundle>(
+        `/context/sessions/${session.session_id}/assemble?actor_user_id=${currentWorkspace.userId}&current_input=${encodeURIComponent(sessionInput)}&token_budget=4096`
       );
-      updateStep("context", "success", `上下文 ${contextBundle.sections.length} 段，约 ${contextBundle.total_estimated_tokens} tokens`);
+      setContextBundle(context);
+      showToast("success", `Context 已组装：${context.sections.length} 个片段。`);
+      await refreshStudioData(currentWorkspace, agentId);
+    } catch (error) {
+      showToast("error", error instanceof Error ? error.message : "组装 Context 失败。");
+    } finally {
+      setBusy(false);
+    }
+  }
 
-      updateStep("gateway", "running", "正在调用 Gateway LLM 并读取日志");
+  async function generateGatewayPreview() {
+    setBusy(true);
+    try {
       await apiRequest("/gateway/llm/generate", {
         method: "POST",
         body: {
           provider: "mock",
           model: "mock-model",
-          prompt: "请用一句话总结全链路联调状态。",
+          prompt: "请生成一段 Agent 应用预览回复。",
           parameters: { temperature: 0 }
         }
       });
-      const gatewayLogs = await apiRequest<LLMCallLogResponse[]>("/gateway/llm/logs");
-      updateStep("gateway", "success", `Gateway 日志 ${gatewayLogs.length} 条`);
-
-      updateStep("workflow", "running", "正在创建、发布、运行 Workflow");
-      const workflow = await saveWorkflow(owner.user_id, agent.agent_id);
-      const version = await publishWorkflow(owner.user_id, workflow.workflow_id);
-      const versions = await apiRequest<WorkflowVersionResponse[]>(
-        `/workflows/${workflow.workflow_id}/versions?actor_user_id=${owner.user_id}`
-      );
-      const run = await apiRequest<WorkflowRunResponse>("/workflow-runs", {
-        method: "POST",
-        body: {
-          actor_user_id: owner.user_id,
-          version_id: version.version_id,
-          input_data: {
-            text: "请验证完整前后端联调链路，并输出简洁总结。"
-          },
-          async_mode: false
-        }
-      });
-      const runDetail = await apiRequest<WorkflowRunResponse>(`/workflow-runs/${run.run_id}?actor_user_id=${owner.user_id}`);
-      const nodeRuns = await apiRequest<NodeRunResponse[]>(`/workflow-runs/${run.run_id}/nodes?actor_user_id=${owner.user_id}`);
-      updateStep("workflow", "success", `版本 ${versions.length} 个，节点日志 ${nodeRuns.length} 条，状态 ${runDetail.status}`);
-
-      updateStep("rbac", "running", "正在验证 viewer 权限限制");
-      const forbiddenResult = await apiRequestExpectError("/agents", {
-        method: "POST",
-        body: {
-          actor_user_id: viewer.user_id,
-          org_id: organization.org_id,
-          name: "非法 Agent",
-          description: "viewer 不应创建该资源。"
-        }
-      });
-      if (forbiddenResult.status !== 403) {
-        throw new Error(`权限测试失败：预期 403，实际 ${forbiddenResult.status}`);
-      }
-      updateStep("rbac", "success", "viewer 创建 Agent 被正确拒绝");
-
-      updateStep("audit", "running", "正在读取组织审计日志");
-      const auditLogs = await apiRequest<Array<Record<string, unknown>>>(
-        `/identity/organizations/${organization.org_id}/audit-logs?actor_user_id=${owner.user_id}`
-      );
-      updateStep("audit", "success", `审计日志 ${auditLogs.length} 条`);
-
-      setIntegrationState({
-        userId: owner.user_id,
-        viewerId: viewer.user_id,
-        orgId: organization.org_id,
-        teamId: team.team_id,
-        agentId: agent.agent_id,
-        sessionId: session.session_id,
-        skillId: skill.skill_id,
-        mcpServerId: mcpServer.server_id,
-        mcpToolId: mcpTool.tool_id,
-        memoryId: memory.memory_id,
-        workflowId: workflow.workflow_id,
-        versionId: version.version_id,
-        runId: run.run_id,
-        runStatus: runDetail.status,
-        nodeRunCount: nodeRuns.length,
-        gatewayLogCount: gatewayLogs.length,
-        auditLogCount: auditLogs.length,
-        contextSectionCount: contextBundle.sections.length,
-        outputPreview: JSON.stringify(
-          {
-            context: {
-              sections: contextBundle.sections.map((section) => section.name),
-              total_estimated_tokens: contextBundle.total_estimated_tokens,
-              need_compaction: contextBundle.need_compaction
-            },
-            workflow_output: runDetail.output_data,
-            node_runs: nodeRuns.map((nodeRun) => ({ id: nodeRun.node_run_id, status: nodeRun.status })),
-            gateway_logs: gatewayLogs.length,
-            audit_logs: auditLogs.length
-          },
-          null,
-          2
-        )
-      });
-      setMessage("完整联调完成：主要后端模块已通过前端真实调用验证。");
+      const logs = await apiRequest<LLMCallLog[]>("/gateway/llm/logs");
+      setGatewayLogs(logs);
+      showToast("success", "Gateway 调用完成，日志已更新。");
     } catch (error) {
-      setMessage(error instanceof Error ? error.message : "联调失败，请检查 API 服务。");
-      setIntegrationSteps((currentSteps) =>
-        currentSteps.map((step) => (step.status === "running" ? { ...step, status: "failed", detail: "执行失败" } : step))
-      );
+      showToast("error", error instanceof Error ? error.message : "Gateway 调用失败。");
     } finally {
       setBusy(false);
     }
   }
 
-  async function saveCurrentDraft() {
-    if (!integrationState) {
-      setMessage("还没有后端 Workflow，请先点击一键全链路联调创建资源。");
-      return;
-    }
-
-    setBusy(true);
-    setMessage("正在把当前画布同步到后端草稿...");
-
-    try {
-      await apiRequest<WorkflowResponse>(`/workflows/${integrationState.workflowId}/draft`, {
-        method: "PUT",
-        body: {
-          actor_user_id: integrationState.userId,
-          draft_definition: workflowDraft
-        }
-      });
-      setMessage("草稿已保存到后端。");
-    } catch (error) {
-      setMessage(error instanceof Error ? error.message : "保存失败，请检查 API 服务。");
-    } finally {
-      setBusy(false);
-    }
-  }
-
-  async function saveWorkflow(actorUserId: string, agentId: string) {
-    return apiRequest<WorkflowResponse>("/workflows", {
-      method: "POST",
-      body: {
-        actor_user_id: actorUserId,
-        agent_id: agentId,
-        name: "完整前后端联调工作流",
-        description: "由可视化编辑器生成的 Start -> LLM -> End 工作流。",
-        draft_definition: workflowDraft
-      }
-    });
-  }
-
-  async function publishWorkflow(actorUserId: string, workflowId: string) {
-    return apiRequest<WorkflowVersionResponse>(`/workflows/${workflowId}/publish`, {
-      method: "POST",
-      body: {
-        actor_user_id: actorUserId
-      }
-    });
+  async function loadNodeRuns(runId: string, actorUserId = workspace?.userId) {
+    if (!actorUserId) return;
+    const nextNodeRuns = await apiRequest<NodeRun[]>(`/workflow-runs/${runId}/nodes?actor_user_id=${actorUserId}`);
+    setNodeRuns(nextNodeRuns);
   }
 
   return (
-    <main className="min-h-screen bg-[#f6f7f9] text-[#172033] lg:grid lg:grid-cols-[320px_1fr_420px]">
-      <aside className="border-b border-[#dfe4ee] bg-white p-4 lg:border-b-0 lg:border-r">
+    <main className="min-h-screen bg-[#f6f7f9] text-[#172033] lg:grid lg:grid-cols-[260px_1fr]">
+      <aside className="border-b border-[#dfe4ee] bg-white p-4 lg:min-h-screen lg:border-b-0 lg:border-r">
         <div className="mb-5 flex items-center gap-3">
           <div className="grid h-10 w-10 place-items-center rounded-lg bg-[#2f6feb] text-white">
-            <Workflow size={19} />
+            <Network size={19} />
           </div>
           <div>
-            <h1 className="text-base font-semibold">联调工作台</h1>
-            <p className="text-xs text-[#667085]">覆盖运行时、网关与工作流主链路</p>
+            <h1 className="text-base font-semibold">AgentFlow Studio</h1>
+            <p className="text-xs text-[#667085]">Agent 应用搭建工作台</p>
           </div>
         </div>
 
@@ -622,230 +683,601 @@ export default function WorkflowEditor() {
           <p className="text-xs leading-5 text-[#667085]">{API_BASE_URL}</p>
         </div>
 
-        <section className="mb-5">
-          <h2 className="mb-2 text-xs font-semibold uppercase text-[#667085]">节点组件</h2>
-          <div className="space-y-2">
-            {nodePalette.map((item) => {
-              const Icon = item.icon;
-              return (
-                <button
-                  key={item.label}
-                  className="flex w-full items-center gap-3 rounded-md border border-[#dfe4ee] bg-white px-3 py-2 text-left transition hover:border-[#2f6feb] hover:bg-[#f8fafc]"
-                  onClick={() => addNode(item.label)}
-                  type="button"
-                >
-                  <span className="grid h-8 w-8 place-items-center rounded border border-[#dfe4ee] text-[#2f6feb]">
-                    <Icon size={16} />
-                  </span>
-                  <span>
-                    <span className="block text-sm font-medium">{item.label}</span>
-                    <span className="block text-xs text-[#667085]">{item.description}</span>
-                  </span>
-                </button>
-              );
-            })}
-          </div>
-        </section>
+        <nav className="space-y-1">
+          {navItems.map((item) => {
+            const Icon = item.icon;
+            const active = activeSection === item.key;
+            return (
+              <button
+                key={item.key}
+                className={`flex w-full items-center gap-3 rounded-md px-3 py-2 text-left text-sm transition ${
+                  active ? "bg-[#eef4ff] font-medium text-[#2f6feb]" : "text-[#344054] hover:bg-[#f8fafc]"
+                }`}
+                onClick={() => setActiveSection(item.key)}
+                type="button"
+              >
+                <Icon size={16} />
+                {item.label}
+              </button>
+            );
+          })}
+        </nav>
 
-        <section className="space-y-2">
-          <button
-            className="flex w-full items-center justify-center gap-2 rounded-md bg-[#2f6feb] px-3 py-2 text-sm font-medium text-white shadow-sm transition hover:bg-[#255dc7] disabled:bg-[#9bb8f5]"
-            disabled={busy || apiStatus !== "online"}
-            onClick={runFullIntegration}
-            type="button"
-          >
-            {busy ? <Loader2 className="animate-spin" size={16} /> : <Play size={16} />}
-            一键全链路联调
-          </button>
-          <button
-            className="flex w-full items-center justify-center gap-2 rounded-md border border-[#cfd7e6] bg-white px-3 py-2 text-sm font-medium transition hover:border-[#2f6feb] disabled:text-[#98a2b3]"
-            disabled={busy}
-            onClick={saveCurrentDraft}
-            type="button"
-          >
-            <Save size={16} />
-            保存当前草稿
-          </button>
-        </section>
-
-        <div className="mt-5 rounded-lg border border-[#dfe4ee] bg-white p-3">
-          <div className="mb-2 flex items-center gap-2 text-sm font-semibold">
-            <Activity size={15} className="text-[#2f6feb]" />
-            操作反馈
-          </div>
-          <p className="text-sm leading-6 text-[#667085]">{message}</p>
+        <div className={`mt-5 rounded-lg border p-3 text-sm ${toastClassName(toast.kind)}`}>
+          {busy ? <Loader2 className="mr-2 inline animate-spin" size={14} /> : null}
+          {toast.text}
         </div>
       </aside>
 
-      <section className="min-w-0">
-        <div className="relative h-[520px] border-b border-[#dfe4ee] lg:h-[58vh]">
-          <div className="absolute left-5 top-4 z-10 rounded-lg border border-[#dfe4ee] bg-white/95 px-4 py-3 shadow-sm backdrop-blur">
-            <div className="text-sm font-semibold">工作流画布</div>
-            <div className="mt-1 text-xs text-[#667085]">Start {"->"} LLM {"->"} End，支持拖拽、连线、保存、发布、运行</div>
+      <section className="min-w-0 p-4 lg:p-6">
+        <header className="mb-5 flex flex-col gap-3 border-b border-[#dfe4ee] pb-5 xl:flex-row xl:items-center xl:justify-between">
+          <div>
+            <h2 className="text-2xl font-semibold">构建一个可运行的 Agent 应用</h2>
+            <p className="mt-1 text-sm text-[#667085]">
+              创建工作空间，配置 Agent 能力，搭建 Workflow，运行并查看日志。当前数据使用 MVP 内存态后端保存。
+            </p>
+          </div>
+          <div className="grid grid-cols-2 gap-2 sm:grid-cols-4">
+            <Metric label="Agents" value={agents.length} />
+            <Metric label="Workflows" value={workflows.length} />
+            <Metric label="Runs" value={runs.length} />
+            <Metric label="Memories" value={memories.length} />
+          </div>
+        </header>
+
+        {!workspace ? (
+          <SetupPanel
+            busy={busy}
+            form={setupForm}
+            onChange={setSetupForm}
+            onCreate={createWorkspace}
+          />
+        ) : (
+          <>
+            {activeSection === "agents" ? (
+              <AgentsPanel
+                agentForm={agentForm}
+                agents={agents}
+                busy={busy}
+                mcpTools={mcpTools}
+                memories={memories}
+                selectedAgent={selectedAgent}
+                selectedAgentId={selectedAgentId}
+                sessions={sessions}
+                skills={skills}
+                workspace={workspace}
+                workspaceText={workspaceText}
+                onAgentFormChange={setAgentForm}
+                onCreateAgent={createAgent}
+                onSaveWorkspace={saveWorkspaceFile}
+                onSelectAgent={setSelectedAgentId}
+                onWorkspaceTextChange={setWorkspaceText}
+              />
+            ) : null}
+
+            {activeSection === "workflow" ? (
+              <WorkflowPanel
+                busy={busy}
+                edges={edges}
+                nodes={nodes}
+                nodePalette={nodePalette}
+                selectedWorkflowId={selectedWorkflowId}
+                workflowDraft={workflowDraft}
+                workflowForm={workflowForm}
+                workflows={workflows}
+                onAddNode={addNode}
+                onConnect={handleConnect}
+                onCreateWorkflow={createWorkflow}
+                onEdgesChange={onEdgesChange}
+                onNodesChange={onNodesChange}
+                onPublish={publishWorkflow}
+                onRun={runWorkflow}
+                onSaveDraft={saveWorkflowDraft}
+                onSelectWorkflow={setSelectedWorkflowId}
+                onWorkflowFormChange={setWorkflowForm}
+              />
+            ) : null}
+
+            {activeSection === "runtime" ? (
+              <RuntimePanel
+                busy={busy}
+                contextBundle={contextBundle}
+                gatewayLogs={gatewayLogs}
+                mcpForm={mcpForm}
+                mcpServers={mcpServers}
+                mcpTools={mcpTools}
+                memoryForm={memoryForm}
+                memories={memories}
+                sessionInput={sessionInput}
+                sessions={sessions}
+                skillForm={skillForm}
+                skills={skills}
+                onCreateMcp={createMcpTool}
+                onCreateMemory={createMemory}
+                onCreateSession={createSessionAndAssembleContext}
+                onCreateSkill={createSkill}
+                onGatewayPreview={generateGatewayPreview}
+                onMcpFormChange={setMcpForm}
+                onMemoryFormChange={setMemoryForm}
+                onSessionInputChange={setSessionInput}
+                onSkillFormChange={setSkillForm}
+              />
+            ) : null}
+
+            {activeSection === "runs" ? (
+              <RunsPanel
+                nodeRuns={nodeRuns}
+                runs={runs}
+                selectedRun={selectedRun}
+                selectedRunId={selectedRunId}
+                versions={versions}
+                onLoadNodeRuns={(runId) => {
+                  setSelectedRunId(runId);
+                  void loadNodeRuns(runId);
+                }}
+              />
+            ) : null}
+          </>
+        )}
+      </section>
+    </main>
+  );
+}
+
+function SetupPanel({
+  busy,
+  form,
+  onChange,
+  onCreate
+}: {
+  busy: boolean;
+  form: { email: string; displayName: string; orgName: string; teamName: string };
+  onChange: (form: { email: string; displayName: string; orgName: string; teamName: string }) => void;
+  onCreate: () => void;
+}) {
+  return (
+    <section className="grid gap-4 lg:grid-cols-[1fr_420px]">
+      <div className="rounded-lg border border-[#dfe4ee] bg-white p-5">
+        <h3 className="text-lg font-semibold">创建工作空间</h3>
+        <p className="mt-1 text-sm text-[#667085]">MVP 阶段会自动创建一个本地用户、组织和团队，用于后续资源隔离。</p>
+        <div className="mt-5 grid gap-3 sm:grid-cols-2">
+          <TextInput label="邮箱" value={form.email} onChange={(email) => onChange({ ...form, email })} />
+          <TextInput label="显示名称" value={form.displayName} onChange={(displayName) => onChange({ ...form, displayName })} />
+          <TextInput label="组织名称" value={form.orgName} onChange={(orgName) => onChange({ ...form, orgName })} />
+          <TextInput label="团队名称" value={form.teamName} onChange={(teamName) => onChange({ ...form, teamName })} />
+        </div>
+        <button
+          className="mt-5 inline-flex items-center gap-2 rounded-md bg-[#2f6feb] px-4 py-2 text-sm font-medium text-white disabled:bg-[#9bb8f5]"
+          disabled={busy}
+          onClick={onCreate}
+          type="button"
+        >
+          {busy ? <Loader2 className="animate-spin" size={16} /> : <Plus size={16} />}
+          创建并进入 Studio
+        </button>
+      </div>
+      <div className="rounded-lg border border-[#dfe4ee] bg-[#0f172a] p-5 text-[#dbeafe]">
+        <h3 className="text-sm font-semibold text-white">接下来你可以做什么</h3>
+        <ol className="mt-4 space-y-3 text-sm leading-6">
+          <li>1. 创建 Agent 并编辑 AGENTS.md 工作区指令。</li>
+          <li>2. 注册 Skill、MCP Tool、Memory 和 Session 上下文。</li>
+          <li>3. 在画布中搭建 Workflow，保存、发布并运行。</li>
+          <li>4. 查看 Run、Node Run、Gateway Log 和输出结果。</li>
+        </ol>
+      </div>
+    </section>
+  );
+}
+
+function AgentsPanel(props: {
+  agentForm: { name: string; description: string };
+  agents: Agent[];
+  busy: boolean;
+  mcpTools: MCPTool[];
+  memories: MemoryItem[];
+  selectedAgent: Agent | null;
+  selectedAgentId: string;
+  sessions: SessionItem[];
+  skills: Skill[];
+  workspace: WorkspaceState;
+  workspaceText: string;
+  onAgentFormChange: (form: { name: string; description: string }) => void;
+  onCreateAgent: () => void;
+  onSaveWorkspace: () => void;
+  onSelectAgent: (agentId: string) => void;
+  onWorkspaceTextChange: (text: string) => void;
+}) {
+  return (
+    <div className="grid gap-4 xl:grid-cols-[360px_1fr]">
+      <section className="space-y-4">
+        <Panel title="创建 Agent" icon={Bot}>
+          <div className="space-y-3">
+            <TextInput label="名称" value={props.agentForm.name} onChange={(name) => props.onAgentFormChange({ ...props.agentForm, name })} />
+            <TextArea
+              label="描述"
+              rows={4}
+              value={props.agentForm.description}
+              onChange={(description) => props.onAgentFormChange({ ...props.agentForm, description })}
+            />
+            <PrimaryButton busy={props.busy} label="创建 Agent" onClick={props.onCreateAgent} />
+          </div>
+        </Panel>
+        <Panel title="Agent 列表" icon={Network}>
+          <div className="space-y-2">
+            {props.agents.length === 0 ? <EmptyText text="暂无 Agent。" /> : null}
+            {props.agents.map((agent) => (
+              <button
+                key={agent.agent_id}
+                className={`w-full rounded-md border p-3 text-left text-sm ${
+                  props.selectedAgentId === agent.agent_id ? "border-[#2f6feb] bg-[#eef4ff]" : "border-[#dfe4ee] bg-white"
+                }`}
+                onClick={() => props.onSelectAgent(agent.agent_id)}
+                type="button"
+              >
+                <div className="font-medium">{agent.name}</div>
+                <div className="mt-1 text-xs text-[#667085]">{agent.description}</div>
+              </button>
+            ))}
+          </div>
+        </Panel>
+      </section>
+
+      <section className="space-y-4">
+        <Panel title="Agent Workspace" icon={FileText}>
+          <div className="mb-3 grid gap-2 sm:grid-cols-2 lg:grid-cols-4">
+            <Metric label="Skills" value={props.skills.length} />
+            <Metric label="MCP Tools" value={props.mcpTools.length} />
+            <Metric label="Memories" value={props.memories.length} />
+            <Metric label="Sessions" value={props.sessions.length} />
+          </div>
+          <TextArea label="AGENTS.md" rows={12} value={props.workspaceText} onChange={props.onWorkspaceTextChange} />
+          <div className="mt-3 flex items-center justify-between text-xs text-[#667085]">
+            <span>当前组织：{props.workspace.orgId}</span>
+            <button className="rounded-md bg-[#2f6feb] px-3 py-2 text-sm font-medium text-white" onClick={props.onSaveWorkspace} type="button">
+              保存 Workspace
+            </button>
+          </div>
+        </Panel>
+      </section>
+    </div>
+  );
+}
+
+function WorkflowPanel(props: {
+  busy: boolean;
+  edges: Edge[];
+  nodes: Node[];
+  nodePalette: typeof nodePalette;
+  selectedWorkflowId: string;
+  workflowDraft: Record<string, unknown>;
+  workflowForm: { name: string; description: string; input: string };
+  workflows: WorkflowItem[];
+  onAddNode: (label: string) => void;
+  onConnect: (connection: Connection) => void;
+  onCreateWorkflow: () => void;
+  onEdgesChange: ReturnType<typeof useEdgesState>[2];
+  onNodesChange: ReturnType<typeof useNodesState>[2];
+  onPublish: () => void;
+  onRun: () => void;
+  onSaveDraft: () => void;
+  onSelectWorkflow: (workflowId: string) => void;
+  onWorkflowFormChange: (form: { name: string; description: string; input: string }) => void;
+}) {
+  return (
+    <div className="grid gap-4 xl:grid-cols-[1fr_380px]">
+      <section className="space-y-4">
+        <div className="h-[560px] overflow-hidden rounded-lg border border-[#dfe4ee] bg-white">
+          <div className="border-b border-[#dfe4ee] px-4 py-3">
+            <h3 className="text-sm font-semibold">Workflow 画布</h3>
+            <p className="mt-1 text-xs text-[#667085]">拖拽节点、连线，然后保存草稿、发布并运行。</p>
           </div>
           <ReactFlow
-            edges={edges}
+            edges={props.edges}
             fitView
-            nodes={nodes}
-            onConnect={handleConnect}
-            onEdgesChange={onEdgesChange}
-            onNodeClick={(_, node) => setSelectedNodeId(node.id)}
-            onNodesChange={onNodesChange}
+            nodes={props.nodes}
+            onConnect={props.onConnect}
+            onEdgesChange={props.onEdgesChange}
+            onNodesChange={props.onNodesChange}
           >
             <Background color="#d9e0ec" gap={18} />
             <Controls />
             <MiniMap pannable zoomable />
           </ReactFlow>
         </div>
-
-        <section className="p-4">
-          <div className="mb-3 flex items-center justify-between">
-            <div>
-              <h2 className="text-sm font-semibold">全模块联调进度</h2>
-              <p className="mt-1 text-xs text-[#667085]">按真实 API 顺序覆盖身份、Agent、Session、Skill、MCP、Memory、Context、Gateway 和 Workflow。</p>
-            </div>
-            <span className="rounded-full bg-[#eef4ff] px-2.5 py-1 text-xs font-medium text-[#2f6feb]">
-              {integrationSteps.filter((step) => step.status === "success").length}/{integrationSteps.length}
-            </span>
-          </div>
-          <div className="grid gap-2 xl:grid-cols-2">
-            {integrationSteps.map((step) => (
-              <IntegrationStepRow key={step.key} step={step} />
-            ))}
-          </div>
-        </section>
       </section>
 
-      <aside className="overflow-y-auto border-t border-[#dfe4ee] bg-white p-4 lg:border-l lg:border-t-0">
-        <section className="mb-5">
-          <div className="mb-3 flex items-center gap-2">
-            <CircleDot size={17} className="text-[#2f6feb]" />
-            <h2 className="text-sm font-semibold">节点属性</h2>
+      <section className="space-y-4">
+        <Panel title="Workflow 配置" icon={Workflow}>
+          <div className="space-y-3">
+            <TextInput label="名称" value={props.workflowForm.name} onChange={(name) => props.onWorkflowFormChange({ ...props.workflowForm, name })} />
+            <TextArea
+              label="描述"
+              rows={3}
+              value={props.workflowForm.description}
+              onChange={(description) => props.onWorkflowFormChange({ ...props.workflowForm, description })}
+            />
+            <TextArea
+              label="运行输入"
+              rows={4}
+              value={props.workflowForm.input}
+              onChange={(input) => props.onWorkflowFormChange({ ...props.workflowForm, input })}
+            />
+            <div className="grid grid-cols-2 gap-2">
+              {props.nodePalette.map((item) => (
+                <button
+                  key={item.label}
+                  className="rounded-md border border-[#dfe4ee] bg-white px-3 py-2 text-left text-sm hover:border-[#2f6feb]"
+                  onClick={() => props.onAddNode(item.label)}
+                  type="button"
+                >
+                  添加 {item.label}
+                </button>
+              ))}
+            </div>
+            <PrimaryButton busy={props.busy} label="创建 Workflow" onClick={props.onCreateWorkflow} />
+            <div className="grid grid-cols-3 gap-2">
+              <SecondaryButton label="保存" onClick={props.onSaveDraft} />
+              <SecondaryButton label="发布" onClick={props.onPublish} />
+              <SecondaryButton label="运行" onClick={props.onRun} />
+            </div>
           </div>
-          <div className="space-y-3 rounded-lg border border-[#dfe4ee] bg-[#f8fafc] p-3">
-            <Field label="节点 ID" value={selectedNode?.id ?? "未选择"} />
-            <Field label="节点类型" value={selectedNode?.data.label ? String(selectedNode.data.label) : "未选择"} />
-          </div>
-        </section>
+        </Panel>
 
-        <section className="mb-5">
-          <div className="mb-3 flex items-center gap-2">
-            <Server size={17} className="text-[#2f6feb]" />
-            <h2 className="text-sm font-semibold">后端资源</h2>
+        <Panel title="Workflow 列表" icon={GitBranch}>
+          <div className="space-y-2">
+            {props.workflows.length === 0 ? <EmptyText text="暂无 Workflow。" /> : null}
+            {props.workflows.map((workflow) => (
+              <button
+                key={workflow.workflow_id}
+                className={`w-full rounded-md border p-3 text-left text-sm ${
+                  props.selectedWorkflowId === workflow.workflow_id ? "border-[#2f6feb] bg-[#eef4ff]" : "border-[#dfe4ee] bg-white"
+                }`}
+                onClick={() => props.onSelectWorkflow(workflow.workflow_id)}
+                type="button"
+              >
+                <div className="font-medium">{workflow.name}</div>
+                <div className="mt-1 text-xs text-[#667085]">{workflow.published_version_id ? "已发布" : "草稿"}</div>
+              </button>
+            ))}
           </div>
-          <div className="space-y-2 rounded-lg border border-[#dfe4ee] bg-[#f8fafc] p-3">
-            <Field label="Owner" value={integrationState?.userId ?? "-"} compact />
-            <Field label="Viewer" value={integrationState?.viewerId ?? "-"} compact />
-            <Field label="Org" value={integrationState?.orgId ?? "-"} compact />
-            <Field label="Team" value={integrationState?.teamId ?? "-"} compact />
-            <Field label="Agent" value={integrationState?.agentId ?? "-"} compact />
-            <Field label="Session" value={integrationState?.sessionId ?? "-"} compact />
-            <Field label="Skill" value={integrationState?.skillId ?? "-"} compact />
-            <Field label="MCP Tool" value={integrationState?.mcpToolId ?? "-"} compact />
-            <Field label="Memory" value={integrationState?.memoryId ?? "-"} compact />
-            <Field label="Workflow" value={integrationState?.workflowId ?? "-"} compact />
-            <Field label="Run" value={integrationState?.runId ?? "-"} compact />
-            <Field label="状态" value={integrationState?.runStatus ?? "-"} />
-          </div>
-        </section>
+        </Panel>
 
-        <section className="mb-5 grid grid-cols-2 gap-2">
-          <Metric label="Context" value={integrationState?.contextSectionCount ?? 0} />
-          <Metric label="Node Runs" value={integrationState?.nodeRunCount ?? 0} />
-          <Metric label="Gateway Logs" value={integrationState?.gatewayLogCount ?? 0} />
-          <Metric label="Audit Logs" value={integrationState?.auditLogCount ?? 0} />
-        </section>
-
-        <section className="mb-5">
-          <div className="mb-3 flex items-center gap-2">
-            <GitBranch size={17} className="text-[#2f6feb]" />
-            <h2 className="text-sm font-semibold">Workflow DSL</h2>
-          </div>
-          <pre className="max-h-[260px] overflow-auto rounded-lg border border-[#dfe4ee] bg-[#0f172a] p-3 text-xs leading-5 text-[#dbeafe]">
-            {JSON.stringify(workflowDraft, null, 2)}
+        <Panel title="DSL 预览" icon={FileText}>
+          <pre className="max-h-[220px] overflow-auto rounded-md bg-[#0f172a] p-3 text-xs leading-5 text-[#dbeafe]">
+            {JSON.stringify(props.workflowDraft, null, 2)}
           </pre>
-        </section>
-
-        <section>
-          <div className="mb-3 flex items-center gap-2">
-            <FileText size={17} className="text-[#2f6feb]" />
-            <h2 className="text-sm font-semibold">联调输出</h2>
-          </div>
-          <pre className="max-h-[320px] overflow-auto rounded-lg border border-[#dfe4ee] bg-[#f8fafc] p-3 text-xs leading-5 text-[#344054]">
-            {integrationState?.outputPreview ?? "完整联调完成后会显示上下文、Workflow 输出、节点日志、Gateway 日志和审计摘要。"}
-          </pre>
-        </section>
-      </aside>
-    </main>
-  );
-}
-
-function StatusPill({ status }: { status: ApiStatus }) {
-  const statusText = {
-    checking: "检测中",
-    online: "在线",
-    offline: "离线"
-  }[status];
-
-  const statusClassName = {
-    checking: "bg-[#fff7ed] text-[#c2410c]",
-    online: "bg-[#ecfdf3] text-[#027a48]",
-    offline: "bg-[#fef3f2] text-[#b42318]"
-  }[status];
-
-  return <span className={`rounded-full px-2.5 py-1 text-xs font-medium ${statusClassName}`}>{statusText}</span>;
-}
-
-function IntegrationStepRow({ step }: { step: IntegrationStep }) {
-  const statusIcon = {
-    idle: <Clock3 size={15} />,
-    running: <Loader2 className="animate-spin" size={15} />,
-    success: <CheckCircle2 size={15} />,
-    failed: <XCircle size={15} />
-  }[step.status];
-
-  const statusClassName = {
-    idle: "border-[#dfe4ee] text-[#667085]",
-    running: "border-[#bfdbfe] bg-[#eff6ff] text-[#1d4ed8]",
-    success: "border-[#bbf7d0] bg-[#f0fdf4] text-[#047857]",
-    failed: "border-[#fecaca] bg-[#fef2f2] text-[#b42318]"
-  }[step.status];
-
-  return (
-    <article className={`rounded-lg border bg-white p-3 ${statusClassName}`}>
-      <div className="mb-2 flex items-center gap-2">
-        {statusIcon}
-        <h3 className="text-sm font-semibold text-[#172033]">{step.title}</h3>
-      </div>
-      <p className="text-xs leading-5 text-[#667085]">{step.description}</p>
-      <p className="mt-2 overflow-hidden text-ellipsis whitespace-nowrap text-xs font-medium">{step.detail}</p>
-    </article>
-  );
-}
-
-function Field({ label, value, compact = false }: { label: string; value: string; compact?: boolean }) {
-  return (
-    <div>
-      <div className="mb-1 text-xs font-medium text-[#667085]">{label}</div>
-      <div
-        className={`overflow-hidden text-ellipsis rounded-md border border-[#dfe4ee] bg-white px-2 py-1.5 text-sm ${
-          compact ? "font-mono text-[11px]" : ""
-        }`}
-        title={value}
-      >
-        {value}
-      </div>
+        </Panel>
+      </section>
     </div>
+  );
+}
+
+function RuntimePanel(props: {
+  busy: boolean;
+  contextBundle: ContextBundle | null;
+  gatewayLogs: LLMCallLog[];
+  mcpForm: { serverName: string; url: string; toolName: string };
+  mcpServers: MCPServer[];
+  mcpTools: MCPTool[];
+  memoryForm: string;
+  memories: MemoryItem[];
+  sessionInput: string;
+  sessions: SessionItem[];
+  skillForm: { name: string; description: string };
+  skills: Skill[];
+  onCreateMcp: () => void;
+  onCreateMemory: () => void;
+  onCreateSession: () => void;
+  onCreateSkill: () => void;
+  onGatewayPreview: () => void;
+  onMcpFormChange: (form: { serverName: string; url: string; toolName: string }) => void;
+  onMemoryFormChange: (text: string) => void;
+  onSessionInputChange: (text: string) => void;
+  onSkillFormChange: (form: { name: string; description: string }) => void;
+}) {
+  return (
+    <div className="grid gap-4 xl:grid-cols-2">
+      <Panel title="Skill Registry" icon={Brain}>
+        <TextInput label="Skill 名称" value={props.skillForm.name} onChange={(name) => props.onSkillFormChange({ ...props.skillForm, name })} />
+        <TextInput
+          label="说明"
+          value={props.skillForm.description}
+          onChange={(description) => props.onSkillFormChange({ ...props.skillForm, description })}
+        />
+        <PrimaryButton busy={props.busy} label="创建并授权 Skill" onClick={props.onCreateSkill} />
+        <ResourceList items={props.skills.map((skill) => `${skill.name} · ${skill.description}`)} />
+      </Panel>
+
+      <Panel title="MCP Tools" icon={Server}>
+        <TextInput label="Server 名称" value={props.mcpForm.serverName} onChange={(serverName) => props.onMcpFormChange({ ...props.mcpForm, serverName })} />
+        <TextInput label="URL" value={props.mcpForm.url} onChange={(url) => props.onMcpFormChange({ ...props.mcpForm, url })} />
+        <TextInput label="Tool 名称" value={props.mcpForm.toolName} onChange={(toolName) => props.onMcpFormChange({ ...props.mcpForm, toolName })} />
+        <PrimaryButton busy={props.busy} label="创建 MCP Tool" onClick={props.onCreateMcp} />
+        <ResourceList items={[...props.mcpServers.map((server) => `Server: ${server.name}`), ...props.mcpTools.map((tool) => `Tool: ${tool.name}`)]} />
+      </Panel>
+
+      <Panel title="Memory" icon={Database}>
+        <TextArea label="长期记忆" rows={4} value={props.memoryForm} onChange={props.onMemoryFormChange} />
+        <PrimaryButton busy={props.busy} label="保存 Memory" onClick={props.onCreateMemory} />
+        <ResourceList items={props.memories.map((memory) => `${memory.memory_type} · ${memory.summary}`)} />
+      </Panel>
+
+      <Panel title="Session / Context" icon={MessageSquare}>
+        <TextArea label="用户消息" rows={4} value={props.sessionInput} onChange={props.onSessionInputChange} />
+        <PrimaryButton busy={props.busy} label="创建 Session 并组装 Context" onClick={props.onCreateSession} />
+        <div className="mt-3 grid grid-cols-2 gap-2">
+          <Metric label="Sessions" value={props.sessions.length} />
+          <Metric label="Context Sections" value={props.contextBundle?.sections.length ?? 0} />
+        </div>
+      </Panel>
+
+      <Panel title="Gateway" icon={ShieldCheck}>
+        <p className="mb-3 text-sm leading-6 text-[#667085]">通过统一网关调用 Mock LLM，并查看 prefix hash 与调用日志。</p>
+        <PrimaryButton busy={props.busy} label="生成预览回复" onClick={props.onGatewayPreview} />
+        <ResourceList items={props.gatewayLogs.slice(0, 5).map((log) => `${log.status} · ${log.provider}/${log.model} · ${log.prefix_hash || "no-prefix"}`)} />
+      </Panel>
+    </div>
+  );
+}
+
+function RunsPanel(props: {
+  nodeRuns: NodeRun[];
+  runs: WorkflowRun[];
+  selectedRun: WorkflowRun | null;
+  selectedRunId: string;
+  versions: WorkflowVersion[];
+  onLoadNodeRuns: (runId: string) => void;
+}) {
+  return (
+    <div className="grid gap-4 xl:grid-cols-[360px_1fr]">
+      <Panel title="运行历史" icon={Activity}>
+        <div className="space-y-2">
+          {props.runs.length === 0 ? <EmptyText text="暂无运行记录。请先发布并运行 Workflow。" /> : null}
+          {props.runs.map((run) => (
+            <button
+              key={run.run_id}
+              className={`w-full rounded-md border p-3 text-left text-sm ${
+                props.selectedRunId === run.run_id ? "border-[#2f6feb] bg-[#eef4ff]" : "border-[#dfe4ee] bg-white"
+              }`}
+              onClick={() => props.onLoadNodeRuns(run.run_id)}
+              type="button"
+            >
+              <div className="font-mono text-xs">{run.run_id}</div>
+              <div className="mt-1 text-xs text-[#667085]">状态：{run.status}</div>
+            </button>
+          ))}
+        </div>
+      </Panel>
+
+      <section className="space-y-4">
+        <Panel title="运行详情" icon={CheckCircle2}>
+          {props.selectedRun ? (
+            <pre className="max-h-[320px] overflow-auto rounded-md bg-[#0f172a] p-3 text-xs leading-5 text-[#dbeafe]">
+              {JSON.stringify(props.selectedRun.output_data, null, 2)}
+            </pre>
+          ) : (
+            <EmptyText text="选择一次运行后查看输出。" />
+          )}
+        </Panel>
+        <Panel title="节点日志" icon={GitBranch}>
+          <div className="grid gap-2 md:grid-cols-3">
+            {props.nodeRuns.map((nodeRun) => (
+              <div key={nodeRun.node_run_id} className="rounded-md border border-[#dfe4ee] bg-white p-3 text-sm">
+                <div className="font-medium">{nodeRun.node_id}</div>
+                <div className="mt-1 text-xs text-[#667085]">{nodeRun.node_type} · {nodeRun.status} · {nodeRun.elapsed_ms}ms</div>
+              </div>
+            ))}
+          </div>
+        </Panel>
+        <Panel title="发布版本" icon={FileText}>
+          <ResourceList items={props.versions.map((version) => `v${version.version_number} · ${version.version_id}`)} />
+        </Panel>
+      </section>
+    </div>
+  );
+}
+
+function Panel({ children, icon: Icon, title }: { children: React.ReactNode; icon: typeof Bot; title: string }) {
+  return (
+    <section className="rounded-lg border border-[#dfe4ee] bg-white p-4 shadow-sm">
+      <div className="mb-4 flex items-center gap-2">
+        <Icon size={17} className="text-[#2f6feb]" />
+        <h3 className="text-sm font-semibold">{title}</h3>
+      </div>
+      {children}
+    </section>
+  );
+}
+
+function TextInput({ label, onChange, value }: { label: string; onChange: (value: string) => void; value: string }) {
+  return (
+    <label className="block text-sm">
+      <span className="mb-1 block text-xs font-medium text-[#667085]">{label}</span>
+      <input
+        className="w-full rounded-md border border-[#dfe4ee] bg-white px-3 py-2 text-sm outline-none focus:border-[#2f6feb]"
+        onChange={(event) => onChange(event.target.value)}
+        value={value}
+      />
+    </label>
+  );
+}
+
+function TextArea({ label, onChange, rows, value }: { label: string; onChange: (value: string) => void; rows: number; value: string }) {
+  return (
+    <label className="block text-sm">
+      <span className="mb-1 block text-xs font-medium text-[#667085]">{label}</span>
+      <textarea
+        className="w-full resize-y rounded-md border border-[#dfe4ee] bg-white px-3 py-2 text-sm leading-6 outline-none focus:border-[#2f6feb]"
+        onChange={(event) => onChange(event.target.value)}
+        rows={rows}
+        value={value}
+      />
+    </label>
+  );
+}
+
+function PrimaryButton({ busy, label, onClick }: { busy: boolean; label: string; onClick: () => void }) {
+  return (
+    <button
+      className="mt-3 inline-flex items-center gap-2 rounded-md bg-[#2f6feb] px-3 py-2 text-sm font-medium text-white disabled:bg-[#9bb8f5]"
+      disabled={busy}
+      onClick={onClick}
+      type="button"
+    >
+      {busy ? <Loader2 className="animate-spin" size={15} /> : <Plus size={15} />}
+      {label}
+    </button>
+  );
+}
+
+function SecondaryButton({ label, onClick }: { label: string; onClick: () => void }) {
+  return (
+    <button className="rounded-md border border-[#cfd7e6] bg-white px-3 py-2 text-sm font-medium hover:border-[#2f6feb]" onClick={onClick} type="button">
+      {label}
+    </button>
   );
 }
 
 function Metric({ label, value }: { label: string; value: number }) {
   return (
-    <div className="rounded-lg border border-[#dfe4ee] bg-[#f8fafc] p-3">
-      <div className="text-xs font-medium text-[#667085]">{label}</div>
-      <div className="mt-1 text-lg font-semibold">{value}</div>
+    <div className="rounded-lg border border-[#dfe4ee] bg-white px-3 py-2">
+      <div className="text-xs text-[#667085]">{label}</div>
+      <div className="text-lg font-semibold">{value}</div>
     </div>
   );
+}
+
+function ResourceList({ items }: { items: string[] }) {
+  if (items.length === 0) return <EmptyText text="暂无数据。" />;
+  return (
+    <ul className="mt-3 space-y-2">
+      {items.map((item) => (
+        <li key={item} className="overflow-hidden text-ellipsis whitespace-nowrap rounded-md border border-[#dfe4ee] bg-[#f8fafc] px-3 py-2 text-sm">
+          {item}
+        </li>
+      ))}
+    </ul>
+  );
+}
+
+function EmptyText({ text }: { text: string }) {
+  return <p className="rounded-md border border-dashed border-[#dfe4ee] bg-[#f8fafc] px-3 py-3 text-sm text-[#667085]">{text}</p>;
+}
+
+function StatusPill({ status }: { status: ApiStatus }) {
+  const statusText = { checking: "检测中", online: "在线", offline: "离线" }[status];
+  const statusClassName = {
+    checking: "bg-[#fff7ed] text-[#c2410c]",
+    online: "bg-[#ecfdf3] text-[#027a48]",
+    offline: "bg-[#fef3f2] text-[#b42318]"
+  }[status];
+  return <span className={`rounded-full px-2.5 py-1 text-xs font-medium ${statusClassName}`}>{statusText}</span>;
+}
+
+function toastClassName(kind: ToastKind) {
+  if (kind === "success") return "border-[#bbf7d0] bg-[#f0fdf4] text-[#047857]";
+  if (kind === "error") return "border-[#fecaca] bg-[#fef2f2] text-[#b42318]";
+  return "border-[#dfe4ee] bg-[#f8fafc] text-[#344054]";
 }
 
 async function apiRequest<T>(path: string, options: { method?: string; body?: object } = {}): Promise<T> {
@@ -857,42 +1289,21 @@ async function apiRequest<T>(path: string, options: { method?: string; body?: ob
 
   if (!response.ok) {
     let detail = response.statusText;
-
     try {
       const payload = (await response.json()) as ApiErrorPayload;
       detail = formatApiErrorDetail(payload.detail) ?? detail;
     } catch {
       detail = response.statusText;
     }
-
     throw new Error(`请求失败：${detail}`);
   }
 
   return (await response.json()) as T;
 }
 
-async function apiRequestExpectError(path: string, options: { method?: string; body?: object }) {
-  const response = await fetch(`${API_BASE_URL}${path}`, {
-    method: options.method,
-    headers: options.body ? { "Content-Type": "application/json" } : undefined,
-    body: options.body ? JSON.stringify(options.body) : undefined
-  });
-
-  return { status: response.status };
-}
-
 function formatApiErrorDetail(detail: ApiErrorPayload["detail"]): string | undefined {
-  if (!detail) {
-    return undefined;
-  }
-
-  if (typeof detail === "string") {
-    return detail;
-  }
-
-  if (Array.isArray(detail)) {
-    return detail.map((item) => item.msg ?? JSON.stringify(item)).join("；");
-  }
-
+  if (!detail) return undefined;
+  if (typeof detail === "string") return detail;
+  if (Array.isArray(detail)) return detail.map((item) => item.msg ?? JSON.stringify(item)).join("；");
   return detail.msg ?? JSON.stringify(detail);
 }

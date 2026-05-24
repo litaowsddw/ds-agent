@@ -33,6 +33,21 @@ async def register_server(request: MCPServerRegisterRequest) -> MCPServerRespons
     return _to_server_response(server)
 
 
+@router.get("/servers", response_model=list[MCPServerResponse])
+async def list_servers(
+    org_id: str = Query(description="组织 ID"),
+    actor_user_id: str = Query(description="操作者用户 ID"),
+) -> list[MCPServerResponse]:
+    """列出组织内 MCP Server。"""
+
+    try:
+        servers = mcp_store.list_servers(actor_user_id=actor_user_id, org_id=org_id)
+    except PermissionError as exc:
+        raise HTTPException(status_code=403, detail=str(exc)) from exc
+
+    return [_to_server_response(server) for server in servers]
+
+
 @router.post("/servers/{server_id}/tools", response_model=MCPToolResponse)
 async def upsert_tool_snapshot(server_id: str, request: MCPToolSnapshotRequest) -> MCPToolResponse:
     """写入 MCP Tool 快照。"""

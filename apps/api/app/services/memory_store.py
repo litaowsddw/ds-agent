@@ -82,6 +82,18 @@ class MemoryStore:
         ordered = sorted(filtered, key=lambda item: (item[0], item[1].created_at), reverse=True)
         return [memory for _, memory in ordered[:limit]]
 
+    def list_memories(self, actor_user_id: str, agent_id: str) -> list[Memory]:
+        """列出指定 Agent 下的记忆。"""
+
+        agent = self.agents.get_agent(actor_user_id=actor_user_id, agent_id=agent_id)
+        self.identity.assert_org_access(actor_user_id, agent.org_id, Permission.ORGANIZATION_READ)
+        memories = [
+            memory
+            for memory in self.memories_by_id.values()
+            if memory.org_id == agent.org_id and memory.agent_id == agent.agent_id
+        ]
+        return sorted(memories, key=lambda memory: memory.created_at, reverse=True)
+
     def _score_memory(self, memory: Memory, query_terms: set[str]) -> float:
         """计算关键词召回分数。"""
 
@@ -97,4 +109,3 @@ class MemoryStore:
 
 # memory_store 是 MVP 阶段的进程内 Memory Store。
 memory_store = MemoryStore(identity=identity_store, agents=agent_store)
-

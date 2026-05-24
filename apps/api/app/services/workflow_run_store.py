@@ -106,6 +106,35 @@ class WorkflowRunStore:
         self.identity.assert_org_access(actor_user_id, run.org_id, Permission.ORGANIZATION_READ)
         return run
 
+    def list_runs(
+        self,
+        actor_user_id: str,
+        org_id: str | None = None,
+        workflow_id: str | None = None,
+        agent_id: str | None = None,
+    ) -> list[WorkflowRun]:
+        """列出用户可访问的 Workflow Run。"""
+
+        runs = list(self.runs_by_id.values())
+
+        if org_id is not None:
+            self.identity.assert_org_access(actor_user_id, org_id, Permission.ORGANIZATION_READ)
+            runs = [run for run in runs if run.org_id == org_id]
+        else:
+            runs = [
+                run
+                for run in runs
+                if self.identity.get_membership(org_id=run.org_id, user_id=actor_user_id) is not None
+            ]
+
+        if workflow_id is not None:
+            runs = [run for run in runs if run.workflow_id == workflow_id]
+
+        if agent_id is not None:
+            runs = [run for run in runs if run.agent_id == agent_id]
+
+        return sorted(runs, key=lambda run: run.updated_at, reverse=True)
+
     def list_node_runs(self, actor_user_id: str, run_id: str) -> list[NodeRun]:
         """列出 Workflow Run 的节点日志。"""
 

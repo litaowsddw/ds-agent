@@ -1,6 +1,6 @@
 """Memory API。"""
 
-from fastapi import APIRouter, HTTPException
+from fastapi import APIRouter, HTTPException, Query
 
 from apps.api.app.domain.memory import Memory
 from apps.api.app.schemas.memory import MemoryCreateRequest, MemoryRecallRequest, MemoryResponse
@@ -29,6 +29,23 @@ async def create_memory(request: MemoryCreateRequest) -> MemoryResponse:
         raise HTTPException(status_code=400, detail=str(exc)) from exc
 
     return _to_memory_response(memory)
+
+
+@router.get("", response_model=list[MemoryResponse])
+async def list_memories(
+    actor_user_id: str = Query(description="操作者用户 ID"),
+    agent_id: str = Query(description="Agent ID"),
+) -> list[MemoryResponse]:
+    """列出 Agent 下的记忆。"""
+
+    try:
+        memories = memory_store.list_memories(actor_user_id=actor_user_id, agent_id=agent_id)
+    except PermissionError as exc:
+        raise HTTPException(status_code=403, detail=str(exc)) from exc
+    except ValueError as exc:
+        raise HTTPException(status_code=404, detail=str(exc)) from exc
+
+    return [_to_memory_response(memory) for memory in memories]
 
 
 @router.post("/recall", response_model=list[MemoryResponse])
@@ -62,4 +79,3 @@ def _to_memory_response(memory: Memory) -> MemoryResponse:
         confidence=memory.confidence,
         source=memory.source,
     )
-

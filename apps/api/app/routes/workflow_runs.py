@@ -49,6 +49,28 @@ async def create_run(request: WorkflowRunCreateRequest) -> WorkflowRunResponse:
     return _to_run_response(run)
 
 
+@router.get("", response_model=list[WorkflowRunResponse])
+async def list_runs(
+    actor_user_id: str = Query(description="操作者用户 ID"),
+    org_id: str | None = Query(default=None, description="组织 ID"),
+    workflow_id: str | None = Query(default=None, description="Workflow ID"),
+    agent_id: str | None = Query(default=None, description="Agent ID"),
+) -> list[WorkflowRunResponse]:
+    """列出用户可访问的 Workflow Run。"""
+
+    try:
+        runs = workflow_run_store.list_runs(
+            actor_user_id=actor_user_id,
+            org_id=org_id,
+            workflow_id=workflow_id,
+            agent_id=agent_id,
+        )
+    except PermissionError as exc:
+        raise HTTPException(status_code=403, detail=str(exc)) from exc
+
+    return [_to_run_response(run) for run in runs]
+
+
 @router.get("/{run_id}", response_model=WorkflowRunResponse)
 async def get_run(
     run_id: str,
