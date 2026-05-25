@@ -8,6 +8,8 @@ from pydantic import BaseModel, Field
 class LLMGenerateRequest(BaseModel):
     """LLM 生成请求。"""
 
+    actor_user_id: str = Field(default="", description="操作用户 ID")
+    org_id: str = Field(default="", description="组织 ID")
     provider: str = Field(default="mock", description="LLM Provider 名称")
     model: str = Field(default="mock-model", description="模型名称")
     prompt: str = Field(min_length=1, description="提示词")

@@ -132,6 +132,17 @@ type LLMCallLog = {
   prefix_hash: string;
 };
 
+type ModelProvider = {
+  provider_id: string;
+  provider_key: string;
+  display_name: string;
+  base_url: string;
+  api_key_masked: string;
+  models: string[];
+  default_model: string;
+  is_enabled: boolean;
+};
+
 type ApiErrorPayload = {
   detail?: string | { msg?: string } | Array<{ msg?: string }>;
 };
@@ -191,6 +202,9 @@ export default function WorkflowEditor() {
   const [sessions, setSessions] = useState<SessionItem[]>([]);
   const [contextBundle, setContextBundle] = useState<ContextBundle | null>(null);
   const [gatewayLogs, setGatewayLogs] = useState<LLMCallLog[]>([]);
+  const [modelProviders, setModelProviders] = useState<ModelProvider[]>([]);
+  const [selectedProviderKey, setSelectedProviderKey] = useState("mock");
+  const [selectedModel, setSelectedModel] = useState("mock-model");
 
   const [setupForm, setSetupForm] = useState({
     email: "owner@example.com",
@@ -220,9 +234,27 @@ export default function WorkflowEditor() {
   });
   const [sessionInput, setSessionInput] = useState("请结合工作区、Skill、MCP 和 Memory 输出一次响应。");
 
+  const [providerForm, setProviderForm] = useState({
+    providerKey: "deepseek",
+    displayName: "DeepSeek",
+    baseUrl: "https://api.deepseek.com/v1",
+    apiKey: "",
+    models: "deepseek-chat, deepseek-reasoner",
+    defaultModel: "deepseek-chat"
+  });
+  const [llmNodeForm, setLlmNodeForm] = useState({
+    systemPrompt: "你是一个可靠的业务 Agent，先给结论，再给依据。",
+    prompt: "请总结输入，并给出下一步建议。",
+    temperature: "0"
+  });
+
   const selectedAgent = agents.find((agent) => agent.agent_id === selectedAgentId) ?? null;
   const selectedWorkflow = workflows.find((workflow) => workflow.workflow_id === selectedWorkflowId) ?? null;
   const selectedRun = runs.find((run) => run.run_id === selectedRunId) ?? null;
+  const modelOptions =
+    selectedProviderKey === "mock"
+      ? ["mock-model"]
+      : modelProviders.find((provider) => provider.provider_key === selectedProviderKey)?.models ?? ["mock-model"];
 
   const workflowDraft = useMemo(() => {
     return {
@@ -235,15 +267,19 @@ export default function WorkflowEditor() {
           type: label.toLowerCase(),
           config: {
             label,
-            provider: label === "LLM" ? "mock" : undefined,
-            model: label === "LLM" ? "mock-model" : undefined,
-            prompt: label === "LLM" ? "请总结输入，并给出下一步建议。" : undefined
+            provider: label === "LLM" ? selectedProviderKey : undefined,
+            model: label === "LLM" ? selectedModel : undefined,
+            system_prompt: label === "LLM" ? llmNodeForm.systemPrompt : undefined,
+            prompt: label === "LLM" ? llmNodeForm.prompt : undefined,
+            temperature: label === "LLM" ? Number(llmNodeForm.temperature || 0) : undefined,
+            collection: label === "RAG" ? "default" : undefined,
+            tool_name: label === "Tool" ? mcpForm.toolName : undefined
           }
         };
       }),
       edges: edges.map((edge) => ({ source: edge.source, target: edge.target }))
     };
-  }, [nodes, edges]);
+  }, [nodes, edges, selectedProviderKey, selectedModel, llmNodeForm, mcpForm.toolName]);
 
   useEffect(() => {
     let mounted = true;
@@ -306,13 +342,14 @@ export default function WorkflowEditor() {
   async function refreshStudioData(currentWorkspace = workspace, agentId = selectedAgentId) {
     if (!currentWorkspace) return;
 
-    const [nextAgents, nextWorkflows, nextRuns, nextSkills, nextServers, nextLogs] = await Promise.all([
+    const [nextAgents, nextWorkflows, nextRuns, nextSkills, nextServers, nextLogs, nextProviders] = await Promise.all([
       apiRequest<Agent[]>(`/agents?org_id=${currentWorkspace.orgId}&actor_user_id=${currentWorkspace.userId}`),
       apiRequest<WorkflowItem[]>(`/workflows?org_id=${currentWorkspace.orgId}&actor_user_id=${currentWorkspace.userId}`),
       apiRequest<WorkflowRun[]>(`/workflow-runs?org_id=${currentWorkspace.orgId}&actor_user_id=${currentWorkspace.userId}`),
       apiRequest<Skill[]>(`/skills?org_id=${currentWorkspace.orgId}&actor_user_id=${currentWorkspace.userId}`),
       apiRequest<MCPServer[]>(`/mcp/servers?org_id=${currentWorkspace.orgId}&actor_user_id=${currentWorkspace.userId}`),
-      apiRequest<LLMCallLog[]>("/gateway/llm/logs")
+      apiRequest<LLMCallLog[]>("/gateway/llm/logs"),
+      apiRequest<ModelProvider[]>(`/model-providers?org_id=${currentWorkspace.orgId}&actor_user_id=${currentWorkspace.userId}`)
     ]);
 
     setAgents(nextAgents);
@@ -321,6 +358,7 @@ export default function WorkflowEditor() {
     setSkills(nextSkills);
     setMcpServers(nextServers);
     setGatewayLogs(nextLogs);
+    setModelProviders(nextProviders);
 
     const fallbackAgentId = agentId || nextAgents[0]?.agent_id || "";
     if (fallbackAgentId) {
@@ -421,6 +459,32 @@ export default function WorkflowEditor() {
     }
   }
 
+  async function saveModelProvider() {
+    setBusy(true);
+    try {
+      const currentWorkspace = requireWorkspace();
+      const provider = await apiRequest<ModelProvider>("/model-providers", {
+        method: "POST",
+        body: {
+          actor_user_id: currentWorkspace.userId,
+          org_id: currentWorkspace.orgId,
+          provider_key: providerForm.providerKey,
+          display_name: providerForm.displayName,
+          base_url: providerForm.baseUrl,
+          api_key: providerForm.apiKey,
+          models: providerForm.models.split(",").map((model) => model.trim()).filter(Boolean),
+          default_model: providerForm.defaultModel
+        }
+      });
+      showToast("success", `模型供应商「${provider.display_name}」已保存。`);
+      await refreshStudioData(currentWorkspace);
+    } catch (error) {
+      showToast("error", error instanceof Error ? error.message : "保存模型供应商失败。");
+    } finally {
+      setBusy(false);
+    }
+  }
+
   async function createWorkflow() {
     setBusy(true);
     try {
@@ -439,6 +503,7 @@ export default function WorkflowEditor() {
       setSelectedWorkflowId(workflow.workflow_id);
       showToast("success", `Workflow「${workflow.name}」已创建。`);
       await refreshStudioData(currentWorkspace, agentId);
+      setSelectedWorkflowId(workflow.workflow_id);
     } catch (error) {
       showToast("error", error instanceof Error ? error.message : "创建 Workflow 失败。");
     } finally {
@@ -637,13 +702,16 @@ export default function WorkflowEditor() {
   async function generateGatewayPreview() {
     setBusy(true);
     try {
+      const currentWorkspace = requireWorkspace();
       await apiRequest("/gateway/llm/generate", {
         method: "POST",
         body: {
-          provider: "mock",
-          model: "mock-model",
-          prompt: "请生成一段 Agent 应用预览回复。",
-          parameters: { temperature: 0 }
+          actor_user_id: currentWorkspace.userId,
+          org_id: currentWorkspace.orgId,
+          provider: selectedProviderKey,
+          model: selectedModel,
+          prompt: llmNodeForm.prompt,
+          parameters: { temperature: Number(llmNodeForm.temperature || 0) }
         }
       });
       const logs = await apiRequest<LLMCallLog[]>("/gateway/llm/logs");
@@ -761,7 +829,12 @@ export default function WorkflowEditor() {
                 edges={edges}
                 nodes={nodes}
                 nodePalette={nodePalette}
+                llmNodeForm={llmNodeForm}
+                modelOptions={modelOptions}
+                modelProviders={modelProviders}
                 selectedWorkflowId={selectedWorkflowId}
+                selectedModel={selectedModel}
+                selectedProviderKey={selectedProviderKey}
                 workflowDraft={workflowDraft}
                 workflowForm={workflowForm}
                 workflows={workflows}
@@ -773,6 +846,13 @@ export default function WorkflowEditor() {
                 onPublish={publishWorkflow}
                 onRun={runWorkflow}
                 onSaveDraft={saveWorkflowDraft}
+                onLlmNodeFormChange={setLlmNodeForm}
+                onSelectModel={setSelectedModel}
+                onSelectProvider={(providerKey) => {
+                  setSelectedProviderKey(providerKey);
+                  const provider = modelProviders.find((item) => item.provider_key === providerKey);
+                  setSelectedModel(provider?.default_model || provider?.models[0] || "mock-model");
+                }}
                 onSelectWorkflow={setSelectedWorkflowId}
                 onWorkflowFormChange={setWorkflowForm}
               />
@@ -783,6 +863,7 @@ export default function WorkflowEditor() {
                 busy={busy}
                 contextBundle={contextBundle}
                 gatewayLogs={gatewayLogs}
+                modelProviders={modelProviders}
                 mcpForm={mcpForm}
                 mcpServers={mcpServers}
                 mcpTools={mcpTools}
@@ -790,8 +871,11 @@ export default function WorkflowEditor() {
                 memories={memories}
                 sessionInput={sessionInput}
                 sessions={sessions}
+                providerForm={providerForm}
                 skillForm={skillForm}
                 skills={skills}
+                onProviderFormChange={setProviderForm}
+                onSaveProvider={saveModelProvider}
                 onCreateMcp={createMcpTool}
                 onCreateMemory={createMemory}
                 onCreateSession={createSessionAndAssembleContext}
@@ -946,8 +1030,13 @@ function AgentsPanel(props: {
 function WorkflowPanel(props: {
   busy: boolean;
   edges: Edge[];
+  llmNodeForm: { systemPrompt: string; prompt: string; temperature: string };
+  modelOptions: string[];
+  modelProviders: ModelProvider[];
   nodes: Node[];
   nodePalette: typeof nodePalette;
+  selectedModel: string;
+  selectedProviderKey: string;
   selectedWorkflowId: string;
   workflowDraft: Record<string, unknown>;
   workflowForm: { name: string; description: string; input: string };
@@ -956,10 +1045,13 @@ function WorkflowPanel(props: {
   onConnect: (connection: Connection) => void;
   onCreateWorkflow: () => void;
   onEdgesChange: ReturnType<typeof useEdgesState>[2];
+  onLlmNodeFormChange: (form: { systemPrompt: string; prompt: string; temperature: string }) => void;
   onNodesChange: ReturnType<typeof useNodesState>[2];
   onPublish: () => void;
   onRun: () => void;
   onSaveDraft: () => void;
+  onSelectModel: (model: string) => void;
+  onSelectProvider: (providerKey: string) => void;
   onSelectWorkflow: (workflowId: string) => void;
   onWorkflowFormChange: (form: { name: string; description: string; input: string }) => void;
 }) {
@@ -1002,6 +1094,46 @@ function WorkflowPanel(props: {
               value={props.workflowForm.input}
               onChange={(input) => props.onWorkflowFormChange({ ...props.workflowForm, input })}
             />
+            <div className="rounded-md border border-[#dfe4ee] bg-[#f8fafc] p-3">
+              <div className="mb-3 text-xs font-semibold text-[#344054]">LLM 节点模型</div>
+              <div className="grid gap-2 sm:grid-cols-2">
+                <SelectInput
+                  label="供应商"
+                  value={props.selectedProviderKey}
+                  options={[
+                    { label: "Mock / 本地测试", value: "mock" },
+                    ...props.modelProviders.map((provider) => ({
+                      label: provider.display_name,
+                      value: provider.provider_key
+                    }))
+                  ]}
+                  onChange={props.onSelectProvider}
+                />
+                <SelectInput
+                  label="模型"
+                  value={props.selectedModel}
+                  options={props.modelOptions.map((model) => ({ label: model, value: model }))}
+                  onChange={props.onSelectModel}
+                />
+              </div>
+              <TextArea
+                label="系统提示词"
+                rows={3}
+                value={props.llmNodeForm.systemPrompt}
+                onChange={(systemPrompt) => props.onLlmNodeFormChange({ ...props.llmNodeForm, systemPrompt })}
+              />
+              <TextArea
+                label="节点提示词"
+                rows={3}
+                value={props.llmNodeForm.prompt}
+                onChange={(prompt) => props.onLlmNodeFormChange({ ...props.llmNodeForm, prompt })}
+              />
+              <TextInput
+                label="Temperature"
+                value={props.llmNodeForm.temperature}
+                onChange={(temperature) => props.onLlmNodeFormChange({ ...props.llmNodeForm, temperature })}
+              />
+            </div>
             <div className="grid grid-cols-2 gap-2">
               {props.nodePalette.map((item) => (
                 <button
@@ -1056,6 +1188,7 @@ function RuntimePanel(props: {
   busy: boolean;
   contextBundle: ContextBundle | null;
   gatewayLogs: LLMCallLog[];
+  modelProviders: ModelProvider[];
   mcpForm: { serverName: string; url: string; toolName: string };
   mcpServers: MCPServer[];
   mcpTools: MCPTool[];
@@ -1063,6 +1196,7 @@ function RuntimePanel(props: {
   memories: MemoryItem[];
   sessionInput: string;
   sessions: SessionItem[];
+  providerForm: { providerKey: string; displayName: string; baseUrl: string; apiKey: string; models: string; defaultModel: string };
   skillForm: { name: string; description: string };
   skills: Skill[];
   onCreateMcp: () => void;
@@ -1072,11 +1206,26 @@ function RuntimePanel(props: {
   onGatewayPreview: () => void;
   onMcpFormChange: (form: { serverName: string; url: string; toolName: string }) => void;
   onMemoryFormChange: (text: string) => void;
+  onProviderFormChange: (form: { providerKey: string; displayName: string; baseUrl: string; apiKey: string; models: string; defaultModel: string }) => void;
+  onSaveProvider: () => void;
   onSessionInputChange: (text: string) => void;
   onSkillFormChange: (form: { name: string; description: string }) => void;
 }) {
   return (
     <div className="grid gap-4 xl:grid-cols-2">
+      <Panel title="Model Providers" icon={Bot}>
+        <div className="grid gap-2 sm:grid-cols-2">
+          <TextInput label="Provider Key" value={props.providerForm.providerKey} onChange={(providerKey) => props.onProviderFormChange({ ...props.providerForm, providerKey })} />
+          <TextInput label="显示名称" value={props.providerForm.displayName} onChange={(displayName) => props.onProviderFormChange({ ...props.providerForm, displayName })} />
+        </div>
+        <TextInput label="Base URL" value={props.providerForm.baseUrl} onChange={(baseUrl) => props.onProviderFormChange({ ...props.providerForm, baseUrl })} />
+        <TextInput label="API Key" value={props.providerForm.apiKey} onChange={(apiKey) => props.onProviderFormChange({ ...props.providerForm, apiKey })} />
+        <TextInput label="模型列表" value={props.providerForm.models} onChange={(models) => props.onProviderFormChange({ ...props.providerForm, models })} />
+        <TextInput label="默认模型" value={props.providerForm.defaultModel} onChange={(defaultModel) => props.onProviderFormChange({ ...props.providerForm, defaultModel })} />
+        <PrimaryButton busy={props.busy} label="保存模型供应商" onClick={props.onSaveProvider} />
+        <ResourceList items={props.modelProviders.map((provider) => `${provider.display_name} · ${provider.provider_key} · ${provider.api_key_masked || "no-key"}`)} />
+      </Panel>
+
       <Panel title="Skill Registry" icon={Brain}>
         <TextInput label="Skill 名称" value={props.skillForm.name} onChange={(name) => props.onSkillFormChange({ ...props.skillForm, name })} />
         <TextInput
@@ -1198,6 +1347,35 @@ function TextInput({ label, onChange, value }: { label: string; onChange: (value
         onChange={(event) => onChange(event.target.value)}
         value={value}
       />
+    </label>
+  );
+}
+
+function SelectInput({
+  label,
+  onChange,
+  options,
+  value
+}: {
+  label: string;
+  onChange: (value: string) => void;
+  options: Array<{ label: string; value: string }>;
+  value: string;
+}) {
+  return (
+    <label className="block text-sm">
+      <span className="mb-1 block text-xs font-medium text-[#667085]">{label}</span>
+      <select
+        className="w-full rounded-md border border-[#dfe4ee] bg-white px-3 py-2 text-sm outline-none focus:border-[#2f6feb]"
+        onChange={(event) => onChange(event.target.value)}
+        value={value}
+      >
+        {options.map((option) => (
+          <option key={option.value} value={option.value}>
+            {option.label}
+          </option>
+        ))}
+      </select>
     </label>
   );
 }

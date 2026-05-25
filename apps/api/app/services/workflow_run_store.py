@@ -39,8 +39,8 @@ class WorkflowRunStore:
         # gateway 是 LLM 统一网关，负责 Provider 调用、错误标准化和日志。
         self.gateway = gateway or llm_gateway
 
-        # executor 是纯 Python 工作流执行器，通过可注入函数接入 Gateway。
-        self.executor = WorkflowExecutor(llm_gateway=self.gateway.generate_from_workflow_node)
+        # executor_factory 会在每次运行时注入组织与用户上下文，确保模型供应商配置按组织隔离。
+        self.executor_factory = WorkflowExecutor
 
     def create_run(
         self,
@@ -84,7 +84,17 @@ class WorkflowRunStore:
         run.status = RunStatus.RUNNING
         run.updated_at = utc_now()
 
-        result = self.executor.execute(definition=version.definition, input_data=run.input_data)
+        executor = self.executor_factory(
+            llm_gateway=lambda config, node_input: self.gateway.generate_from_workflow_node(
+                {
+                    **config,
+                    "_org_id": run.org_id,
+                    "_actor_user_id": actor_user_id,
+                },
+                node_input,
+            )
+        )
+        result = executor.execute(definition=version.definition, input_data=run.input_data)
         self._apply_execution_result(run=run, result=result)
         return run
 

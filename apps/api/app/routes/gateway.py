@@ -23,7 +23,11 @@ async def generate_llm(request: LLMGenerateRequest) -> LLMGenerateResponse:
                 model=request.model,
                 prompt=request.prompt,
                 parameters=request.parameters,
-                metadata={"source": "gateway_api"},
+                metadata={
+                    "source": "gateway_api",
+                    "org_id": request.org_id,
+                    "actor_user_id": request.actor_user_id,
+                },
             )
         )
     except GatewayProviderError as exc:

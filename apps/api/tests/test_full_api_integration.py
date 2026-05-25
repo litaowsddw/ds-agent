@@ -86,6 +86,29 @@ def test_full_api_integration_chain() -> None:
     )
     assert member_response.status_code == 200
 
+    provider_response = client.post(
+        "/model-providers",
+        json={
+            "actor_user_id": owner_user_id,
+            "org_id": org_id,
+            "provider_key": "deepseek",
+            "display_name": "DeepSeek",
+            "base_url": "https://api.deepseek.com/v1",
+            "api_key": "sk-test-provider-key",
+            "models": ["deepseek-chat", "deepseek-reasoner"],
+            "default_model": "deepseek-chat",
+        },
+    )
+    assert provider_response.status_code == 200
+    assert provider_response.json()["api_key_masked"] == "sk-t...-key"
+
+    provider_list_response = client.get(
+        "/model-providers",
+        params={"actor_user_id": owner_user_id, "org_id": org_id},
+    )
+    assert provider_list_response.status_code == 200
+    assert provider_list_response.json()[0]["provider_key"] == "deepseek"
+
     agent_response = client.post(
         "/agents",
         json={
@@ -283,6 +306,8 @@ def test_full_api_integration_chain() -> None:
     gateway_response = client.post(
         "/gateway/llm/generate",
         json={
+            "actor_user_id": owner_user_id,
+            "org_id": org_id,
             "provider": "mock",
             "model": "mock-model",
             "prompt": "请用一句话总结全链路联调状态。",

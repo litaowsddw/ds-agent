@@ -1,15 +1,19 @@
 """LLM Gateway。
 
-该模块提供 OpenAI-compatible Provider 的最小抽象，并为 Workflow LLM 节点提供
-统一调用入口。当前默认使用 Mock Provider，后续接入真实 HTTP Provider、限流、
-缓存和密钥管理时不需要改 WorkflowExecutor。
+该模块提供统一的模型调用入口。内置 mock provider 用于本地开发和测试；
+组织级模型供应商配置通过 ModelProviderStore 读取，并以 OpenAI-compatible
+协议调用真实供应商，例如 OpenAI、DeepSeek、通义千问、智谱、Moonshot 等。
 """
 
 from dataclasses import dataclass, field
 from datetime import datetime
 from typing import Any, Protocol
+import json
+from urllib.error import HTTPError, URLError
+from urllib.request import Request, urlopen
 
 from apps.api.app.domain.identity import new_id, utc_now
+from apps.api.app.domain.model_provider import ModelProviderConfig
 from apps.api.app.gateway.rate_limiter import LocalTokenBucketRateLimiter, RateLimitExceeded, rate_limiter
 from packages.runtime.prompt_compiler import PromptContextCompiler
 
@@ -25,7 +29,7 @@ class LLMProvider(Protocol):
 class LLMCallRequest:
     """LLM 调用请求。"""
 
-    # provider 是模型供应商名称，例如 openai、deepseek、mock。
+    # provider 是模型供应商名称，例如 mock、openai、deepseek。
     provider: str
 
     # model 是模型名称。
@@ -37,7 +41,7 @@ class LLMCallRequest:
     # parameters 是模型参数，例如 temperature、max_tokens。
     parameters: dict[str, Any] = field(default_factory=dict)
 
-    # metadata 保存调用来源，不能放密钥。
+    # metadata 保存调用来源、组织、用户等信息，禁止放密钥。
     metadata: dict[str, Any] = field(default_factory=dict)
 
     # prefix_hash 是 Reasonix 风格稳定前缀 hash，用于观测 prefix-cache 命中。
@@ -80,7 +84,7 @@ class LLMCallLog:
     # prompt_preview 是提示词预览，避免日志写入过长内容。
     prompt_preview: str
 
-    # prefix_hash 是稳定前缀 hash，后续可关联 provider cache hit tokens。
+    # prefix_hash 是稳定前缀 hash。
     prefix_hash: str
 
     # status 是调用状态，succeeded 或 failed。
@@ -104,17 +108,12 @@ class GatewayProviderError(RuntimeError):
 
 
 class MockLLMProvider:
-    """Mock LLM Provider。
-
-    该 Provider 不访问网络，用于本地开发、单元测试和无密钥环境。
-    """
+    """Mock LLM Provider。"""
 
     def generate(self, request: LLMCallRequest) -> LLMCallResponse:
         """返回确定性的 mock 模型响应。"""
 
-        # prompt_tokens 是粗略 prompt token 估算，用于后续成本统计接口稳定。
         prompt_tokens = max(1, len(request.prompt) // 4)
-
         return LLMCallResponse(
             text=f"[mock-llm] {request.prompt}".strip(),
             provider=request.provider,
@@ -130,16 +129,77 @@ class MockLLMProvider:
 
 
 class OpenAICompatibleProvider:
-    """OpenAI-compatible Provider 适配器骨架。
+    """OpenAI-compatible Provider 适配器。"""
 
-    当前不直接发起网络请求，只负责形成稳定接口。模块接入密钥管理和 HTTP Client 后，
-    这里会向 `/chat/completions` 或兼容端点发送请求。
-    """
+    def __init__(self, config: ModelProviderConfig, timeout_seconds: int = 30) -> None:
+        # config 保存组织级供应商配置，包含 base_url、api_key 和可用模型。
+        self.config = config
+
+        # timeout_seconds 是 HTTP 请求超时时间。
+        self.timeout_seconds = timeout_seconds
 
     def generate(self, request: LLMCallRequest) -> LLMCallResponse:
-        """生成模型响应。"""
+        """通过 /chat/completions 调用 OpenAI-compatible API。"""
 
-        raise GatewayProviderError("OpenAI-compatible Provider 尚未配置 HTTP Client 和密钥")
+        if not self.config.api_key:
+            raise GatewayProviderError("模型供应商未配置 API Key")
+
+        payload = {
+            "model": request.model,
+            "messages": [{"role": "user", "content": request.prompt}],
+            **{key: value for key, value in request.parameters.items() if value is not None},
+        }
+        url = f"{self.config.base_url.rstrip('/')}/chat/completions"
+        http_request = Request(
+            url=url,
+            data=json.dumps(payload).encode("utf-8"),
+            headers={
+                "Authorization": f"Bearer {self.config.api_key}",
+                "Content-Type": "application/json",
+            },
+            method="POST",
+        )
+
+        try:
+            with urlopen(http_request, timeout=self.timeout_seconds) as response:
+                body = json.loads(response.read().decode("utf-8"))
+        except HTTPError as exc:
+            detail = exc.read().decode("utf-8", errors="ignore")
+            raise GatewayProviderError(f"模型供应商 HTTP {exc.code}: {detail[:300]}") from exc
+        except URLError as exc:
+            raise GatewayProviderError(f"模型供应商网络错误: {exc.reason}") from exc
+
+        text = self._extract_text(body)
+        usage = self._extract_usage(body)
+        return LLMCallResponse(
+            text=text,
+            provider=self.config.provider_key,
+            model=request.model,
+            usage=usage,
+            raw={"id": body.get("id"), "object": body.get("object")},
+        )
+
+    def _extract_text(self, body: dict[str, Any]) -> str:
+        """从 OpenAI-compatible 响应中提取文本。"""
+
+        choices = body.get("choices", [])
+        if not choices:
+            return ""
+        message = choices[0].get("message", {})
+        return str(message.get("content", ""))
+
+    def _extract_usage(self, body: dict[str, Any]) -> dict[str, int]:
+        """从响应中提取 token 使用量。"""
+
+        usage = body.get("usage", {})
+        prompt_tokens = int(usage.get("prompt_tokens", 0) or 0)
+        completion_tokens = int(usage.get("completion_tokens", 0) or 0)
+        return {
+            "prompt_tokens": prompt_tokens,
+            "completion_tokens": completion_tokens,
+            "cache_hit_tokens": int(usage.get("prompt_cache_hit_tokens", 0) or 0),
+            "cache_miss_tokens": int(usage.get("prompt_cache_miss_tokens", prompt_tokens) or 0),
+        }
 
 
 class LLMGateway:
@@ -150,7 +210,7 @@ class LLMGateway:
         providers: dict[str, LLMProvider] | None = None,
         limiter: LocalTokenBucketRateLimiter | None = None,
     ) -> None:
-        # providers 保存 Provider 注册表，key 是 provider 名称。
+        # providers 保存内置 Provider 注册表。
         self.providers = providers or {"mock": MockLLMProvider()}
 
         # call_logs 保存调用日志，MVP 阶段使用内存存储。
@@ -165,7 +225,7 @@ class LLMGateway:
     def generate(self, request: LLMCallRequest) -> LLMCallResponse:
         """执行一次 LLM 调用并记录日志。"""
 
-        provider = self.providers.get(request.provider)
+        provider = self._resolve_provider(request)
         if provider is None:
             error_message = f"未注册 LLM Provider：{request.provider}"
             self._append_log(request=request, status="failed", usage={}, error_message=error_message)
@@ -174,8 +234,8 @@ class LLMGateway:
         try:
             self._check_rate_limit(request=request)
             response = provider.generate(request)
-        except RateLimitExceeded as exc:
-            error_message = self._normalize_error(exc)
+        except RateLimitExceeded:
+            error_message = "RateLimitExceeded: 限流超限，LLM 调用已被拒绝"
             self._append_log(request=request, status="failed", usage={}, error_message=error_message)
             raise
         except Exception as exc:
@@ -183,12 +243,7 @@ class LLMGateway:
             self._append_log(request=request, status="failed", usage={}, error_message=error_message)
             raise GatewayProviderError(error_message) from exc
 
-        self._append_log(
-            request=request,
-            status="succeeded",
-            usage=response.usage,
-            error_message="",
-        )
+        self._append_log(request=request, status="succeeded", usage=response.usage, error_message="")
         return response
 
     def generate_from_workflow_node(
@@ -198,18 +253,10 @@ class LLMGateway:
     ) -> dict[str, Any]:
         """为 Workflow LLM 节点提供调用入口。"""
 
-        # provider 是节点配置中的供应商，默认 mock。
         provider = str(config.get("provider", "mock"))
-
-        # model 是节点配置中的模型，默认 mock-model。
         model = str(config.get("model", "mock-model"))
-
         compiled_prompt = self._compile_workflow_prompt(config=config, node_input=node_input)
-
-        # prompt 是编译后的完整 Prompt。
         prompt = str(compiled_prompt["compiled_prompt"])
-
-        # prefix_hash 是稳定前缀的 hash。
         prefix_hash = str(compiled_prompt["prefix_hash"])
 
         request = LLMCallRequest(
@@ -222,6 +269,8 @@ class LLMGateway:
             },
             metadata={
                 "source": "workflow_node",
+                "org_id": config.get("_org_id", ""),
+                "actor_user_id": config.get("_actor_user_id", ""),
                 "upstream_node_count": len(node_input.get("upstream", {})),
             },
             prefix_hash=prefix_hash,
@@ -236,46 +285,54 @@ class LLMGateway:
             "prefix_hash": prefix_hash,
         }
 
-    def _compile_workflow_prompt(
-        self,
-        config: dict[str, Any],
-        node_input: dict[str, Any],
-    ) -> dict[str, object]:
-        """编译 Workflow LLM 节点 Prompt。
+    def list_logs(self) -> list[LLMCallLog]:
+        """返回 LLM 调用日志。"""
 
-        Prompt 分为稳定前缀、追加历史和当前输入三段，尽量保持 DeepSeek/Reasonix
-        prefix-cache 友好。
-        """
+        return list(self.call_logs)
 
-        # immutable_prefix 是稳定前缀，字段顺序由 PromptContextCompiler 固定。
+    def _resolve_provider(self, request: LLMCallRequest) -> LLMProvider | None:
+        """解析内置或组织级模型供应商。"""
+
+        static_provider = self.providers.get(request.provider)
+        if static_provider is not None:
+            return static_provider
+
+        org_id = str(request.metadata.get("org_id", ""))
+        actor_user_id = str(request.metadata.get("actor_user_id", ""))
+        if not org_id or not actor_user_id:
+            return None
+
+        from apps.api.app.services.model_provider_store import model_provider_store
+
+        config = model_provider_store.get_by_key(
+            actor_user_id=actor_user_id,
+            org_id=org_id,
+            provider_key=request.provider,
+            raise_if_missing=False,
+        )
+        if config is None or not config.is_enabled:
+            return None
+        return OpenAICompatibleProvider(config=config)
+
+    def _compile_workflow_prompt(self, config: dict[str, Any], node_input: dict[str, Any]) -> dict[str, object]:
+        """编译 Workflow LLM 节点 Prompt。"""
+
         immutable_prefix = {
             "system_prompt": config.get("system_prompt", ""),
             "model": config.get("model", "mock-model"),
             "tool_schemas": config.get("tool_schemas", []),
             "output_contract": config.get("output_contract", {}),
         }
-
-        # append_only_log 保存上游节点输出摘要，保持追加式结构。
-        append_only_log = {
-            "upstream": node_input.get("upstream", {}),
-        }
-
-        # current_turn 保存变化最频繁的输入和用户 prompt，放在最后。
+        append_only_log = {"upstream": node_input.get("upstream", {})}
         current_turn = {
             "prompt": config.get("prompt", ""),
             "workflow_input": node_input.get("workflow_input", {}),
         }
-
         return self.prompt_compiler.compile(
             immutable_prefix=immutable_prefix,
             append_only_log=append_only_log,
             current_turn=current_turn,
         )
-
-    def list_logs(self) -> list[LLMCallLog]:
-        """返回 LLM 调用日志。"""
-
-        return list(self.call_logs)
 
     def _append_log(
         self,
@@ -286,9 +343,12 @@ class LLMGateway:
     ) -> None:
         """追加调用日志。"""
 
-        # prompt_preview 截断到 160 字符，避免日志过大。
         prompt_preview = request.prompt[:160]
-
+        safe_metadata = {
+            key: value
+            for key, value in request.metadata.items()
+            if key not in {"api_key", "authorization"}
+        }
         self.call_logs.append(
             LLMCallLog(
                 call_id=new_id("llm"),
@@ -299,25 +359,17 @@ class LLMGateway:
                 status=status,
                 usage=usage,
                 error_message=error_message,
-                metadata=request.metadata,
+                metadata=safe_metadata,
             )
         )
 
     def _check_rate_limit(self, request: LLMCallRequest) -> None:
         """检查 LLM 调用限流。"""
 
-        # scope 是调用来源，用于支持 org/agent/workflow 等后续维度。
-        scope = str(request.metadata.get("scope", "global"))
-
-        # provider_key 限制单 Provider 请求速率。
+        scope = str(request.metadata.get("org_id") or request.metadata.get("scope") or "global")
         provider_key = f"llm:provider:{request.provider}"
-
-        # model_key 限制单模型请求速率。
         model_key = f"llm:model:{request.provider}:{request.model}"
-
-        # scope_key 限制业务范围请求速率。
         scope_key = f"llm:scope:{scope}"
-
         for key in (provider_key, model_key, scope_key):
             self.limiter.require(key=key, tokens=1)
 
