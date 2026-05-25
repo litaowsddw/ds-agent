@@ -7,6 +7,7 @@ from apps.api.app.domain.workflow import Workflow, WorkflowVersion
 from apps.api.app.services.agent_store import AgentStore, agent_store
 from apps.api.app.services.identity_store import IdentityStore, identity_store
 from apps.api.app.services.rbac import Permission
+from apps.api.app.storage.local_state import local_state_store
 from packages.workflow.dsl import WorkflowDefinition, WorkflowEdge, WorkflowNode
 from packages.workflow.validator import WorkflowValidator
 
@@ -29,6 +30,7 @@ class WorkflowStore:
 
         # validator 是工作流 DSL 校验器。
         self.validator = WorkflowValidator()
+        self._load_state()
 
     def create_workflow(
         self,
@@ -53,6 +55,7 @@ class WorkflowStore:
             created_by=actor_user_id,
         )
         self.workflows_by_id[workflow.workflow_id] = workflow
+        self._save_state()
         return workflow
 
     def update_draft(
@@ -67,6 +70,7 @@ class WorkflowStore:
         self.identity.assert_org_access(actor_user_id, workflow.org_id, Permission.WORKFLOW_CREATE)
         workflow.draft_definition = deepcopy(draft_definition)
         workflow.updated_at = utc_now()
+        self._save_state()
         return workflow
 
     def publish(self, actor_user_id: str, workflow_id: str) -> WorkflowVersion:
@@ -92,6 +96,7 @@ class WorkflowStore:
         self.versions_by_id[version.version_id] = version
         workflow.published_version_id = version.version_id
         workflow.updated_at = utc_now()
+        self._save_state()
         return version
 
     def get_workflow(self, actor_user_id: str, workflow_id: str) -> Workflow:
@@ -164,6 +169,26 @@ class WorkflowStore:
             if version.workflow_id == workflow_id
         ]
         return max(version_numbers, default=0) + 1
+
+    def _load_state(self) -> None:
+        """从本地状态文件恢复 Workflow 草稿和发布版本。"""
+
+        state = local_state_store.load_bucket("workflows", {})
+        if not isinstance(state, dict):
+            return
+        self.workflows_by_id = state.get("workflows_by_id", self.workflows_by_id)
+        self.versions_by_id = state.get("versions_by_id", self.versions_by_id)
+
+    def _save_state(self) -> None:
+        """把 Workflow 草稿和发布版本保存到本地状态文件。"""
+
+        local_state_store.save_bucket(
+            "workflows",
+            {
+                "workflows_by_id": self.workflows_by_id,
+                "versions_by_id": self.versions_by_id,
+            },
+        )
 
     def _to_workflow_definition(self, raw_definition: dict[str, object]) -> WorkflowDefinition:
         """把原始 dict 转换为 WorkflowDefinition。"""

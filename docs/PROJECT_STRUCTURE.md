@@ -353,3 +353,16 @@ apps/api/app/routes/memory.py
 apps/api/tests/test_memory_store.py
 docs/MODULE_14_MEMORY_MANAGER.md
 ```
+
+## 21. 模块 15-16 已落地文件
+
+```text
+apps/api/app/domain/model_provider.py
+apps/api/app/routes/model_providers.py
+apps/api/app/schemas/model_provider.py
+apps/api/app/services/model_provider_store.py
+apps/api/app/storage/local_state.py
+packages/workflow/executor.py
+docs/MODULE_15_MODEL_PROVIDER_LANGGRAPH.md
+docs/MODULE_16_LOCAL_PERSISTENCE.md
+```

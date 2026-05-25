@@ -7,6 +7,7 @@ from apps.api.app.domain.skill import AgentSkillPolicy, Skill, SkillScope
 from apps.api.app.services.agent_store import AgentStore, agent_store
 from apps.api.app.services.identity_store import IdentityStore, identity_store
 from apps.api.app.services.rbac import Permission
+from apps.api.app.storage.local_state import local_state_store
 
 
 class SkillStore:
@@ -24,6 +25,7 @@ class SkillStore:
 
         # policies_by_agent_skill 保存 Agent 对 Skill 的授权策略。
         self.policies_by_agent_skill: dict[str, AgentSkillPolicy] = {}
+        self._load_state()
 
     def register_skill(
         self,
@@ -63,6 +65,7 @@ class SkillStore:
             created_by=actor_user_id,
         )
         self.skills_by_id[skill.skill_id] = skill
+        self._save_state()
         return skill
 
     def set_agent_skill_policy(
@@ -83,6 +86,7 @@ class SkillStore:
 
         policy = AgentSkillPolicy(agent_id=agent_id, skill_id=skill_id, allowed=allowed)
         self.policies_by_agent_skill[self._policy_key(agent_id, skill_id)] = policy
+        self._save_state()
         return policy
 
     def list_allowed_skill_summaries(self, actor_user_id: str, agent_id: str) -> list[dict[str, str]]:
@@ -172,6 +176,29 @@ class SkillStore:
         """生成 Agent-Skill 授权索引键。"""
 
         return f"{agent_id}:{skill_id}"
+
+    def _load_state(self) -> None:
+        """从本地状态文件恢复 Skill 与授权策略。"""
+
+        state = local_state_store.load_bucket("skills", {})
+        if not isinstance(state, dict):
+            return
+        self.skills_by_id = state.get("skills_by_id", self.skills_by_id)
+        self.policies_by_agent_skill = state.get(
+            "policies_by_agent_skill",
+            self.policies_by_agent_skill,
+        )
+
+    def _save_state(self) -> None:
+        """把 Skill 与授权策略保存到本地状态文件。"""
+
+        local_state_store.save_bucket(
+            "skills",
+            {
+                "skills_by_id": self.skills_by_id,
+                "policies_by_agent_skill": self.policies_by_agent_skill,
+            },
+        )
 
 
 # skill_store 是 MVP 阶段的进程内 Skill 注册表。

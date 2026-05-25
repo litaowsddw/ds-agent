@@ -12,6 +12,7 @@ from apps.api.app.services.identity_store import IdentityStore, identity_store
 from apps.api.app.services.rbac import Permission
 from apps.api.app.services.workflow_store import WorkflowStore, workflow_store
 from apps.api.app.gateway.llm import LLMGateway, llm_gateway
+from apps.api.app.storage.local_state import local_state_store
 from packages.workflow.executor import WorkflowExecutor, WorkflowExecutionResult
 
 
@@ -41,6 +42,7 @@ class WorkflowRunStore:
 
         # executor_factory 会在每次运行时注入组织与用户上下文，确保模型供应商配置按组织隔离。
         self.executor_factory = WorkflowExecutor
+        self._load_state()
 
     def create_run(
         self,
@@ -69,6 +71,7 @@ class WorkflowRunStore:
         )
         self.runs_by_id[run.run_id] = run
         self.node_runs_by_run_id[run.run_id] = []
+        self._save_state()
 
         if execute_immediately:
             self.execute_run(actor_user_id=actor_user_id, run_id=run.run_id)
@@ -104,6 +107,7 @@ class WorkflowRunStore:
         run = self.get_run(actor_user_id=actor_user_id, run_id=run_id)
         run.celery_task_id = celery_task_id
         run.updated_at = utc_now()
+        self._save_state()
         return run
 
     def get_run(self, actor_user_id: str, run_id: str) -> WorkflowRun:
@@ -176,6 +180,30 @@ class WorkflowRunStore:
                 )
             )
         self.node_runs_by_run_id[run.run_id] = node_runs
+        self._save_state()
+
+    def _load_state(self) -> None:
+        """从本地状态文件恢复 Workflow Run 与 Node Run。"""
+
+        state = local_state_store.load_bucket("workflow_runs", {})
+        if not isinstance(state, dict):
+            return
+        self.runs_by_id = state.get("runs_by_id", self.runs_by_id)
+        self.node_runs_by_run_id = state.get(
+            "node_runs_by_run_id",
+            self.node_runs_by_run_id,
+        )
+
+    def _save_state(self) -> None:
+        """把 Workflow Run 与 Node Run 保存到本地状态文件。"""
+
+        local_state_store.save_bucket(
+            "workflow_runs",
+            {
+                "runs_by_id": self.runs_by_id,
+                "node_runs_by_run_id": self.node_runs_by_run_id,
+            },
+        )
 
 
 # workflow_run_store 是 MVP 阶段的进程内运行存储。

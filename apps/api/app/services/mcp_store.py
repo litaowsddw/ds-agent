@@ -5,6 +5,7 @@ from apps.api.app.domain.mcp import AgentMCPPolicy, MCPServer, MCPTool, MCPTrans
 from apps.api.app.services.agent_store import AgentStore, agent_store
 from apps.api.app.services.identity_store import IdentityStore, identity_store
 from apps.api.app.services.rbac import Permission
+from apps.api.app.storage.local_state import local_state_store
 
 
 class MCPStore:
@@ -25,6 +26,7 @@ class MCPStore:
 
         # policies_by_agent_server 保存 Agent 到 MCP Server 的授权策略。
         self.policies_by_agent_server: dict[str, AgentMCPPolicy] = {}
+        self._load_state()
 
     def register_server(
         self,
@@ -47,6 +49,7 @@ class MCPStore:
             created_by=actor_user_id,
         )
         self.servers_by_id[server.server_id] = server
+        self._save_state()
         return server
 
     def upsert_tool_snapshot(
@@ -73,6 +76,7 @@ class MCPStore:
             risk_level=risk_level,
         )
         self.tools_by_id[tool.tool_id] = tool
+        self._save_state()
         return tool
 
     def set_agent_mcp_policy(
@@ -93,6 +97,7 @@ class MCPStore:
 
         policy = AgentMCPPolicy(agent_id=agent_id, server_id=server_id, allowed=allowed)
         self.policies_by_agent_server[self._policy_key(agent_id, server_id)] = policy
+        self._save_state()
         return policy
 
     def list_agent_tools(self, actor_user_id: str, agent_id: str) -> list[MCPTool]:
@@ -141,6 +146,31 @@ class MCPStore:
         """生成 Agent-MCP 授权索引键。"""
 
         return f"{agent_id}:{server_id}"
+
+    def _load_state(self) -> None:
+        """从本地状态文件恢复 MCP Server、Tool 与授权策略。"""
+
+        state = local_state_store.load_bucket("mcp", {})
+        if not isinstance(state, dict):
+            return
+        self.servers_by_id = state.get("servers_by_id", self.servers_by_id)
+        self.tools_by_id = state.get("tools_by_id", self.tools_by_id)
+        self.policies_by_agent_server = state.get(
+            "policies_by_agent_server",
+            self.policies_by_agent_server,
+        )
+
+    def _save_state(self) -> None:
+        """把 MCP Server、Tool 与授权策略保存到本地状态文件。"""
+
+        local_state_store.save_bucket(
+            "mcp",
+            {
+                "servers_by_id": self.servers_by_id,
+                "tools_by_id": self.tools_by_id,
+                "policies_by_agent_server": self.policies_by_agent_server,
+            },
+        )
 
 
 # mcp_store 是 MVP 阶段的进程内 MCP Registry。

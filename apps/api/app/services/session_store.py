@@ -13,6 +13,7 @@ from apps.api.app.domain.session import (
     SessionStatus,
 )
 from apps.api.app.services.agent_store import AgentStore, agent_store
+from apps.api.app.storage.local_state import local_state_store
 
 
 class SessionStore:
@@ -27,6 +28,7 @@ class SessionStore:
 
         # messages_by_session_id 保存每个会话的消息列表，消息只追加不重排。
         self.messages_by_session_id: dict[str, list[SessionMessage]] = {}
+        self._load_state()
 
     def create_session(
         self,
@@ -47,6 +49,7 @@ class SessionStore:
         )
         self.sessions_by_id[session.session_id] = session
         self.messages_by_session_id[session.session_id] = []
+        self._save_state()
         return session
 
     def append_message(
@@ -81,6 +84,7 @@ class SessionStore:
         )
         messages.append(message)
         session.updated_at = utc_now()
+        self._save_state()
         return message
 
     def list_messages(self, actor_user_id: str, session_id: str) -> list[SessionMessage]:
@@ -116,6 +120,7 @@ class SessionStore:
         session = self.get_session(actor_user_id=actor_user_id, session_id=session_id)
         session.status = SessionStatus.RUNNING
         session.updated_at = utc_now()
+        self._save_state()
         return session
 
     def set_idle(self, actor_user_id: str, session_id: str) -> AgentSession:
@@ -124,6 +129,7 @@ class SessionStore:
         session = self.get_session(actor_user_id=actor_user_id, session_id=session_id)
         session.status = SessionStatus.IDLE
         session.updated_at = utc_now()
+        self._save_state()
         return session
 
     def compact_session(self, actor_user_id: str, session_id: str, summary: str) -> AgentSession:
@@ -136,7 +142,31 @@ class SessionStore:
         for message in self.messages_by_session_id[session.session_id]:
             message.compacted = True
 
+        self._save_state()
         return session
+
+    def _load_state(self) -> None:
+        """从本地状态文件恢复 Session 与消息。"""
+
+        state = local_state_store.load_bucket("sessions", {})
+        if not isinstance(state, dict):
+            return
+        self.sessions_by_id = state.get("sessions_by_id", self.sessions_by_id)
+        self.messages_by_session_id = state.get(
+            "messages_by_session_id",
+            self.messages_by_session_id,
+        )
+
+    def _save_state(self) -> None:
+        """把 Session 与消息保存到本地状态文件。"""
+
+        local_state_store.save_bucket(
+            "sessions",
+            {
+                "sessions_by_id": self.sessions_by_id,
+                "messages_by_session_id": self.messages_by_session_id,
+            },
+        )
 
     def _estimate_tokens(self, content: str) -> int:
         """粗略估算 token 数。"""

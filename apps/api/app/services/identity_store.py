@@ -16,6 +16,7 @@ from apps.api.app.domain.identity import (
     new_id,
 )
 from apps.api.app.services.rbac import Permission, RBACService
+from apps.api.app.storage.local_state import local_state_store
 
 
 class IdentityStore:
@@ -42,6 +43,7 @@ class IdentityStore:
 
         # rbac_service 负责权限判断，存储层不直接硬编码角色权限。
         self.rbac_service = RBACService()
+        self._load_state()
 
     def register_user(self, email: str, display_name: str, password: str) -> User:
         """注册用户。"""
@@ -252,6 +254,38 @@ class IdentityStore:
             detail=detail,
         )
         self.audit_logs.append(audit_log)
+        self._save_state()
+
+    def _load_state(self) -> None:
+        """从本地状态文件恢复身份与组织数据。"""
+
+        state = local_state_store.load_bucket("identity", {})
+        if not isinstance(state, dict):
+            return
+        self.users_by_id = state.get("users_by_id", self.users_by_id)
+        self.users_by_email = state.get("users_by_email", self.users_by_email)
+        self.organizations_by_id = state.get("organizations_by_id", self.organizations_by_id)
+        self.teams_by_id = state.get("teams_by_id", self.teams_by_id)
+        self.memberships_by_org_user = state.get(
+            "memberships_by_org_user",
+            self.memberships_by_org_user,
+        )
+        self.audit_logs = state.get("audit_logs", self.audit_logs)
+
+    def _save_state(self) -> None:
+        """把身份与组织数据保存到本地状态文件。"""
+
+        local_state_store.save_bucket(
+            "identity",
+            {
+                "users_by_id": self.users_by_id,
+                "users_by_email": self.users_by_email,
+                "organizations_by_id": self.organizations_by_id,
+                "teams_by_id": self.teams_by_id,
+                "memberships_by_org_user": self.memberships_by_org_user,
+                "audit_logs": self.audit_logs,
+            },
+        )
 
     def _require_user_exists(self, user_id: str) -> None:
         """要求用户必须存在。"""

@@ -4,6 +4,7 @@ from apps.api.app.domain.identity import new_id, utc_now
 from apps.api.app.domain.model_provider import ModelProviderConfig
 from apps.api.app.services.identity_store import IdentityStore, identity_store
 from apps.api.app.services.rbac import Permission
+from apps.api.app.storage.local_state import local_state_store
 
 
 class ModelProviderStore:
@@ -15,6 +16,7 @@ class ModelProviderStore:
 
         # providers_by_id 保存所有模型供应商配置。
         self.providers_by_id: dict[str, ModelProviderConfig] = {}
+        self._load_state()
 
     def create_provider(
         self,
@@ -46,6 +48,7 @@ class ModelProviderStore:
             existing.default_model = default_model.strip() or normalized_models[0]
             existing.is_enabled = True
             existing.updated_at = utc_now()
+            self._save_state()
             return existing
 
         provider = ModelProviderConfig(
@@ -60,6 +63,7 @@ class ModelProviderStore:
             created_by=actor_user_id,
         )
         self.providers_by_id[provider.provider_id] = provider
+        self._save_state()
         return provider
 
     def list_providers(self, actor_user_id: str, org_id: str) -> list[ModelProviderConfig]:
@@ -90,6 +94,22 @@ class ModelProviderStore:
         if raise_if_missing:
             raise ValueError("模型供应商配置不存在")
         return None
+
+    def _load_state(self) -> None:
+        """从本地状态文件恢复模型供应商配置。"""
+
+        state = local_state_store.load_bucket("model_providers", {})
+        if not isinstance(state, dict):
+            return
+        self.providers_by_id = state.get("providers_by_id", self.providers_by_id)
+
+    def _save_state(self) -> None:
+        """把模型供应商配置保存到本地状态文件。"""
+
+        local_state_store.save_bucket(
+            "model_providers",
+            {"providers_by_id": self.providers_by_id},
+        )
 
 
 # model_provider_store 是 MVP 阶段的进程内模型供应商配置存储。

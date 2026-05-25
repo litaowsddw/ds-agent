@@ -8,6 +8,7 @@ from apps.api.app.domain.agent import Agent, AgentWorkspace, WorkspaceFileKind
 from apps.api.app.domain.identity import new_id, utc_now
 from apps.api.app.services.identity_store import IdentityStore, identity_store
 from apps.api.app.services.rbac import Permission
+from apps.api.app.storage.local_state import local_state_store
 
 
 DEFAULT_WORKSPACE_FILES: dict[WorkspaceFileKind, str] = {
@@ -30,6 +31,7 @@ class AgentStore:
 
         # workspaces_by_agent_id 保存 Agent Workspace，key 是 agent_id。
         self.workspaces_by_agent_id: dict[str, AgentWorkspace] = {}
+        self._load_state()
 
     def create_agent(
         self,
@@ -68,6 +70,7 @@ class AgentStore:
             updated_by=actor_user_id,
         )
         self.workspaces_by_agent_id[agent.agent_id] = workspace
+        self._save_state()
 
         return agent
 
@@ -119,6 +122,7 @@ class AgentStore:
         workspace.files[file_kind] = content
         workspace.updated_by = actor_user_id
         workspace.updated_at = utc_now()
+        self._save_state()
         return workspace
 
     def _require_agent(self, agent_id: str) -> Agent:
@@ -128,6 +132,29 @@ class AgentStore:
         if agent is None:
             raise ValueError("Agent 不存在")
         return agent
+
+    def _load_state(self) -> None:
+        """从本地状态文件恢复 Agent 与 Workspace。"""
+
+        state = local_state_store.load_bucket("agents", {})
+        if not isinstance(state, dict):
+            return
+        self.agents_by_id = state.get("agents_by_id", self.agents_by_id)
+        self.workspaces_by_agent_id = state.get(
+            "workspaces_by_agent_id",
+            self.workspaces_by_agent_id,
+        )
+
+    def _save_state(self) -> None:
+        """把 Agent 与 Workspace 保存到本地状态文件。"""
+
+        local_state_store.save_bucket(
+            "agents",
+            {
+                "agents_by_id": self.agents_by_id,
+                "workspaces_by_agent_id": self.workspaces_by_agent_id,
+            },
+        )
 
 
 # agent_store 是 MVP 阶段的进程内 Agent 存储。

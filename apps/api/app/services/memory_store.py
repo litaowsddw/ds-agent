@@ -9,6 +9,7 @@ from apps.api.app.domain.memory import Memory, MemoryType
 from apps.api.app.services.agent_store import AgentStore, agent_store
 from apps.api.app.services.identity_store import IdentityStore, identity_store
 from apps.api.app.services.rbac import Permission
+from apps.api.app.storage.local_state import local_state_store
 
 
 class MemoryStore:
@@ -23,6 +24,7 @@ class MemoryStore:
 
         # memories_by_id 保存所有记忆。
         self.memories_by_id: dict[str, Memory] = {}
+        self._load_state()
 
     def create_memory(
         self,
@@ -51,6 +53,7 @@ class MemoryStore:
             source=source,
         )
         self.memories_by_id[memory.memory_id] = memory
+        self._save_state()
         return memory
 
     def recall_memories(
@@ -105,6 +108,22 @@ class MemoryStore:
         # hit_count 是命中的 query term 数量。
         hit_count = sum(1 for term in query_terms if term in searchable_text)
         return hit_count * memory.confidence
+
+    def _load_state(self) -> None:
+        """从本地状态文件恢复 Memory。"""
+
+        state = local_state_store.load_bucket("memories", {})
+        if not isinstance(state, dict):
+            return
+        self.memories_by_id = state.get("memories_by_id", self.memories_by_id)
+
+    def _save_state(self) -> None:
+        """把 Memory 保存到本地状态文件。"""
+
+        local_state_store.save_bucket(
+            "memories",
+            {"memories_by_id": self.memories_by_id},
+        )
 
 
 # memory_store 是 MVP 阶段的进程内 Memory Store。
