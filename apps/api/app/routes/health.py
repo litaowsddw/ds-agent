@@ -20,4 +20,3 @@ async def health_check() -> dict[str, str]:
     service = "api"
 
     return {"status": status, "service": service}
-

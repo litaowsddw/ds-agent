@@ -44,4 +44,3 @@ class AgentRuntime:
             "runtime_scope": runtime_scope,
             "enabled_capabilities": self.enabled_capabilities,
         }
-

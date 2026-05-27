@@ -33,4 +33,3 @@ class MCPRegistry:
         _org_id = org_id
 
         return []
-

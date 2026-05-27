@@ -41,4 +41,3 @@ class SkillRegistry:
                 scope="bundled",
             )
         ]
-

@@ -70,4 +70,3 @@ class AgentSkillPolicy:
 
     # allowed 表示是否允许 Agent 使用该 Skill。
     allowed: bool
-

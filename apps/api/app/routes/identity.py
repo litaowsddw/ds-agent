@@ -202,4 +202,3 @@ def _to_audit_log_response(audit_log: AuditLog) -> AuditLogResponse:
         target_id=audit_log.target_id,
         detail=audit_log.detail,
     )
-

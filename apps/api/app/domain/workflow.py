@@ -65,4 +65,3 @@ class WorkflowVersion:
 
     # created_at 是发布时间。
     created_at: datetime = field(default_factory=utc_now)
-

@@ -52,4 +52,3 @@ class SessionCompactRequest(BaseModel):
 
     actor_user_id: str = Field(description="操作者用户 ID")
     summary: str = Field(description="压缩摘要")
-

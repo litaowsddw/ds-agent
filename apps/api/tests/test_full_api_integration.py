@@ -10,7 +10,6 @@ from fastapi.testclient import TestClient
 
 from apps.api.app.main import app
 
-
 VALID_WORKFLOW_DEFINITION = {
     "version": "1.0",
     "nodes": [
@@ -299,9 +298,13 @@ def test_full_api_integration_chain() -> None:
     )
     assert context_response.status_code == 200
     section_names = [section["name"] for section in context_response.json()["sections"]]
-    assert {"workspace", "skill_summaries", "memories", "append_only_messages", "current_input"}.issubset(
-        set(section_names)
-    )
+    assert {
+        "workspace",
+        "skill_summaries",
+        "memories",
+        "append_only_messages",
+        "current_input",
+    }.issubset(set(section_names))
 
     gateway_response = client.post(
         "/gateway/llm/generate",
@@ -373,7 +376,11 @@ def test_full_api_integration_chain() -> None:
         params={"actor_user_id": owner_user_id},
     )
     assert node_runs_response.status_code == 200
-    assert [node_run["node_id"] for node_run in node_runs_response.json()] == ["start", "llm", "end"]
+    assert [node_run["node_id"] for node_run in node_runs_response.json()] == [
+        "start",
+        "llm",
+        "end",
+    ]
 
     forbidden_response = client.post(
         "/agents",

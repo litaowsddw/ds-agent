@@ -51,7 +51,9 @@ async def list_skills(
 
 
 @router.put("/agents/{agent_id}/policy")
-async def set_agent_skill_policy(agent_id: str, request: AgentSkillPolicyRequest) -> dict[str, object]:
+async def set_agent_skill_policy(
+    agent_id: str, request: AgentSkillPolicyRequest
+) -> dict[str, object]:
     """设置 Agent Skill 授权策略。"""
 
     try:
@@ -122,4 +124,3 @@ def _to_skill_response(skill: Skill) -> SkillResponse:
         description=skill.description,
         enabled=skill.enabled,
     )
-

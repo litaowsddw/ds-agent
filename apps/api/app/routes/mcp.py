@@ -148,4 +148,3 @@ def _to_tool_response(tool: MCPTool) -> MCPToolResponse:
         input_schema=tool.input_schema,
         risk_level=tool.risk_level,
     )
-

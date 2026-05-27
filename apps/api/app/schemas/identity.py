@@ -88,4 +88,3 @@ class AuditLogResponse(BaseModel):
     target_type: str
     target_id: str
     detail: dict[str, object]
-

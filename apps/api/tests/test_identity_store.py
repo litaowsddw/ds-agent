@@ -88,4 +88,3 @@ def test_user_cannot_read_other_org_teams() -> None:
 
     with pytest.raises(PermissionError):
         store.list_teams(actor_user_id=bob.user_id, org_id=alice_org.org_id)
-

@@ -71,9 +71,7 @@ class ModelProviderStore:
 
         self.identity.assert_org_access(actor_user_id, org_id, Permission.ORGANIZATION_READ)
         providers = [
-            provider
-            for provider in self.providers_by_id.values()
-            if provider.org_id == org_id
+            provider for provider in self.providers_by_id.values() if provider.org_id == org_id
         ]
         return sorted(providers, key=lambda provider: provider.updated_at, reverse=True)
 

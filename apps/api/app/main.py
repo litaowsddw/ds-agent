@@ -8,18 +8,21 @@ from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
 
 from apps.api.app.routes.agents import router as agents_router
+from apps.api.app.routes.background_agents import router as background_agents_router
+from apps.api.app.routes.cache import router as cache_router
 from apps.api.app.routes.context import router as context_router
 from apps.api.app.routes.gateway import router as gateway_router
+from apps.api.app.routes.health import router as health_router
 from apps.api.app.routes.identity import router as identity_router
+from apps.api.app.routes.knowledge import router as knowledge_router
 from apps.api.app.routes.mcp import router as mcp_router
 from apps.api.app.routes.memory import router as memory_router
-from apps.api.app.routes.health import router as health_router
 from apps.api.app.routes.model_providers import router as model_providers_router
 from apps.api.app.routes.runtime import router as runtime_router
 from apps.api.app.routes.sessions import router as sessions_router
 from apps.api.app.routes.skills import router as skills_router
-from apps.api.app.routes.workflows import router as workflows_router
 from apps.api.app.routes.workflow_runs import router as workflow_runs_router
+from apps.api.app.routes.workflows import router as workflows_router
 
 
 def create_app() -> FastAPI:
@@ -59,6 +62,13 @@ def create_app() -> FastAPI:
     app.include_router(model_providers_router, prefix="/model-providers", tags=["model-providers"])
     app.include_router(context_router, prefix="/context", tags=["context"])
     app.include_router(runtime_router, prefix="/runtime", tags=["runtime"])
+    app.include_router(knowledge_router, prefix="/knowledge", tags=["knowledge"])
+    app.include_router(cache_router, prefix="/cache", tags=["cache"])
+    app.include_router(
+        background_agents_router,
+        prefix="/background-agents",
+        tags=["background-agents"],
+    )
     return app
 
 

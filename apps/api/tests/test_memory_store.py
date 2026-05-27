@@ -58,4 +58,3 @@ def test_viewer_cannot_create_memory() -> None:
             content="viewer 不应写入",
             summary="viewer 不应写入",
         )
-

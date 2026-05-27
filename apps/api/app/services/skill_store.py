@@ -89,7 +89,9 @@ class SkillStore:
         self._save_state()
         return policy
 
-    def list_allowed_skill_summaries(self, actor_user_id: str, agent_id: str) -> list[dict[str, str]]:
+    def list_allowed_skill_summaries(
+        self, actor_user_id: str, agent_id: str
+    ) -> list[dict[str, str]]:
         """列出 Agent 可用 Skill 摘要。"""
 
         agent = self.agents.get_agent(actor_user_id=actor_user_id, agent_id=agent_id)
@@ -116,11 +118,7 @@ class SkillStore:
         """列出组织内可见的 Skill。"""
 
         self.identity.assert_org_access(actor_user_id, org_id, Permission.ORGANIZATION_READ)
-        skills = [
-            skill
-            for skill in self.skills_by_id.values()
-            if skill.org_id in ("", org_id)
-        ]
+        skills = [skill for skill in self.skills_by_id.values() if skill.org_id in ("", org_id)]
         return sorted(skills, key=lambda skill: skill.name)
 
     def get_skill_content(self, actor_user_id: str, agent_id: str, skill_id: str) -> Skill:
@@ -203,4 +201,3 @@ class SkillStore:
 
 # skill_store 是 MVP 阶段的进程内 Skill 注册表。
 skill_store = SkillStore(identity=identity_store, agents=agent_store)
-

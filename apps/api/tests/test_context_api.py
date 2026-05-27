@@ -60,4 +60,3 @@ def test_context_api_assembles_session_context() -> None:
     assert "memories" in section_names
     assert "append_only_messages" in section_names
     assert "current_input" in section_names
-

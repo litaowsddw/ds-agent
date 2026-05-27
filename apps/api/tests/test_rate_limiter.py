@@ -31,4 +31,3 @@ def test_llm_gateway_records_rate_limit_failure() -> None:
     assert logs[0].status == "succeeded"
     assert logs[1].status == "failed"
     assert "限流超限" in logs[1].error_message
-

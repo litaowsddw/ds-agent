@@ -6,7 +6,6 @@ from apps.api.app.services.agent_store import AgentStore
 from apps.api.app.services.identity_store import IdentityStore
 from apps.api.app.services.workflow_store import WorkflowStore
 
-
 VALID_DEFINITION = {
     "version": "1.0",
     "nodes": [
@@ -31,7 +30,9 @@ def test_workflow_can_be_published_as_immutable_version() -> None:
     owner = identity.register_user("workflow-owner@example.com", "Owner", "password123")
     organization = identity.create_organization(owner.user_id, "Workflow 组织")
     agent = agent_store.create_agent(owner.user_id, organization.org_id, "Workflow Agent", "")
-    workflow = workflow_store.create_workflow(owner.user_id, agent.agent_id, "摘要流", "", VALID_DEFINITION)
+    workflow = workflow_store.create_workflow(
+        owner.user_id, agent.agent_id, "摘要流", "", VALID_DEFINITION
+    )
 
     version = workflow_store.publish(owner.user_id, workflow.workflow_id)
     workflow_store.update_draft(
@@ -67,8 +68,9 @@ def test_workflow_publish_rejects_cycle() -> None:
             {"source": "end", "target": "start"},
         ],
     }
-    workflow = workflow_store.create_workflow(owner.user_id, agent.agent_id, "环形流", "", cyclic_definition)
+    workflow = workflow_store.create_workflow(
+        owner.user_id, agent.agent_id, "环形流", "", cyclic_definition
+    )
 
     with pytest.raises(ValueError):
         workflow_store.publish(owner.user_id, workflow.workflow_id)
-

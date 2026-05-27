@@ -124,7 +124,9 @@ class MCPStore:
         servers = [server for server in self.servers_by_id.values() if server.org_id == org_id]
         return sorted(servers, key=lambda server: server.name)
 
-    def assert_agent_can_call_tool(self, actor_user_id: str, agent_id: str, tool_id: str) -> MCPTool:
+    def assert_agent_can_call_tool(
+        self, actor_user_id: str, agent_id: str, tool_id: str
+    ) -> MCPTool:
         """校验 Agent 是否可以调用 MCP Tool。"""
 
         allowed_tools = self.list_agent_tools(actor_user_id=actor_user_id, agent_id=agent_id)
@@ -175,4 +177,3 @@ class MCPStore:
 
 # mcp_store 是 MVP 阶段的进程内 MCP Registry。
 mcp_store = MCPStore(identity=identity_store, agents=agent_store)
-

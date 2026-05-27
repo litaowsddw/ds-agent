@@ -106,7 +106,9 @@ class WorkflowStore:
         if workflow is None:
             raise ValueError("Workflow 不存在")
 
-        self.identity.assert_org_access(actor_user_id, workflow.org_id, Permission.ORGANIZATION_READ)
+        self.identity.assert_org_access(
+            actor_user_id, workflow.org_id, Permission.ORGANIZATION_READ
+        )
         return workflow
 
     def list_workflows(
@@ -126,7 +128,8 @@ class WorkflowStore:
             workflows = [
                 workflow
                 for workflow in workflows
-                if self.identity.get_membership(org_id=workflow.org_id, user_id=actor_user_id) is not None
+                if self.identity.get_membership(org_id=workflow.org_id, user_id=actor_user_id)
+                is not None
             ]
 
         if agent_id is not None:
@@ -205,9 +208,10 @@ class WorkflowStore:
             WorkflowEdge(source=str(edge["source"]), target=str(edge["target"]))
             for edge in raw_definition.get("edges", [])
         ]
-        return WorkflowDefinition(version=str(raw_definition.get("version", "1.0")), nodes=nodes, edges=edges)
+        return WorkflowDefinition(
+            version=str(raw_definition.get("version", "1.0")), nodes=nodes, edges=edges
+        )
 
 
 # workflow_store 是 MVP 阶段的进程内 Workflow 存储。
 workflow_store = WorkflowStore(identity=identity_store, agents=agent_store)
-

@@ -5,16 +5,20 @@
 协议调用真实供应商，例如 OpenAI、DeepSeek、通义千问、智谱、Moonshot 等。
 """
 
+import json
 from dataclasses import dataclass, field
 from datetime import datetime
 from typing import Any, Protocol
-import json
 from urllib.error import HTTPError, URLError
 from urllib.request import Request, urlopen
 
 from apps.api.app.domain.identity import new_id, utc_now
 from apps.api.app.domain.model_provider import ModelProviderConfig
-from apps.api.app.gateway.rate_limiter import LocalTokenBucketRateLimiter, RateLimitExceeded, rate_limiter
+from apps.api.app.gateway.rate_limiter import (
+    LocalTokenBucketRateLimiter,
+    RateLimitExceeded,
+    rate_limiter,
+)
 from packages.runtime.prompt_compiler import PromptContextCompiler
 
 
@@ -228,7 +232,9 @@ class LLMGateway:
         provider = self._resolve_provider(request)
         if provider is None:
             error_message = f"未注册 LLM Provider：{request.provider}"
-            self._append_log(request=request, status="failed", usage={}, error_message=error_message)
+            self._append_log(
+                request=request, status="failed", usage={}, error_message=error_message
+            )
             raise GatewayProviderError(error_message)
 
         try:
@@ -236,14 +242,20 @@ class LLMGateway:
             response = provider.generate(request)
         except RateLimitExceeded:
             error_message = "RateLimitExceeded: 限流超限，LLM 调用已被拒绝"
-            self._append_log(request=request, status="failed", usage={}, error_message=error_message)
+            self._append_log(
+                request=request, status="failed", usage={}, error_message=error_message
+            )
             raise
         except Exception as exc:
             error_message = self._normalize_error(exc)
-            self._append_log(request=request, status="failed", usage={}, error_message=error_message)
+            self._append_log(
+                request=request, status="failed", usage={}, error_message=error_message
+            )
             raise GatewayProviderError(error_message) from exc
 
-        self._append_log(request=request, status="succeeded", usage=response.usage, error_message="")
+        self._append_log(
+            request=request, status="succeeded", usage=response.usage, error_message=""
+        )
         return response
 
     def generate_from_workflow_node(
@@ -314,7 +326,9 @@ class LLMGateway:
             return None
         return OpenAICompatibleProvider(config=config)
 
-    def _compile_workflow_prompt(self, config: dict[str, Any], node_input: dict[str, Any]) -> dict[str, object]:
+    def _compile_workflow_prompt(
+        self, config: dict[str, Any], node_input: dict[str, Any]
+    ) -> dict[str, object]:
         """编译 Workflow LLM 节点 Prompt。"""
 
         immutable_prefix = {

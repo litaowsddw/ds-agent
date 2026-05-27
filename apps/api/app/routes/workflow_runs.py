@@ -138,4 +138,3 @@ def _to_node_run_response(node_run: NodeRun) -> NodeRunResponse:
         elapsed_ms=node_run.elapsed_ms,
         sequence=node_run.sequence,
     )
-

@@ -5,7 +5,7 @@ Memory 等后续资源，都必须挂在这里定义的组织和群组边界之�
 """
 
 from dataclasses import dataclass, field
-from datetime import datetime, timezone
+from datetime import UTC, datetime
 from enum import StrEnum
 from uuid import uuid4
 
@@ -13,7 +13,7 @@ from uuid import uuid4
 def utc_now() -> datetime:
     """返回带时区的 UTC 时间。"""
 
-    return datetime.now(timezone.utc)
+    return datetime.now(UTC)
 
 
 def new_id(prefix: str) -> str:
@@ -154,4 +154,3 @@ class AuditLog:
 
     # created_at 是审计发生时间。
     created_at: datetime = field(default_factory=utc_now)
-

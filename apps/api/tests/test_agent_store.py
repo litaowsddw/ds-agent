@@ -86,4 +86,3 @@ def test_workspace_file_can_be_updated_by_developer() -> None:
 
     assert updated_workspace.files[WorkspaceFileKind.AGENTS].startswith("# AGENTS")
     assert "新的 Agent 定义" in updated_workspace.files[WorkspaceFileKind.AGENTS]
-

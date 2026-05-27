@@ -100,4 +100,3 @@ class SessionMessage:
 
     # created_at 是消息创建时间。
     created_at: datetime = field(default_factory=utc_now)
-

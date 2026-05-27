@@ -10,7 +10,6 @@ from apps.api.app.services.identity_store import IdentityStore, identity_store
 from apps.api.app.services.rbac import Permission
 from apps.api.app.storage.local_state import local_state_store
 
-
 DEFAULT_WORKSPACE_FILES: dict[WorkspaceFileKind, str] = {
     WorkspaceFileKind.AGENTS: "# AGENTS\n\n定义 Agent 的角色、目标和长期约束。\n",
     WorkspaceFileKind.SOUL: "# SOUL\n\n定义 Agent 的表达风格、偏好和协作方式。\n",
@@ -159,4 +158,3 @@ class AgentStore:
 
 # agent_store 是 MVP 阶段的进程内 Agent 存储。
 agent_store = AgentStore(identity=identity_store)
-

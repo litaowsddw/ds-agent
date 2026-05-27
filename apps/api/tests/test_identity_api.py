@@ -83,4 +83,3 @@ def test_identity_api_rejects_cross_org_access() -> None:
         params={"actor_user_id": bob_user_id},
     )
     assert blocked_response.status_code == 403
-

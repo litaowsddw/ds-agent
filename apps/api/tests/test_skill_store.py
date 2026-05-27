@@ -7,7 +7,6 @@ from apps.api.app.services.agent_store import AgentStore
 from apps.api.app.services.identity_store import IdentityStore
 from apps.api.app.services.skill_store import SkillStore
 
-
 SKILL_CONTENT = """---
 name: workflow-helper
 description: 帮助用户设计和检查工作流。
@@ -54,8 +53,9 @@ def test_unallowed_skill_content_is_rejected() -> None:
     owner = identity.register_user("skill-block@example.com", "Owner", "password123")
     organization = identity.create_organization(owner.user_id, "Skill Block 组织")
     agent = agent_store.create_agent(owner.user_id, organization.org_id, "Skill Block Agent", "")
-    skill = skill_store.register_skill(owner.user_id, organization.org_id, SkillScope.ORGANIZATION, SKILL_CONTENT)
+    skill = skill_store.register_skill(
+        owner.user_id, organization.org_id, SkillScope.ORGANIZATION, SKILL_CONTENT
+    )
 
     with pytest.raises(PermissionError):
         skill_store.get_skill_content(owner.user_id, agent.agent_id, skill.skill_id)
-

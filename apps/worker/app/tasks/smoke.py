@@ -14,4 +14,3 @@ def ping() -> dict[str, str]:
     service = "worker"
 
     return {"status": status, "service": service}
-

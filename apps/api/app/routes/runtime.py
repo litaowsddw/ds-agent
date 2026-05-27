@@ -62,4 +62,3 @@ async def compile_prompt(payload: dict[str, object]) -> dict[str, object]:
         append_only_log=append_only_log,
         current_turn=current_turn,
     )
-

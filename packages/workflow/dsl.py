@@ -41,4 +41,3 @@ class WorkflowDefinition:
 
     # edges 是连线列表。
     edges: list[WorkflowEdge]
-
