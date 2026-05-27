@@ -6,3 +6,4 @@ email-validator==2.2.0
 redis==5.2.1
 celery==5.4.0
 langgraph==1.1.4
+pymilvus==2.6.4

@@ -95,3 +95,12 @@ class Chunk:
 
     # estimated_tokens 是粗略 token 估算。
     estimated_tokens: int = 0
+
+    # embedding_model 记录该 Chunk 使用的 embedding 模型，便于后续重建索引。
+    embedding_model: str = ""
+
+    # vector_indexed 表示该 Chunk 是否已经写入向量索引。
+    vector_indexed: bool = False
+
+    # similarity_score 是本次检索的相似度分数，持久化时可为空。
+    similarity_score: float | None = None

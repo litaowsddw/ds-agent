@@ -378,3 +378,17 @@ apps/api/tests/test_workflow_run_store.py
 apps/web/features/workflows/WorkflowEditor.tsx
 docs/MODULE_17_RAG_TOOL_EXECUTION.md
 ```
+
+## 23. 模块 18 已落地文件
+```text
+apps/api/app/services/knowledge_vector_index.py
+apps/api/app/services/knowledge_store.py
+apps/api/app/domain/knowledge.py
+apps/api/app/schemas/knowledge.py
+apps/api/app/routes/knowledge.py
+apps/api/tests/test_knowledge_store.py
+apps/api/tests/test_knowledge_api.py
+docker-compose.yml
+.env.example
+docs/MODULE_18_MILVUS_RAG_INDEX.md
+```

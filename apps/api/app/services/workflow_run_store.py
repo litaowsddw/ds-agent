@@ -179,6 +179,9 @@ class WorkflowRunStore:
                     "content": chunk.content,
                     "sequence": chunk.sequence,
                     "estimated_tokens": chunk.estimated_tokens,
+                    "embedding_model": chunk.embedding_model,
+                    "vector_indexed": chunk.vector_indexed,
+                    "similarity_score": chunk.similarity_score,
                 }
                 for chunk in chunks
             ],

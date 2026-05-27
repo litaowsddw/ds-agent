@@ -49,6 +49,7 @@ def test_knowledge_api_create_and_search() -> None:
             "title": "API Doc",
             "content": "FastAPI 是高性能 Python Web 框架",
             "chunk_size": 20,
+            "chunk_overlap": 5,
         },
     )
     assert doc.status_code == 200
@@ -65,3 +66,6 @@ def test_knowledge_api_create_and_search() -> None:
     )
     assert search.status_code == 200
     assert len(search.json()) > 0
+    assert search.json()[0]["vector_indexed"] is True
+    assert search.json()[0]["embedding_model"]
+    assert search.json()[0]["similarity_score"] is not None

@@ -80,6 +80,6 @@ Tool 缓存：
 
 ## 当前限制
 
-- RAG 仍使用关键词检索，未接入 embedding 或 pgvector。
+- RAG 已接入模块 18 的 embedding 与 Milvus/内存向量索引；当前 embedding 仍是 MVP 本地 hash 实现。
 - Tool 节点不会执行外部 MCP 副作用，只做授权校验和调用计划。
 - 前端节点配置当前是工作台级配置，后续可演进为“选中节点侧边栏配置”。

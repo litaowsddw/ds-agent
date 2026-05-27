@@ -58,6 +58,7 @@ async def upload_document(kb_id: str, request: DocumentUploadRequest) -> Documen
             title=request.title,
             content=request.content,
             chunk_size=request.chunk_size,
+            chunk_overlap=request.chunk_overlap,
         )
     except PermissionError as exc:
         raise HTTPException(status_code=403, detail=str(exc)) from exc
@@ -126,4 +127,7 @@ def _to_chunk_response(chunk: Chunk) -> ChunkResponse:
         content=chunk.content,
         sequence=chunk.sequence,
         estimated_tokens=chunk.estimated_tokens,
+        embedding_model=chunk.embedding_model,
+        vector_indexed=chunk.vector_indexed,
+        similarity_score=chunk.similarity_score,
     )

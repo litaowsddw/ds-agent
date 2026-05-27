@@ -23,6 +23,7 @@ class DocumentUploadRequest(BaseModel):
     title: str
     content: str
     chunk_size: int = 500
+    chunk_overlap: int = 0
 
 
 class DocumentResponse(BaseModel):
@@ -40,6 +41,9 @@ class ChunkResponse(BaseModel):
     content: str
     sequence: int
     estimated_tokens: int
+    embedding_model: str = ""
+    vector_indexed: bool = False
+    similarity_score: float | None = None
 
 
 class SearchRequest(BaseModel):
