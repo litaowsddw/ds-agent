@@ -17,6 +17,12 @@ from langgraph.graph import END, START, StateGraph
 # LLMGatewayCall 是执行器调用 LLM 网关的函数签名。
 LLMGatewayCall = Callable[[dict[str, Any], dict[str, Any]], dict[str, Any]]
 
+# RAGNodeCall 是 RAG 节点的真实检索入口，由 API 层注入知识库、权限和缓存上下文。
+RAGNodeCall = Callable[[dict[str, Any], dict[str, Any]], dict[str, Any]]
+
+# ToolNodeCall 是 Tool 节点的真实工具入口，由 API 层注入 MCP 授权和调用边界。
+ToolNodeCall = Callable[[dict[str, Any], dict[str, Any]], dict[str, Any]]
+
 
 class WorkflowGraphState(TypedDict, total=False):
     """LangGraph 执行状态。
@@ -78,7 +84,12 @@ class WorkflowExecutionResult:
 class WorkflowExecutor:
     """执行发布后的 Workflow DSL。"""
 
-    def __init__(self, llm_gateway: LLMGatewayCall | None = None) -> None:
+    def __init__(
+        self,
+        llm_gateway: LLMGatewayCall | None = None,
+        rag_search: RAGNodeCall | None = None,
+        tool_call: ToolNodeCall | None = None,
+    ) -> None:
         """初始化执行器。
 
         参数：
@@ -88,6 +99,12 @@ class WorkflowExecutor:
 
         # llm_gateway 是 LLM 节点的唯一调用入口，避免执行器直接依赖具体供应商。
         self.llm_gateway = llm_gateway or self._mock_llm_gateway
+
+        # rag_search 是 RAG 节点的可替换执行函数，默认实现仅用于离线测试和回退。
+        self.rag_search = rag_search or self._mock_rag_search
+
+        # tool_call 是 Tool 节点的可替换执行函数，默认实现不会触发任何外部副作用。
+        self.tool_call = tool_call or self._mock_tool_call
 
     def execute(
         self, definition: dict[str, Any], input_data: dict[str, Any]
@@ -230,9 +247,9 @@ class WorkflowExecutor:
             elif node_type == "llm":
                 output_data = self.llm_gateway(config, node_input)
             elif node_type == "rag":
-                output_data = self._execute_rag_node(config=config, node_input=node_input)
+                output_data = self.rag_search(config, node_input)
             elif node_type == "tool":
-                output_data = self._execute_tool_node(config=config, node_input=node_input)
+                output_data = self.tool_call(config, node_input)
             elif node_type == "end":
                 output_data = {"result": node_input.get("upstream", {})}
             else:
@@ -286,9 +303,7 @@ class WorkflowExecutor:
             return {}
         return executed_nodes[-1].output_data
 
-    def _execute_rag_node(
-        self, config: dict[str, Any], node_input: dict[str, Any]
-    ) -> dict[str, Any]:
+    def _mock_rag_search(self, config: dict[str, Any], node_input: dict[str, Any]) -> dict[str, Any]:
         """执行 RAG 节点的 MVP 占位逻辑。"""
 
         return {
@@ -299,9 +314,7 @@ class WorkflowExecutor:
             "upstream": node_input.get("upstream", {}),
         }
 
-    def _execute_tool_node(
-        self, config: dict[str, Any], node_input: dict[str, Any]
-    ) -> dict[str, Any]:
+    def _mock_tool_call(self, config: dict[str, Any], node_input: dict[str, Any]) -> dict[str, Any]:
         """执行 Tool 节点的 MVP 占位逻辑。"""
 
         return {

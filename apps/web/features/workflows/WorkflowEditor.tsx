@@ -81,6 +81,9 @@ type NodeRun = {
   node_id: string;
   node_type: string;
   status: string;
+  input_data: Record<string, unknown>;
+  output_data: Record<string, unknown>;
+  error_message: string;
   elapsed_ms: number;
 };
 
@@ -188,15 +191,28 @@ type ApiErrorPayload = {
 
 const API_BASE_URL = process.env.NEXT_PUBLIC_API_BASE_URL ?? "http://127.0.0.1:8000";
 
+function parseJsonObject(value: string): Record<string, unknown> {
+  try {
+    const parsed = JSON.parse(value);
+    return parsed && typeof parsed === "object" && !Array.isArray(parsed) ? parsed : {};
+  } catch {
+    return {};
+  }
+}
+
 const initialNodes: Node[] = [
-  { id: "start", type: "default", position: { x: 70, y: 180 }, data: { label: "Start" } },
-  { id: "llm", type: "default", position: { x: 360, y: 180 }, data: { label: "LLM" } },
-  { id: "end", type: "default", position: { x: 650, y: 180 }, data: { label: "End" } }
+  { id: "start", type: "default", position: { x: 40, y: 180 }, data: { label: "Start" } },
+  { id: "rag", type: "default", position: { x: 250, y: 180 }, data: { label: "RAG" } },
+  { id: "llm", type: "default", position: { x: 460, y: 180 }, data: { label: "LLM" } },
+  { id: "tool", type: "default", position: { x: 670, y: 180 }, data: { label: "Tool" } },
+  { id: "end", type: "default", position: { x: 880, y: 180 }, data: { label: "End" } }
 ];
 
 const initialEdges: Edge[] = [
-  { id: "start-llm", source: "start", target: "llm" },
-  { id: "llm-end", source: "llm", target: "end" }
+  { id: "start-rag", source: "start", target: "rag" },
+  { id: "rag-llm", source: "rag", target: "llm" },
+  { id: "llm-tool", source: "llm", target: "tool" },
+  { id: "tool-end", source: "tool", target: "end" }
 ];
 
 const navItems = [
@@ -298,9 +314,20 @@ export default function WorkflowEditor() {
     temperature: "0"
   });
 
+  const [ragNodeForm, setRagNodeForm] = useState({
+    queryTemplate: "{{input.text}}",
+    limit: "5"
+  });
+  const [toolNodeForm, setToolNodeForm] = useState({
+    toolId: "",
+    arguments: "{\n  \"query\": \"{{input.text}}\"\n}"
+  });
+
   const selectedAgent = agents.find((agent) => agent.agent_id === selectedAgentId) ?? null;
   const selectedWorkflow = workflows.find((workflow) => workflow.workflow_id === selectedWorkflowId) ?? null;
   const selectedRun = runs.find((run) => run.run_id === selectedRunId) ?? null;
+  const selectedTool =
+    mcpTools.find((tool) => tool.tool_id === toolNodeForm.toolId) ?? mcpTools[0] ?? null;
   const modelOptions =
     selectedProviderKey === "mock"
       ? ["mock-model"]
@@ -322,14 +349,30 @@ export default function WorkflowEditor() {
             system_prompt: label === "LLM" ? llmNodeForm.systemPrompt : undefined,
             prompt: label === "LLM" ? llmNodeForm.prompt : undefined,
             temperature: label === "LLM" ? Number(llmNodeForm.temperature || 0) : undefined,
-            collection: label === "RAG" ? "default" : undefined,
-            tool_name: label === "Tool" ? mcpForm.toolName : undefined
+            kb_id: label === "RAG" ? selectedKbId || undefined : undefined,
+            query_template: label === "RAG" ? ragNodeForm.queryTemplate : undefined,
+            limit: label === "RAG" ? Number(ragNodeForm.limit || 5) : undefined,
+            tool_id: label === "Tool" ? selectedTool?.tool_id : undefined,
+            tool_name: label === "Tool" ? selectedTool?.name || mcpForm.toolName : undefined,
+            arguments: label === "Tool" ? parseJsonObject(toolNodeForm.arguments) : undefined,
+            risk_level: label === "Tool" ? selectedTool?.risk_level || "low" : undefined
           }
         };
       }),
       edges: edges.map((edge) => ({ source: edge.source, target: edge.target }))
     };
-  }, [nodes, edges, selectedProviderKey, selectedModel, llmNodeForm, mcpForm.toolName]);
+  }, [
+    nodes,
+    edges,
+    selectedProviderKey,
+    selectedModel,
+    llmNodeForm,
+    selectedKbId,
+    ragNodeForm,
+    selectedTool,
+    mcpForm.toolName,
+    toolNodeForm.arguments
+  ]);
 
   useEffect(() => {
     let mounted = true;
@@ -941,10 +984,15 @@ export default function WorkflowEditor() {
                 nodes={nodes}
                 nodePalette={nodePalette}
                 llmNodeForm={llmNodeForm}
+                ragNodeForm={ragNodeForm}
+                toolNodeForm={toolNodeForm}
+                knowledgeBases={knowledgeBases}
+                mcpTools={mcpTools}
                 modelOptions={modelOptions}
                 modelProviders={modelProviders}
                 selectedWorkflowId={selectedWorkflowId}
                 selectedModel={selectedModel}
+                selectedKbId={selectedKbId}
                 selectedProviderKey={selectedProviderKey}
                 workflowDraft={workflowDraft}
                 workflowForm={workflowForm}
@@ -958,6 +1006,9 @@ export default function WorkflowEditor() {
                 onRun={runWorkflow}
                 onSaveDraft={saveWorkflowDraft}
                 onLlmNodeFormChange={setLlmNodeForm}
+                onRagNodeFormChange={setRagNodeForm}
+                onToolNodeFormChange={setToolNodeForm}
+                onSelectKnowledgeBase={setSelectedKbId}
                 onSelectModel={setSelectedModel}
                 onSelectProvider={(providerKey) => {
                   setSelectedProviderKey(providerKey);
@@ -1164,11 +1215,16 @@ function WorkflowPanel(props: {
   busy: boolean;
   edges: Edge[];
   llmNodeForm: { systemPrompt: string; prompt: string; temperature: string };
+  ragNodeForm: { queryTemplate: string; limit: string };
+  toolNodeForm: { toolId: string; arguments: string };
+  knowledgeBases: KnowledgeBaseItem[];
+  mcpTools: MCPTool[];
   modelOptions: string[];
   modelProviders: ModelProvider[];
   nodes: Node[];
   nodePalette: typeof nodePalette;
   selectedModel: string;
+  selectedKbId: string;
   selectedProviderKey: string;
   selectedWorkflowId: string;
   workflowDraft: Record<string, unknown>;
@@ -1179,11 +1235,14 @@ function WorkflowPanel(props: {
   onCreateWorkflow: () => void;
   onEdgesChange: ReturnType<typeof useEdgesState>[2];
   onLlmNodeFormChange: (form: { systemPrompt: string; prompt: string; temperature: string }) => void;
+  onRagNodeFormChange: (form: { queryTemplate: string; limit: string }) => void;
+  onToolNodeFormChange: (form: { toolId: string; arguments: string }) => void;
   onNodesChange: ReturnType<typeof useNodesState>[2];
   onPublish: () => void;
   onRun: () => void;
   onSaveDraft: () => void;
   onSelectModel: (model: string) => void;
+  onSelectKnowledgeBase: (kbId: string) => void;
   onSelectProvider: (providerKey: string) => void;
   onSelectWorkflow: (workflowId: string) => void;
   onWorkflowFormChange: (form: { name: string; description: string; input: string }) => void;
@@ -1265,6 +1324,52 @@ function WorkflowPanel(props: {
                 label="Temperature"
                 value={props.llmNodeForm.temperature}
                 onChange={(temperature) => props.onLlmNodeFormChange({ ...props.llmNodeForm, temperature })}
+              />
+            </div>
+            <div className="rounded-md border border-[#dfe4ee] bg-[#f8fafc] p-3">
+              <div className="mb-3 text-xs font-semibold text-[#344054]">RAG 节点检索</div>
+              <SelectInput
+                label="知识库"
+                value={props.selectedKbId}
+                options={
+                  props.knowledgeBases.length > 0
+                    ? props.knowledgeBases.map((kb) => ({ label: kb.name, value: kb.kb_id }))
+                    : [{ label: "请先在 Knowledge 创建知识库", value: "" }]
+                }
+                onChange={props.onSelectKnowledgeBase}
+              />
+              <TextArea
+                label="Query 模板"
+                rows={3}
+                value={props.ragNodeForm.queryTemplate}
+                onChange={(queryTemplate) => props.onRagNodeFormChange({ ...props.ragNodeForm, queryTemplate })}
+              />
+              <TextInput
+                label="Limit"
+                value={props.ragNodeForm.limit}
+                onChange={(limit) => props.onRagNodeFormChange({ ...props.ragNodeForm, limit })}
+              />
+            </div>
+            <div className="rounded-md border border-[#dfe4ee] bg-[#f8fafc] p-3">
+              <div className="mb-3 text-xs font-semibold text-[#344054]">Tool 节点调用计划</div>
+              <SelectInput
+                label="MCP Tool"
+                value={props.toolNodeForm.toolId || props.mcpTools[0]?.tool_id || ""}
+                options={
+                  props.mcpTools.length > 0
+                    ? props.mcpTools.map((tool) => ({
+                        label: `${tool.name} / ${tool.risk_level}`,
+                        value: tool.tool_id
+                      }))
+                    : [{ label: "请先在 Runtime 注册并授权 Tool", value: "" }]
+                }
+                onChange={(toolId) => props.onToolNodeFormChange({ ...props.toolNodeForm, toolId })}
+              />
+              <TextArea
+                label="Arguments JSON"
+                rows={5}
+                value={props.toolNodeForm.arguments}
+                onChange={(argumentsText) => props.onToolNodeFormChange({ ...props.toolNodeForm, arguments: argumentsText })}
               />
             </div>
             <div className="grid grid-cols-2 gap-2">
@@ -1442,10 +1547,19 @@ function RunsPanel(props: {
           )}
         </Panel>
         <Panel title="节点日志" icon={GitBranch}>
-          <div className="grid gap-2 md:grid-cols-3">
+          <div className="grid gap-2 md:grid-cols-2">
             {props.nodeRuns.map((nodeRun) => (
               <div key={nodeRun.node_run_id} className="rounded-md border border-[#dfe4ee] bg-white p-3 text-sm">
                 <div className="font-medium">{nodeRun.node_id}</div>
+                <div className="mt-2 text-xs text-[#667085]">
+                  {nodeRun.node_type} / {nodeRun.status} / {nodeRun.elapsed_ms}ms
+                </div>
+                {nodeRun.error_message ? (
+                  <div className="mt-2 rounded-md bg-[#fff1f0] p-2 text-xs leading-5 text-[#b42318]">{nodeRun.error_message}</div>
+                ) : null}
+                <pre className="mt-2 max-h-[220px] overflow-auto rounded-md bg-[#0f172a] p-2 text-xs leading-5 text-[#dbeafe]">
+                  {JSON.stringify(nodeRun.output_data, null, 2)}
+                </pre>
                 <div className="mt-1 text-xs text-[#667085]">{nodeRun.node_type} · {nodeRun.status} · {nodeRun.elapsed_ms}ms</div>
               </div>
             ))}

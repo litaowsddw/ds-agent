@@ -366,3 +366,15 @@ packages/workflow/executor.py
 docs/MODULE_15_MODEL_PROVIDER_LANGGRAPH.md
 docs/MODULE_16_LOCAL_PERSISTENCE.md
 ```
+
+## 22. 模块 17 已落地文件
+```text
+packages/workflow/executor.py
+apps/api/app/services/workflow_run_store.py
+apps/api/app/services/knowledge_store.py
+apps/api/app/services/mcp_store.py
+apps/api/app/services/result_cache.py
+apps/api/tests/test_workflow_run_store.py
+apps/web/features/workflows/WorkflowEditor.tsx
+docs/MODULE_17_RAG_TOOL_EXECUTION.md
+```
