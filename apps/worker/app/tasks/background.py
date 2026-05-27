@@ -32,4 +32,3 @@ def mcp_health_check(server_id: str) -> dict[str, str]:
     target_server_id = server_id
 
     return {"status": "scheduled", "server_id": target_server_id}
-

@@ -16,7 +16,9 @@ class WorkflowValidator:
         node_ids = [node.node_id for node in workflow.nodes]
 
         # duplicated_node_ids 保存重复节点，非空时工作流不可发布。
-        duplicated_node_ids = sorted({node_id for node_id in node_ids if node_ids.count(node_id) > 1})
+        duplicated_node_ids = sorted(
+            {node_id for node_id in node_ids if node_ids.count(node_id) > 1}
+        )
 
         # node_types 保存所有节点类型，用于检查必要节点。
         node_types = [node.node_type for node in workflow.nodes]
@@ -82,4 +84,3 @@ class WorkflowValidator:
             return False
 
         return any(visit(node.node_id) for node in workflow.nodes)
-

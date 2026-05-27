@@ -54,4 +54,3 @@ class AgentMCPPolicyRequest(BaseModel):
     actor_user_id: str = Field(description="操作者用户 ID")
     server_id: str = Field(description="MCP Server ID")
     allowed: bool = Field(description="是否允许使用")
-

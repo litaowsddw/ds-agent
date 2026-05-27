@@ -86,4 +86,3 @@ class AgentMCPPolicy:
 
     # allowed 表示是否允许 Agent 使用该 MCP Server。
     allowed: bool
-

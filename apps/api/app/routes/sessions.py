@@ -149,4 +149,3 @@ def _to_message_response(message: SessionMessage) -> MessageResponse:
         estimated_tokens=message.estimated_tokens,
         compacted=message.compacted,
     )
-

@@ -25,4 +25,3 @@ def test_prefix_hash_is_stable_for_same_prefix() -> None:
     )
 
     assert first_result["prefix_hash"] == second_result["prefix_hash"]
-

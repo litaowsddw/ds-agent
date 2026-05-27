@@ -68,4 +68,3 @@ class RBACService:
 
         if not self.has_permission(membership, permission):
             raise PermissionError(f"缺少权限：{permission.value}")
-

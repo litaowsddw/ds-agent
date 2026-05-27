@@ -23,4 +23,3 @@ def test_execute_workflow_task_function() -> None:
 
     assert result["status"] == "succeeded"
     assert len(result["node_runs"]) == 3
-

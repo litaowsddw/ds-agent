@@ -38,4 +38,3 @@ class MemoryResponse(BaseModel):
     summary: str
     confidence: float
     source: str
-

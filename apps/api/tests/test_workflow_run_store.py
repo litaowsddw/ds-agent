@@ -7,7 +7,6 @@ from apps.api.app.services.identity_store import IdentityStore
 from apps.api.app.services.workflow_run_store import WorkflowRunStore
 from apps.api.app.services.workflow_store import WorkflowStore
 
-
 VALID_DEFINITION = {
     "version": "1.0",
     "nodes": [
@@ -34,7 +33,9 @@ def test_workflow_run_executes_start_llm_end() -> None:
     owner = identity.register_user("run-owner@example.com", "Owner", "password123")
     organization = identity.create_organization(owner.user_id, "Run 组织")
     agent = agent_store.create_agent(owner.user_id, organization.org_id, "Run Agent", "")
-    workflow = workflow_store.create_workflow(owner.user_id, agent.agent_id, "Run Workflow", "", VALID_DEFINITION)
+    workflow = workflow_store.create_workflow(
+        owner.user_id, agent.agent_id, "Run Workflow", "", VALID_DEFINITION
+    )
     version = workflow_store.publish(owner.user_id, workflow.workflow_id)
 
     run = run_store.create_run(

@@ -7,12 +7,12 @@ LangGraph 边，因此用户可视化组装的结构就是后端实际执行结�
 
 from __future__ import annotations
 
+from collections.abc import Callable
 from dataclasses import dataclass, field
 from time import perf_counter
-from typing import Any, Callable, TypedDict
+from typing import Any, TypedDict
 
 from langgraph.graph import END, START, StateGraph
-
 
 # LLMGatewayCall 是执行器调用 LLM 网关的函数签名。
 LLMGatewayCall = Callable[[dict[str, Any], dict[str, Any]], dict[str, Any]]
@@ -27,7 +27,7 @@ class WorkflowGraphState(TypedDict, total=False):
 
     workflow_input: dict[str, Any]
     context_by_node: dict[str, dict[str, Any]]
-    node_runs: list["ExecutedNode"]
+    node_runs: list[ExecutedNode]
     failed: bool
     error_message: str
 
@@ -89,7 +89,9 @@ class WorkflowExecutor:
         # llm_gateway 是 LLM 节点的唯一调用入口，避免执行器直接依赖具体供应商。
         self.llm_gateway = llm_gateway or self._mock_llm_gateway
 
-    def execute(self, definition: dict[str, Any], input_data: dict[str, Any]) -> WorkflowExecutionResult:
+    def execute(
+        self, definition: dict[str, Any], input_data: dict[str, Any]
+    ) -> WorkflowExecutionResult:
         """执行工作流定义。"""
 
         try:
@@ -266,9 +268,7 @@ class WorkflowExecutor:
         """构建节点输入。"""
 
         upstream_node_ids = [
-            str(edge["source"])
-            for edge in definition_edges
-            if str(edge["target"]) == node_id
+            str(edge["source"]) for edge in definition_edges if str(edge["target"]) == node_id
         ]
         upstream = {
             upstream_node_id: context_by_node.get(upstream_node_id, {})
@@ -286,7 +286,9 @@ class WorkflowExecutor:
             return {}
         return executed_nodes[-1].output_data
 
-    def _execute_rag_node(self, config: dict[str, Any], node_input: dict[str, Any]) -> dict[str, Any]:
+    def _execute_rag_node(
+        self, config: dict[str, Any], node_input: dict[str, Any]
+    ) -> dict[str, Any]:
         """执行 RAG 节点的 MVP 占位逻辑。"""
 
         return {
@@ -297,7 +299,9 @@ class WorkflowExecutor:
             "upstream": node_input.get("upstream", {}),
         }
 
-    def _execute_tool_node(self, config: dict[str, Any], node_input: dict[str, Any]) -> dict[str, Any]:
+    def _execute_tool_node(
+        self, config: dict[str, Any], node_input: dict[str, Any]
+    ) -> dict[str, Any]:
         """执行 Tool 节点的 MVP 占位逻辑。"""
 
         return {
@@ -307,7 +311,9 @@ class WorkflowExecutor:
             "upstream": node_input.get("upstream", {}),
         }
 
-    def _mock_llm_gateway(self, config: dict[str, Any], node_input: dict[str, Any]) -> dict[str, Any]:
+    def _mock_llm_gateway(
+        self, config: dict[str, Any], node_input: dict[str, Any]
+    ) -> dict[str, Any]:
         """本地 mock LLM Gateway。"""
 
         prompt = str(config.get("prompt", ""))

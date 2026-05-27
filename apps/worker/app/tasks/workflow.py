@@ -9,7 +9,9 @@ from packages.workflow.executor import WorkflowExecutor
 
 
 @celery_app.task(name="agentflow.workflow.execute")
-def execute_workflow(definition: dict[str, object], input_data: dict[str, object]) -> dict[str, object]:
+def execute_workflow(
+    definition: dict[str, object], input_data: dict[str, object]
+) -> dict[str, object]:
     """执行 Workflow DSL。"""
 
     # executor 是纯 Python 执行器，不依赖 API 进程状态。
@@ -35,4 +37,3 @@ def execute_workflow(definition: dict[str, object], input_data: dict[str, object
             for node in result.node_runs
         ],
     }
-

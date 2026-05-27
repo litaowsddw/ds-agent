@@ -109,7 +109,9 @@ class IdentityStore:
             user_id=creator_user_id,
             role=OrganizationRole.OWNER,
         )
-        self.memberships_by_org_user[self._membership_key(organization.org_id, creator_user_id)] = membership
+        self.memberships_by_org_user[self._membership_key(organization.org_id, creator_user_id)] = (
+            membership
+        )
 
         self._append_audit_log(
             org_id=organization.org_id,
@@ -308,4 +310,3 @@ class IdentityStore:
 
 # identity_store 是 MVP 阶段的进程内身份存储。
 identity_store = IdentityStore()
-

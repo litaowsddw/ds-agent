@@ -40,4 +40,3 @@ def test_validator_rejects_missing_end_node() -> None:
 
     assert result["valid"] is False
     assert "工作流必须包含 end 节点" in result["errors"]
-

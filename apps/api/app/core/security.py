@@ -57,4 +57,3 @@ def verify_password(password: str, password_hash: str) -> bool:
     actual_digest = hashlib.pbkdf2_hmac("sha256", password.encode("utf-8"), salt, iterations)
 
     return hmac.compare_digest(actual_digest, expected_digest)
-

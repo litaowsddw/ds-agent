@@ -44,4 +44,3 @@ class SkillSummaryResponse(BaseModel):
     name: str
     description: str
     scope: str
-

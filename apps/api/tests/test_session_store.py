@@ -68,7 +68,9 @@ def test_compact_session_marks_messages_compacted() -> None:
     organization = identity.create_organization(owner.user_id, "Compact 组织")
     agent = agent_store.create_agent(owner.user_id, organization.org_id, "Compact Agent", "")
     session = session_store.create_session(owner.user_id, agent.agent_id)
-    session_store.append_message(owner.user_id, session.session_id, MessageRole.USER, "需要压缩的历史")
+    session_store.append_message(
+        owner.user_id, session.session_id, MessageRole.USER, "需要压缩的历史"
+    )
 
     compacted_session = session_store.compact_session(
         actor_user_id=owner.user_id,
@@ -79,4 +81,3 @@ def test_compact_session_marks_messages_compacted() -> None:
 
     assert compacted_session.compact_summary == "用户讨论了上下文压缩。"
     assert messages[0].compacted is True
-

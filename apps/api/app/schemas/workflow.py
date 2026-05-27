@@ -48,4 +48,3 @@ class WorkflowVersionResponse(BaseModel):
     version_number: int
     definition: dict[str, object]
     created_by: str
-

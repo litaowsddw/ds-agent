@@ -124,6 +124,45 @@ type ContextBundle = {
   sections: Array<{ name: string; content: string; estimated_tokens: number }>;
 };
 
+type KnowledgeBaseItem = {
+  kb_id: string;
+  org_id: string;
+  name: string;
+  description: string;
+};
+
+type DocumentItem = {
+  document_id: string;
+  kb_id: string;
+  title: string;
+  status: string;
+};
+
+type ChunkItem = {
+  chunk_id: string;
+  document_id: string;
+  content: string;
+  sequence: number;
+  estimated_tokens: number;
+};
+
+type BackgroundAgentItem = {
+  config_id: string;
+  org_id: string;
+  agent_type: string;
+  enabled: boolean;
+  interval_seconds: number;
+  status: string;
+};
+
+type CacheStats = {
+  size: number;
+  max_size: number;
+  total_hits: number;
+  total_misses: number;
+  hit_rate: number;
+};
+
 type LLMCallLog = {
   call_id: string;
   provider: string;
@@ -164,6 +203,7 @@ const navItems = [
   { key: "agents", label: "Agents", icon: Bot },
   { key: "workflow", label: "Workflow", icon: Workflow },
   { key: "runtime", label: "Runtime", icon: Brain },
+  { key: "knowledge", label: "Knowledge", icon: Database },
   { key: "runs", label: "Runs", icon: Activity }
 ] as const;
 
@@ -203,6 +243,12 @@ export default function WorkflowEditor() {
   const [contextBundle, setContextBundle] = useState<ContextBundle | null>(null);
   const [gatewayLogs, setGatewayLogs] = useState<LLMCallLog[]>([]);
   const [modelProviders, setModelProviders] = useState<ModelProvider[]>([]);
+  const [knowledgeBases, setKnowledgeBases] = useState<KnowledgeBaseItem[]>([]);
+  const [selectedKbId, setSelectedKbId] = useState("");
+  const [kbDocuments, setKbDocuments] = useState<DocumentItem[]>([]);
+  const [searchResults, setSearchResults] = useState<ChunkItem[]>([]);
+  const [backgroundAgents, setBackgroundAgents] = useState<BackgroundAgentItem[]>([]);
+  const [cacheStats, setCacheStats] = useState<CacheStats | null>(null);
   const [selectedProviderKey, setSelectedProviderKey] = useState("mock");
   const [selectedModel, setSelectedModel] = useState("mock-model");
 
@@ -233,6 +279,10 @@ export default function WorkflowEditor() {
     toolName: "search_docs"
   });
   const [sessionInput, setSessionInput] = useState("请结合工作区、Skill、MCP 和 Memory 输出一次响应。");
+
+  const [kbForm, setKbForm] = useState({ name: "默认知识库", description: "项目文档知识库" });
+  const [docForm, setDocForm] = useState({ title: "示例文档", content: "这是一段示例知识库内容，用于测试 RAG 检索功能。" });
+  const [searchQuery, setSearchQuery] = useState("示例");
 
   const [providerForm, setProviderForm] = useState({
     providerKey: "deepseek",
@@ -342,14 +392,17 @@ export default function WorkflowEditor() {
   async function refreshStudioData(currentWorkspace = workspace, agentId = selectedAgentId) {
     if (!currentWorkspace) return;
 
-    const [nextAgents, nextWorkflows, nextRuns, nextSkills, nextServers, nextLogs, nextProviders] = await Promise.all([
+    const [nextAgents, nextWorkflows, nextRuns, nextSkills, nextServers, nextLogs, nextProviders, nextKbs, nextBgAgents, nextCacheStats] = await Promise.all([
       apiRequest<Agent[]>(`/agents?org_id=${currentWorkspace.orgId}&actor_user_id=${currentWorkspace.userId}`),
       apiRequest<WorkflowItem[]>(`/workflows?org_id=${currentWorkspace.orgId}&actor_user_id=${currentWorkspace.userId}`),
       apiRequest<WorkflowRun[]>(`/workflow-runs?org_id=${currentWorkspace.orgId}&actor_user_id=${currentWorkspace.userId}`),
       apiRequest<Skill[]>(`/skills?org_id=${currentWorkspace.orgId}&actor_user_id=${currentWorkspace.userId}`),
       apiRequest<MCPServer[]>(`/mcp/servers?org_id=${currentWorkspace.orgId}&actor_user_id=${currentWorkspace.userId}`),
       apiRequest<LLMCallLog[]>("/gateway/llm/logs"),
-      apiRequest<ModelProvider[]>(`/model-providers?org_id=${currentWorkspace.orgId}&actor_user_id=${currentWorkspace.userId}`)
+      apiRequest<ModelProvider[]>(`/model-providers?org_id=${currentWorkspace.orgId}&actor_user_id=${currentWorkspace.userId}`),
+      apiRequest<KnowledgeBaseItem[]>(`/knowledge?org_id=${currentWorkspace.orgId}&actor_user_id=${currentWorkspace.userId}`),
+      apiRequest<BackgroundAgentItem[]>(`/background-agents?org_id=${currentWorkspace.orgId}&actor_user_id=${currentWorkspace.userId}`),
+      apiRequest<CacheStats>("/cache/stats")
     ]);
 
     setAgents(nextAgents);
@@ -359,6 +412,9 @@ export default function WorkflowEditor() {
     setMcpServers(nextServers);
     setGatewayLogs(nextLogs);
     setModelProviders(nextProviders);
+    setKnowledgeBases(nextKbs);
+    setBackgroundAgents(nextBgAgents);
+    setCacheStats(nextCacheStats);
 
     const fallbackAgentId = agentId || nextAgents[0]?.agent_id || "";
     if (fallbackAgentId) {
@@ -724,6 +780,61 @@ export default function WorkflowEditor() {
     }
   }
 
+  async function createKnowledgeBase() {
+    setBusy(true);
+    try {
+      const currentWorkspace = requireWorkspace();
+      const kb = await apiRequest<KnowledgeBaseItem>("/knowledge", {
+        method: "POST",
+        body: { actor_user_id: currentWorkspace.userId, org_id: currentWorkspace.orgId, name: kbForm.name, description: kbForm.description }
+      });
+      setSelectedKbId(kb.kb_id);
+      showToast("success", `知识库「${kb.name}」已创建。`);
+      await refreshStudioData(currentWorkspace);
+    } catch (error) {
+      showToast("error", error instanceof Error ? error.message : "创建知识库失败。");
+    } finally {
+      setBusy(false);
+    }
+  }
+
+  async function uploadDocument() {
+    setBusy(true);
+    try {
+      const currentWorkspace = requireWorkspace();
+      if (!selectedKbId) throw new Error("请先创建或选择知识库。");
+      const doc = await apiRequest<DocumentItem>(`/knowledge/${selectedKbId}/documents`, {
+        method: "POST",
+        body: { actor_user_id: currentWorkspace.userId, title: docForm.title, content: docForm.content, chunk_size: 500 }
+      });
+      showToast("success", `文档「${doc.title}」已上传，状态：${doc.status}。`);
+      const docs = await apiRequest<DocumentItem[]>(`/knowledge/${selectedKbId}/documents?actor_user_id=${currentWorkspace.userId}`);
+      setKbDocuments(docs);
+    } catch (error) {
+      showToast("error", error instanceof Error ? error.message : "上传文档失败。");
+    } finally {
+      setBusy(false);
+    }
+  }
+
+  async function searchKnowledge() {
+    setBusy(true);
+    try {
+      const currentWorkspace = requireWorkspace();
+      if (!selectedKbId) throw new Error("请先创建或选择知识库。");
+      const results = await apiRequest<ChunkItem[]>(`/knowledge/${selectedKbId}/search`, {
+        method: "POST",
+        body: { actor_user_id: currentWorkspace.userId, query: searchQuery, limit: 5 }
+      });
+      setSearchResults(results);
+      showToast("success", `检索到 ${results.length} 个结果。`);
+    } catch (error) {
+      showToast("error", error instanceof Error ? error.message : "检索失败。");
+    } finally {
+      setBusy(false);
+    }
+  }
+
   async function loadNodeRuns(runId: string, actorUserId = workspace?.userId) {
     if (!actorUserId) return;
     const nextNodeRuns = await apiRequest<NodeRun[]>(`/workflow-runs/${runId}/nodes?actor_user_id=${actorUserId}`);
@@ -885,6 +996,28 @@ export default function WorkflowEditor() {
                 onMemoryFormChange={setMemoryForm}
                 onSessionInputChange={setSessionInput}
                 onSkillFormChange={setSkillForm}
+              />
+            ) : null}
+
+            {activeSection === "knowledge" ? (
+              <KnowledgePanel
+                busy={busy}
+                cacheStats={cacheStats}
+                backgroundAgents={backgroundAgents}
+                docForm={docForm}
+                kbDocuments={kbDocuments}
+                kbForm={kbForm}
+                knowledgeBases={knowledgeBases}
+                searchQuery={searchQuery}
+                searchResults={searchResults}
+                selectedKbId={selectedKbId}
+                onCreateKb={createKnowledgeBase}
+                onDocFormChange={setDocForm}
+                onKbFormChange={setKbForm}
+                onSearchQueryChange={setSearchQuery}
+                onSearch={searchKnowledge}
+                onSelectKb={setSelectedKbId}
+                onUploadDoc={uploadDocument}
               />
             ) : null}
 
@@ -1322,6 +1455,105 @@ function RunsPanel(props: {
           <ResourceList items={props.versions.map((version) => `v${version.version_number} · ${version.version_id}`)} />
         </Panel>
       </section>
+    </div>
+  );
+}
+
+function KnowledgePanel(props: {
+  busy: boolean;
+  cacheStats: CacheStats | null;
+  backgroundAgents: BackgroundAgentItem[];
+  docForm: { title: string; content: string };
+  kbDocuments: DocumentItem[];
+  kbForm: { name: string; description: string };
+  knowledgeBases: KnowledgeBaseItem[];
+  searchQuery: string;
+  searchResults: ChunkItem[];
+  selectedKbId: string;
+  onCreateKb: () => void;
+  onDocFormChange: (form: { title: string; content: string }) => void;
+  onKbFormChange: (form: { name: string; description: string }) => void;
+  onSearchQueryChange: (query: string) => void;
+  onSearch: () => void;
+  onSelectKb: (kbId: string) => void;
+  onUploadDoc: () => void;
+}) {
+  return (
+    <div className="grid gap-4 xl:grid-cols-2">
+      <Panel title="创建知识库" icon={Database}>
+        <TextInput label="名称" value={props.kbForm.name} onChange={(name) => props.onKbFormChange({ ...props.kbForm, name })} />
+        <TextInput label="描述" value={props.kbForm.description} onChange={(description) => props.onKbFormChange({ ...props.kbForm, description })} />
+        <PrimaryButton busy={props.busy} label="创建知识库" onClick={props.onCreateKb} />
+        <div className="mt-3 space-y-2">
+          {props.knowledgeBases.map((kb) => (
+            <button
+              key={kb.kb_id}
+              className={`w-full rounded-md border p-3 text-left text-sm ${
+                props.selectedKbId === kb.kb_id ? "border-[#2f6feb] bg-[#eef4ff]" : "border-[#dfe4ee] bg-white"
+              }`}
+              onClick={() => props.onSelectKb(kb.kb_id)}
+              type="button"
+            >
+              <div className="font-medium">{kb.name}</div>
+              <div className="mt-1 text-xs text-[#667085]">{kb.description}</div>
+            </button>
+          ))}
+        </div>
+      </Panel>
+
+      <Panel title="上传文档" icon={FileText}>
+        <TextInput label="文档标题" value={props.docForm.title} onChange={(title) => props.onDocFormChange({ ...props.docForm, title })} />
+        <TextArea label="文档内容" rows={6} value={props.docForm.content} onChange={(content) => props.onDocFormChange({ ...props.docForm, content })} />
+        <PrimaryButton busy={props.busy} label="上传文档" onClick={props.onUploadDoc} />
+        <ResourceList items={props.kbDocuments.map((doc) => `${doc.title} · ${doc.status}`)} />
+      </Panel>
+
+      <Panel title="RAG 检索" icon={MessageSquare}>
+        <TextInput label="检索关键词" value={props.searchQuery} onChange={props.onSearchQueryChange} />
+        <PrimaryButton busy={props.busy} label="检索" onClick={props.onSearch} />
+        {props.searchResults.length > 0 ? (
+          <div className="mt-3 space-y-2">
+            {props.searchResults.map((chunk) => (
+              <div key={chunk.chunk_id} className="rounded-md border border-[#dfe4ee] bg-[#f8fafc] p-3 text-sm">
+                <div className="text-xs text-[#667085]">Chunk #{chunk.sequence} · {chunk.estimated_tokens} tokens</div>
+                <div className="mt-1 leading-6">{chunk.content}</div>
+              </div>
+            ))}
+          </div>
+        ) : (
+          <EmptyText text="暂无检索结果。" />
+        )}
+      </Panel>
+
+      <div className="space-y-4">
+        <Panel title="缓存统计" icon={Activity}>
+          {props.cacheStats ? (
+            <div className="grid grid-cols-2 gap-2">
+              <Metric label="缓存大小" value={props.cacheStats.size} />
+              <Metric label="最大容量" value={props.cacheStats.max_size} />
+              <Metric label="命中次数" value={props.cacheStats.total_hits} />
+              <Metric label="未命中次数" value={props.cacheStats.total_misses} />
+            </div>
+          ) : (
+            <EmptyText text="暂无缓存数据。" />
+          )}
+        </Panel>
+
+        <Panel title="后台 Agent" icon={Bot}>
+          {props.backgroundAgents.length > 0 ? (
+            <div className="space-y-2">
+              {props.backgroundAgents.map((agent) => (
+                <div key={agent.config_id} className="rounded-md border border-[#dfe4ee] bg-[#f8fafc] p-3 text-sm">
+                  <div className="font-medium">{agent.agent_type}</div>
+                  <div className="mt-1 text-xs text-[#667085]">{agent.status} · {agent.enabled ? "启用" : "已禁用"} · {agent.interval_seconds}s</div>
+                </div>
+              ))}
+            </div>
+          ) : (
+            <EmptyText text="暂无后台 Agent。" />
+          )}
+        </Panel>
+      </div>
     </div>
   );
 }

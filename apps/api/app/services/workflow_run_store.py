@@ -8,12 +8,12 @@ from typing import Any
 
 from apps.api.app.domain.identity import new_id, utc_now
 from apps.api.app.domain.workflow_run import NodeRun, NodeRunStatus, RunStatus, WorkflowRun
+from apps.api.app.gateway.llm import LLMGateway, llm_gateway
 from apps.api.app.services.identity_store import IdentityStore, identity_store
 from apps.api.app.services.rbac import Permission
 from apps.api.app.services.workflow_store import WorkflowStore, workflow_store
-from apps.api.app.gateway.llm import LLMGateway, llm_gateway
 from apps.api.app.storage.local_state import local_state_store
-from packages.workflow.executor import WorkflowExecutor, WorkflowExecutionResult
+from packages.workflow.executor import WorkflowExecutionResult, WorkflowExecutor
 
 
 class WorkflowRunStore:
@@ -101,7 +101,9 @@ class WorkflowRunStore:
         self._apply_execution_result(run=run, result=result)
         return run
 
-    def attach_celery_task(self, actor_user_id: str, run_id: str, celery_task_id: str) -> WorkflowRun:
+    def attach_celery_task(
+        self, actor_user_id: str, run_id: str, celery_task_id: str
+    ) -> WorkflowRun:
         """把 Celery task id 记录到 Workflow Run。"""
 
         run = self.get_run(actor_user_id=actor_user_id, run_id=run_id)
@@ -138,7 +140,8 @@ class WorkflowRunStore:
             runs = [
                 run
                 for run in runs
-                if self.identity.get_membership(org_id=run.org_id, user_id=actor_user_id) is not None
+                if self.identity.get_membership(org_id=run.org_id, user_id=actor_user_id)
+                is not None
             ]
 
         if workflow_id is not None:

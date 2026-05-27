@@ -2,7 +2,12 @@
 
 import pytest
 
-from apps.api.app.gateway.llm import GatewayProviderError, LLMCallRequest, LLMGateway, MockLLMProvider
+from apps.api.app.gateway.llm import (
+    GatewayProviderError,
+    LLMCallRequest,
+    LLMGateway,
+    MockLLMProvider,
+)
 
 
 def test_llm_gateway_records_success_log() -> None:

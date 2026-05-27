@@ -37,4 +37,3 @@ class MemoryManager:
         _query = query
 
         return []
-

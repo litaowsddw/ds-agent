@@ -66,4 +66,3 @@ def test_agent_cannot_call_unallowed_mcp_tool() -> None:
 
     with pytest.raises(PermissionError):
         mcp_store.assert_agent_can_call_tool(owner.user_id, agent.agent_id, tool.tool_id)
-

@@ -94,4 +94,3 @@ def test_agent_api_rejects_cross_org_workspace_read() -> None:
         params={"actor_user_id": bob_user_id},
     )
     assert blocked_response.status_code == 403
-

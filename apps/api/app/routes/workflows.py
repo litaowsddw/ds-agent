@@ -93,11 +93,15 @@ async def update_draft(workflow_id: str, request: WorkflowUpdateDraftRequest) ->
 
 
 @router.post("/{workflow_id}/publish", response_model=WorkflowVersionResponse)
-async def publish_workflow(workflow_id: str, request: WorkflowPublishRequest) -> WorkflowVersionResponse:
+async def publish_workflow(
+    workflow_id: str, request: WorkflowPublishRequest
+) -> WorkflowVersionResponse:
     """发布 Workflow 版本。"""
 
     try:
-        version = workflow_store.publish(actor_user_id=request.actor_user_id, workflow_id=workflow_id)
+        version = workflow_store.publish(
+            actor_user_id=request.actor_user_id, workflow_id=workflow_id
+        )
     except PermissionError as exc:
         raise HTTPException(status_code=403, detail=str(exc)) from exc
     except ValueError as exc:
@@ -114,7 +118,9 @@ async def list_versions(
     """列出 Workflow 发布版本。"""
 
     try:
-        versions = workflow_store.list_versions(actor_user_id=actor_user_id, workflow_id=workflow_id)
+        versions = workflow_store.list_versions(
+            actor_user_id=actor_user_id, workflow_id=workflow_id
+        )
     except PermissionError as exc:
         raise HTTPException(status_code=403, detail=str(exc)) from exc
     except ValueError as exc:
@@ -149,4 +155,3 @@ def _to_version_response(version: WorkflowVersion) -> WorkflowVersionResponse:
         definition=version.definition,
         created_by=version.created_by,
     )
-
