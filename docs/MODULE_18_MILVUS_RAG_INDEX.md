@@ -92,5 +92,5 @@ AGENTFLOW_VECTOR_BACKEND=memory
 ## 当前限制
 
 - 当前 embedding 是本地确定性 hash embedding，只用于 MVP 链路打通；后续应替换为真实 embedding 模型。
-- 文档解析暂只接收纯文本 `content`，尚未接入 PDF、DOCX、HTML 等文件解析。
+- 文档解析已在模块 19 支持 txt/md/pdf/docx 等文件；扫描件 OCR 尚未接入。
 - Milvus 当前使用 Standalone 部署，生产环境后续可演进为 Milvus Cluster。

@@ -1,6 +1,6 @@
 """知识库与 RAG API。"""
 
-from fastapi import APIRouter, HTTPException, Query
+from fastapi import APIRouter, File, Form, HTTPException, Query, UploadFile
 
 from apps.api.app.domain.knowledge import Chunk, Document, KnowledgeBase
 from apps.api.app.schemas.knowledge import (
@@ -12,6 +12,7 @@ from apps.api.app.schemas.knowledge import (
     SearchRequest,
 )
 from apps.api.app.services.knowledge_store import knowledge_store
+from apps.api.app.services.document_parser import document_parser
 
 router = APIRouter()
 
@@ -59,6 +60,34 @@ async def upload_document(kb_id: str, request: DocumentUploadRequest) -> Documen
             content=request.content,
             chunk_size=request.chunk_size,
             chunk_overlap=request.chunk_overlap,
+        )
+    except PermissionError as exc:
+        raise HTTPException(status_code=403, detail=str(exc)) from exc
+    except ValueError as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
+    return _to_doc_response(doc)
+
+
+@router.post("/{kb_id}/documents/upload", response_model=DocumentResponse)
+async def upload_document_file(
+    kb_id: str,
+    actor_user_id: str = Form(description="操作用户 ID"),
+    chunk_size: int = Form(default=800, description="切片长度"),
+    chunk_overlap: int = Form(default=100, description="切片重叠长度"),
+    file: UploadFile = File(description="待上传知识库文件"),
+) -> DocumentResponse:
+    """上传文件并解析为知识库文档。"""
+
+    try:
+        payload = await file.read()
+        parsed = document_parser.parse(filename=file.filename or "document.txt", payload=payload)
+        doc = knowledge_store.upload_document(
+            actor_user_id=actor_user_id,
+            kb_id=kb_id,
+            title=parsed.title,
+            content=parsed.content,
+            chunk_size=chunk_size,
+            chunk_overlap=chunk_overlap,
         )
     except PermissionError as exc:
         raise HTTPException(status_code=403, detail=str(exc)) from exc

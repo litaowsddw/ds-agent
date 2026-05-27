@@ -147,6 +147,9 @@ type ChunkItem = {
   content: string;
   sequence: number;
   estimated_tokens: number;
+  embedding_model: string;
+  vector_indexed: boolean;
+  similarity_score: number | null;
 };
 
 type BackgroundAgentItem = {
@@ -298,6 +301,7 @@ export default function WorkflowEditor() {
 
   const [kbForm, setKbForm] = useState({ name: "默认知识库", description: "项目文档知识库" });
   const [docForm, setDocForm] = useState({ title: "示例文档", content: "这是一段示例知识库内容，用于测试 RAG 检索功能。" });
+  const [docFile, setDocFile] = useState<File | null>(null);
   const [searchQuery, setSearchQuery] = useState("示例");
 
   const [providerForm, setProviderForm] = useState({
@@ -846,10 +850,21 @@ export default function WorkflowEditor() {
     try {
       const currentWorkspace = requireWorkspace();
       if (!selectedKbId) throw new Error("请先创建或选择知识库。");
-      const doc = await apiRequest<DocumentItem>(`/knowledge/${selectedKbId}/documents`, {
-        method: "POST",
-        body: { actor_user_id: currentWorkspace.userId, title: docForm.title, content: docForm.content, chunk_size: 500 }
-      });
+      let doc: DocumentItem;
+      if (docFile) {
+        const formData = new FormData();
+        formData.append("actor_user_id", currentWorkspace.userId);
+        formData.append("chunk_size", "800");
+        formData.append("chunk_overlap", "100");
+        formData.append("file", docFile);
+        doc = await apiFormRequest<DocumentItem>(`/knowledge/${selectedKbId}/documents/upload`, formData);
+      } else {
+        doc = await apiRequest<DocumentItem>(`/knowledge/${selectedKbId}/documents`, {
+          method: "POST",
+          body: { actor_user_id: currentWorkspace.userId, title: docForm.title, content: docForm.content, chunk_size: 800, chunk_overlap: 100 }
+        });
+      }
+      setDocFile(null);
       showToast("success", `文档「${doc.title}」已上传，状态：${doc.status}。`);
       const docs = await apiRequest<DocumentItem[]>(`/knowledge/${selectedKbId}/documents?actor_user_id=${currentWorkspace.userId}`);
       setKbDocuments(docs);
@@ -1063,6 +1078,8 @@ export default function WorkflowEditor() {
                 searchResults={searchResults}
                 selectedKbId={selectedKbId}
                 onCreateKb={createKnowledgeBase}
+                docFile={docFile}
+                onDocFileChange={setDocFile}
                 onDocFormChange={setDocForm}
                 onKbFormChange={setKbForm}
                 onSearchQueryChange={setSearchQuery}
@@ -1577,6 +1594,7 @@ function KnowledgePanel(props: {
   busy: boolean;
   cacheStats: CacheStats | null;
   backgroundAgents: BackgroundAgentItem[];
+  docFile: File | null;
   docForm: { title: string; content: string };
   kbDocuments: DocumentItem[];
   kbForm: { name: string; description: string };
@@ -1585,6 +1603,7 @@ function KnowledgePanel(props: {
   searchResults: ChunkItem[];
   selectedKbId: string;
   onCreateKb: () => void;
+  onDocFileChange: (file: File | null) => void;
   onDocFormChange: (form: { title: string; content: string }) => void;
   onKbFormChange: (form: { name: string; description: string }) => void;
   onSearchQueryChange: (query: string) => void;
@@ -1616,6 +1635,16 @@ function KnowledgePanel(props: {
       </Panel>
 
       <Panel title="上传文档" icon={FileText}>
+        <label className="block text-sm">
+          <span className="mb-1 block text-xs font-medium text-[#667085]">上传文件（txt / md / pdf / docx）</span>
+          <input
+            accept=".txt,.md,.markdown,.pdf,.docx,.csv,.json,.log"
+            className="w-full rounded-md border border-[#dfe4ee] bg-white px-3 py-2 text-sm outline-none file:mr-3 file:rounded-md file:border-0 file:bg-[#eef4ff] file:px-3 file:py-1.5 file:text-[#2f6feb]"
+            onChange={(event) => props.onDocFileChange(event.target.files?.[0] ?? null)}
+            type="file"
+          />
+        </label>
+        {props.docFile ? <p className="mt-2 text-xs text-[#667085]">已选择：{props.docFile.name}</p> : null}
         <TextInput label="文档标题" value={props.docForm.title} onChange={(title) => props.onDocFormChange({ ...props.docForm, title })} />
         <TextArea label="文档内容" rows={6} value={props.docForm.content} onChange={(content) => props.onDocFormChange({ ...props.docForm, content })} />
         <PrimaryButton busy={props.busy} label="上传文档" onClick={props.onUploadDoc} />
@@ -1630,6 +1659,11 @@ function KnowledgePanel(props: {
             {props.searchResults.map((chunk) => (
               <div key={chunk.chunk_id} className="rounded-md border border-[#dfe4ee] bg-[#f8fafc] p-3 text-sm">
                 <div className="text-xs text-[#667085]">Chunk #{chunk.sequence} · {chunk.estimated_tokens} tokens</div>
+                <div className="mt-1 text-xs text-[#98a2b3]">
+                  {chunk.vector_indexed ? "vector indexed" : "keyword fallback"}
+                  {chunk.similarity_score !== null ? ` / score ${chunk.similarity_score.toFixed(3)}` : ""}
+                  {chunk.embedding_model ? ` / ${chunk.embedding_model}` : ""}
+                </div>
                 <div className="mt-1 leading-6">{chunk.content}</div>
               </div>
             ))}
@@ -1809,6 +1843,26 @@ async function apiRequest<T>(path: string, options: { method?: string; body?: ob
     method: options.method ?? "GET",
     headers: options.body ? { "Content-Type": "application/json" } : undefined,
     body: options.body ? JSON.stringify(options.body) : undefined
+  });
+
+  if (!response.ok) {
+    let detail = response.statusText;
+    try {
+      const payload = (await response.json()) as ApiErrorPayload;
+      detail = formatApiErrorDetail(payload.detail) ?? detail;
+    } catch {
+      detail = response.statusText;
+    }
+    throw new Error(`请求失败：${detail}`);
+  }
+
+  return (await response.json()) as T;
+}
+
+async function apiFormRequest<T>(path: string, formData: FormData): Promise<T> {
+  const response = await fetch(`${API_BASE_URL}${path}`, {
+    method: "POST",
+    body: formData
   });
 
   if (!response.ok) {

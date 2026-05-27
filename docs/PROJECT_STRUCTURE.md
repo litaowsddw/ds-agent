@@ -392,3 +392,12 @@ docker-compose.yml
 .env.example
 docs/MODULE_18_MILVUS_RAG_INDEX.md
 ```
+
+## 24. 模块 19 已落地文件
+```text
+apps/api/app/services/document_parser.py
+apps/api/app/routes/knowledge.py
+apps/api/tests/test_knowledge_api.py
+apps/web/features/workflows/WorkflowEditor.tsx
+docs/MODULE_19_KNOWLEDGE_FILE_UPLOAD.md
+```
