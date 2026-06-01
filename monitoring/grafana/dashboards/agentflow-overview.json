@@ -1,0 +1,165 @@
+{
+  "annotations": { "list": [] },
+  "editable": true,
+  "fiscalYearStartMonth": 0,
+  "graphTooltip": 1,
+  "id": null,
+  "links": [],
+  "liveNow": false,
+  "panels": [
+    {
+      "title": "API 请求速率",
+      "type": "timeseries",
+      "gridPos": { "h": 8, "w": 12, "x": 0, "y": 0 },
+      "targets": [
+        {
+          "expr": "rate(agentflow_api_requests_total[5m])",
+          "legendFormat": "req/s"
+        }
+      ]
+    },
+    {
+      "title": "API 请求耗时 P99",
+      "type": "timeseries",
+      "gridPos": { "h": 8, "w": 12, "x": 12, "y": 0 },
+      "targets": [
+        {
+          "expr": "histogram_quantile(0.99, rate(agentflow_api_request_duration_seconds_bucket[5m]))",
+          "legendFormat": "P99"
+        }
+      ]
+    },
+    {
+      "title": "LLM 调用速率",
+      "type": "timeseries",
+      "gridPos": { "h": 8, "w": 8, "x": 0, "y": 8 },
+      "targets": [
+        {
+          "expr": "rate(agentflow_llm_calls_total[5m])",
+          "legendFormat": "calls/s"
+        },
+        {
+          "expr": "rate(agentflow_llm_calls_cached_total[5m])",
+          "legendFormat": "cached/s"
+        },
+        {
+          "expr": "rate(agentflow_llm_calls_errors_total[5m])",
+          "legendFormat": "errors/s"
+        }
+      ]
+    },
+    {
+      "title": "Token 使用量",
+      "type": "timeseries",
+      "gridPos": { "h": 8, "w": 8, "x": 8, "y": 8 },
+      "targets": [
+        {
+          "expr": "rate(agentflow_llm_prompt_tokens_total[5m])",
+          "legendFormat": "prompt tokens/s"
+        },
+        {
+          "expr": "rate(agentflow_llm_completion_tokens_total[5m])",
+          "legendFormat": "completion tokens/s"
+        }
+      ]
+    },
+    {
+      "title": "缓存命中率",
+      "type": "gauge",
+      "gridPos": { "h": 8, "w": 8, "x": 16, "y": 8 },
+      "targets": [
+        {
+          "expr": "rate(agentflow_cache_hits_total[5m]) / (rate(agentflow_cache_hits_total[5m]) + rate(agentflow_cache_misses_total[5m]))",
+          "legendFormat": "hit rate"
+        }
+      ],
+      "fieldConfig": {
+        "defaults": {
+          "unit": "percentunit",
+          "min": 0,
+          "max": 1,
+          "thresholds": {
+            "mode": "absolute",
+            "steps": [
+              { "color": "red", "value": null },
+              { "color": "yellow", "value": 0.5 },
+              { "color": "green", "value": 0.8 }
+            ]
+          }
+        }
+      }
+    },
+    {
+      "title": "限流拒绝数",
+      "type": "stat",
+      "gridPos": { "h": 4, "w": 6, "x": 0, "y": 16 },
+      "targets": [
+        {
+          "expr": "agentflow_rate_limit_rejected_total",
+          "legendFormat": "rejected"
+        }
+      ]
+    },
+    {
+      "title": "Agent 执行统计",
+      "type": "stat",
+      "gridPos": { "h": 4, "w": 6, "x": 6, "y": 16 },
+      "targets": [
+        {
+          "expr": "agentflow_agent_executions_total",
+          "legendFormat": "total"
+        },
+        {
+          "expr": "agentflow_agent_executions_success_total",
+          "legendFormat": "success"
+        },
+        {
+          "expr": "agentflow_agent_executions_failed_total",
+          "legendFormat": "failed"
+        }
+      ]
+    },
+    {
+      "title": "Evolver 进化统计",
+      "type": "stat",
+      "gridPos": { "h": 4, "w": 6, "x": 12, "y": 16 },
+      "targets": [
+        {
+          "expr": "agentflow_evolver_cycles_total",
+          "legendFormat": "cycles"
+        },
+        {
+          "expr": "agentflow_evolver_skills_created_total",
+          "legendFormat": "created"
+        },
+        {
+          "expr": "agentflow_evolver_skills_updated_total",
+          "legendFormat": "updated"
+        }
+      ]
+    },
+    {
+      "title": "活跃会话/Agent",
+      "type": "stat",
+      "gridPos": { "h": 4, "w": 6, "x": 18, "y": 16 },
+      "targets": [
+        {
+          "expr": "agentflow_active_sessions",
+          "legendFormat": "sessions"
+        },
+        {
+          "expr": "agentflow_active_agents",
+          "legendFormat": "agents"
+        }
+      ]
+    }
+  ],
+  "schemaVersion": 39,
+  "tags": ["agentflow"],
+  "templating": { "list": [] },
+  "time": { "from": "now-1h", "to": "now" },
+  "timepicker": {},
+  "timezone": "",
+  "title": "AgentFlow Overview",
+  "version": 1
+}

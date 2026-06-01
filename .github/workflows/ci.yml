@@ -1,0 +1,48 @@
+name: CI
+
+on:
+  push:
+    branches: ["main", "develop"]
+  pull_request:
+    branches: ["main", "develop"]
+
+jobs:
+  python-syntax:
+    name: Python syntax check
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Setup Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+
+      - name: Install API dependencies
+        run: pip install -r apps/api/requirements.txt -r apps/worker/requirements.txt -r requirements-dev.txt
+
+      - name: Run tests
+        run: pytest
+
+  web-build:
+    name: Web build
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Setup Node
+        uses: actions/setup-node@v4
+        with:
+          node-version: "22"
+          cache: "npm"
+          cache-dependency-path: apps/web/package.json
+
+      - name: Install dependencies
+        working-directory: apps/web
+        run: npm install
+
+      - name: Build
+        working-directory: apps/web
+        run: npm run build

@@ -1,0 +1,7 @@
+celery==5.4.0
+redis==5.2.1
+pydantic==2.10.4
+langgraph==1.1.4
+langchain-core>=0.3.0
+langchain-openai>=0.3.0
+
