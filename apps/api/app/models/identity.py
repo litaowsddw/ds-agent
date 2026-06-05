@@ -56,7 +56,7 @@ class MembershipModel(Base):
     __tablename__ = "memberships"
     __table_args__ = (
         # 联合唯一约束：同一组织中同一用户只能有一条成员关系
-        {"mysql_charset": "utf8mb4"},
+        {"mysql_charset": "utf8mb4", "mysql_collate": "utf8mb4_unicode_ci"},
     )
 
     membership_id: Mapped[str] = mapped_column(String(64), primary_key=True)

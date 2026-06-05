@@ -28,6 +28,7 @@ from apps.api.app.routes.model_providers import router as model_providers_router
 from apps.api.app.routes.runtime import router as runtime_router
 from apps.api.app.routes.sessions import router as sessions_router
 from apps.api.app.routes.skills import router as skills_router
+from apps.api.app.routes.skill_evaluations import router as skill_evaluations_router
 from apps.api.app.routes.workflow_runs import router as workflow_runs_router
 from apps.api.app.routes.workflows import router as workflows_router
 from packages.a2a.routes import router as a2a_router
@@ -99,6 +100,10 @@ def create_app() -> FastAPI:
         allow_origins=[
             "http://localhost:3000",
             "http://127.0.0.1:3000",
+            "http://localhost:3001",
+            "http://127.0.0.1:3001",
+            "http://localhost:13000",
+            "http://127.0.0.1:13000",
         ],
         allow_credentials=True,
         allow_methods=["*"],
@@ -111,6 +116,7 @@ def create_app() -> FastAPI:
     app.include_router(agents_router, prefix="/agents", tags=["agents"])
     app.include_router(sessions_router, prefix="/sessions", tags=["sessions"])
     app.include_router(skills_router, prefix="/skills", tags=["skills"])
+    app.include_router(skill_evaluations_router, prefix="/skill-evaluations", tags=["skill-evaluations"])
     app.include_router(mcp_router, prefix="/mcp", tags=["mcp"])
     app.include_router(memory_router, prefix="/memory", tags=["memory"])
     app.include_router(workflows_router, prefix="/workflows", tags=["workflows"])

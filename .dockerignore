@@ -1,0 +1,15 @@
+.git
+.pytest_cache
+.tmp
+.agentflow
+test-artifacts
+**/__pycache__
+**/.pytest_cache
+**/.mypy_cache
+**/.ruff_cache
+**/.next
+**/node_modules
+**/tsconfig.tsbuildinfo
+**/*.pyc
+**/*.pyo
+**/*.log

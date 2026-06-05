@@ -165,17 +165,22 @@ async def create_a2a_task(
             from packages.runtime.llm_caller import LLMCallerAdapter
             from packages.runtime.agent_runtime import AgentRuntime
 
+            model_provider = getattr(agent, "model_provider", "") or ""
+            model_name = getattr(agent, "model_name", "") or ""
+            if not model_provider or not model_name:
+                raise HTTPException(status_code=400, detail="Agent 未配置真实模型供应商和模型")
+
             adapter = LLMCallerAdapter(
-                provider=getattr(agent, "model_provider", "mock"),
-                model=getattr(agent, "model_name", "mock-model"),
+                provider=model_provider,
+                model=model_name,
                 org_id=agent.org_id,
             )
 
             runtime = AgentRuntime(
                 agent_id=agent_id,
                 org_id=agent.org_id,
-                model_provider=getattr(agent, "model_provider", "mock"),
-                model_name=getattr(agent, "model_name", "mock-model"),
+                model_provider=model_provider,
+                model_name=model_name,
                 workspace_id=getattr(agent, "workspace_id", ""),
                 llm_caller=adapter,
             )

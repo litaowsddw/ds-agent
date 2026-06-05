@@ -16,6 +16,7 @@ class MemoryType(StrEnum):
 
     FACT = "fact"
     PREFERENCE = "preference"
+    RULE = "rule"
     TASK = "task"
     DECISION = "decision"
     ARTIFACT = "artifact"

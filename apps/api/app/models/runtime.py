@@ -116,3 +116,24 @@ class BackgroundAgentModel(Base):
     status: Mapped[str] = mapped_column(String(16), default="idle")
     created_by: Mapped[str] = mapped_column(String(64), default="")
     created_at: Mapped[datetime] = mapped_column(DateTime, default=datetime.utcnow)
+
+
+class SkillEvaluationModel(Base):
+    """Skill 使用评价表。"""
+    __tablename__ = "skill_evaluations"
+
+    evaluation_id: Mapped[str] = mapped_column(String(64), primary_key=True)
+    org_id: Mapped[str] = mapped_column(String(64), ForeignKey("organizations.org_id"), nullable=False, index=True)
+    agent_id: Mapped[str] = mapped_column(String(64), ForeignKey("agents.agent_id"), nullable=False, index=True)
+    skill_id: Mapped[str] = mapped_column(String(64), ForeignKey("skills.skill_id"), nullable=False, index=True)
+    session_id: Mapped[str | None] = mapped_column(String(64), ForeignKey("sessions.session_id"), nullable=True)
+    user_input: Mapped[str] = mapped_column(Text, default="")
+    assistant_output: Mapped[str] = mapped_column(Text, default="")
+    status: Mapped[str] = mapped_column(String(32), default="pending")  # pending/evaluated/applied/rejected
+    score: Mapped[float | None] = mapped_column(Float, nullable=True)
+    failure_reason: Mapped[str] = mapped_column(Text, default="")
+    improvement_suggestion: Mapped[str] = mapped_column(Text, default="")
+    proposed_skill_patch: Mapped[str] = mapped_column(Text, default="")
+    applied: Mapped[bool] = mapped_column(Boolean, default=False)
+    created_by: Mapped[str] = mapped_column(String(64), default="")
+    created_at: Mapped[datetime] = mapped_column(DateTime, default=datetime.utcnow)

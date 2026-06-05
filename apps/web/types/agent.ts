@@ -20,6 +20,10 @@ export interface Agent {
   model_name?: string;
   /** 系统提示词 */
   system_prompt?: string;
+  /** 采样温度 */
+  temperature?: number | null;
+  /** 最大输出 tokens */
+  max_tokens?: number | null;
   created_by: string;
   created_at?: string;
 }
@@ -35,6 +39,8 @@ export interface CreateAgentRequest {
   model_provider?: string;
   model_name?: string;
   system_prompt?: string;
+  temperature?: number | null;
+  max_tokens?: number | null;
 }
 
 /** Workspace 文件类型 */

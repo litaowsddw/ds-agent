@@ -12,18 +12,23 @@ import {
   Bot,
   Brain,
   Database,
-  Loader2,
+  KeyRound,
+  MessageSquare,
   Network,
+  PlugZap,
   Workflow,
 } from "lucide-react";
 import { useWorkspaceStore } from "@/stores/workspace";
 
 const navItems = [
   { key: "agents", label: "Agents", icon: Bot, href: "/agents" },
-  { key: "workflow", label: "Workflow", icon: Workflow, href: "/workflows" },
-  { key: "runtime", label: "Runtime", icon: Brain, href: "/runtime" },
+  { key: "models", label: "Models", icon: KeyRound, href: "/models" },
   { key: "knowledge", label: "Knowledge", icon: Database, href: "/knowledge" },
+  { key: "tools", label: "Tools", icon: PlugZap, href: "/tools" },
+  { key: "workflow", label: "Workflow", icon: Workflow, href: "/workflows" },
   { key: "runs", label: "Runs", icon: Activity, href: "/runs" },
+  { key: "runtime", label: "Runtime", icon: Brain, href: "/runtime" },
+  { key: "chat", label: "Chat", icon: MessageSquare, href: "/chat" },
 ] as const;
 
 function StatusPill({ status }: { status: "checking" | "online" | "offline" }) {
@@ -60,7 +65,7 @@ export default function Sidebar() {
           <StatusPill status={apiStatus} />
         </div>
         <p className="text-xs leading-5 text-[#667085]">
-          {process.env.NEXT_PUBLIC_API_BASE_URL ?? "http://127.0.0.1:8000"}
+          {process.env.NEXT_PUBLIC_API_BASE_URL ?? "http://127.0.0.1:18000"}
         </p>
       </div>
 

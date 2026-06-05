@@ -35,9 +35,9 @@ class SubAgentConfig:
     # description 是功能描述
     description: str
     # model_provider 是使用的模型供应商
-    model_provider: str = "mock"
+    model_provider: str = ""
     # model_name 是使用的模型名称
-    model_name: str = "mock-model"
+    model_name: str = ""
     # system_prompt 是系统提示词
     system_prompt: str = ""
     # workspace_id 是所属 Workspace
@@ -108,8 +108,8 @@ def create_system_subagents(org_id: str, workspace_id: str) -> list[SubAgentConf
             kind=AgentKind.SYSTEM_SKILL,
             name="Skill Creator",
             description="根据用户描述生成 SKILL.md 技能文件，支持自动检测和手动触发。",
-            model_provider="mock",
-            model_name="mock-model",
+            model_provider="",
+            model_name="",
             system_prompt="你是一个 Skill Creator。根据用户描述，生成标准格式的 SKILL.md 文件。SKILL.md 包含 YAML front matter（name, description, trigger_conditions）和 Markdown 正文（步骤、示例、注意事项）。",
             workspace_id=workspace_id,
         ),
@@ -119,8 +119,8 @@ def create_system_subagents(org_id: str, workspace_id: str) -> list[SubAgentConf
             kind=AgentKind.SYSTEM_RAG,
             name="Knowledge Search",
             description="在知识库中检索相关文档和片段，返回最匹配的内容。",
-            model_provider="mock",
-            model_name="mock-model",
+            model_provider="",
+            model_name="",
             system_prompt="你是一个知识检索助手。根据用户查询，从知识库中检索最相关的文档片段，并返回结构化的检索结果。",
             workspace_id=workspace_id,
         ),
@@ -130,8 +130,8 @@ def create_system_subagents(org_id: str, workspace_id: str) -> list[SubAgentConf
             kind=AgentKind.SYSTEM_TOOL,
             name="System Tool",
             description="执行系统级工具操作，如文件管理、API 调用等。",
-            model_provider="mock",
-            model_name="mock-model",
+            model_provider="",
+            model_name="",
             system_prompt="你是一个系统工具助手。根据用户请求，调用相应的系统工具完成任务。",
             workspace_id=workspace_id,
         ),

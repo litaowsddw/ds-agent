@@ -8,6 +8,25 @@ export interface Skill {
   scope: string;
 }
 
+/** Skill 使用评价 */
+export interface SkillEvaluation {
+  evaluation_id: string;
+  org_id: string;
+  agent_id: string;
+  skill_id: string;
+  session_id: string | null;
+  user_input: string;
+  assistant_output: string;
+  status: string;
+  score: number | null;
+  failure_reason: string;
+  improvement_suggestion: string;
+  proposed_skill_patch: string;
+  applied: boolean;
+  created_by: string;
+  created_at: string;
+}
+
 /** MCP Server */
 export interface MCPServer {
   server_id: string;

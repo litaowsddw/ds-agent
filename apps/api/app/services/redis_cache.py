@@ -111,6 +111,7 @@ class RedisResultCache:
 
         return {
             "size": len(cache_keys),
+            "max_size": 0,
             "total_hits": total_hits,
             "total_misses": total_misses,
             "hit_rate": (

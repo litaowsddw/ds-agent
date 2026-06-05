@@ -11,6 +11,7 @@ from app.models.agent import AgentModel, AgentWorkspaceModel
 from app.schemas.agent import (
     AgentCreateRequest,
     AgentResponse,
+    AgentUpdateRequest,
     WorkspaceFileUpdateRequest,
     WorkspaceResponse,
 )
@@ -40,6 +41,11 @@ async def create_agent(
             team_id=request.team_id,
             name=request.name,
             description=request.description,
+            model_provider=request.model_provider,
+            model_name=request.model_name,
+            system_prompt=request.system_prompt,
+            temperature=request.temperature,
+            max_tokens=request.max_tokens,
             created_by=request.actor_user_id,
         )
 
@@ -52,6 +58,32 @@ async def create_agent(
             updated_by=request.actor_user_id,
         )
 
+        await session.commit()
+    except ValueError as exc:
+        await session.rollback()
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
+
+    return _to_agent_response(agent)
+
+
+@router.put("/{agent_id}", response_model=AgentResponse)
+async def update_agent(
+    agent_id: str,
+    request: AgentUpdateRequest,
+    session: AsyncSession = Depends(get_db_session),
+) -> AgentResponse:
+    """更新 Agent 参数。"""
+
+    try:
+        agent = await agent_db.get_agent_required(session, agent_id)
+        await membership_db.assert_org_access(
+            session, user_id=request.actor_user_id, org_id=agent.org_id
+        )
+        update_data = request.model_dump(exclude={"actor_user_id"}, exclude_unset=True)
+        for key in ("name", "description", "system_prompt", "model_provider", "model_name"):
+            if key in update_data and isinstance(update_data[key], str):
+                update_data[key] = update_data[key].strip()
+        agent = await agent_db.update_agent(session, agent_id, **update_data)
         await session.commit()
     except ValueError as exc:
         await session.rollback()
@@ -125,9 +157,13 @@ async def update_workspace_file(
     # file_kind 到数据库字段的映射
     kind_to_field = {
         "AGENTS": "agents_md",
+        "AGENTS.md": "agents_md",
         "SOUL": "soul_md",
+        "SOUL.md": "soul_md",
         "TOOLS": "tools_md",
+        "TOOLS.md": "tools_md",
         "MEMORY": "memory_md",
+        "MEMORY.md": "memory_md",
     }
 
     try:
@@ -136,7 +172,7 @@ async def update_workspace_file(
             session, user_id=request.actor_user_id, org_id=agent.org_id
         )
 
-        field_name = kind_to_field.get(request.file_kind)
+        field_name = kind_to_field.get(str(request.file_kind))
         if field_name is None:
             raise ValueError(f"不支持的文件类型：{request.file_kind}")
 
@@ -160,6 +196,12 @@ def _to_agent_response(agent: AgentModel) -> AgentResponse:
         team_id=agent.team_id,
         name=agent.name,
         description=agent.description or "",
+        kind=agent.kind or "USER_SUB",
+        model_provider=agent.model_provider,
+        model_name=agent.model_name,
+        system_prompt=agent.system_prompt,
+        temperature=agent.temperature,
+        max_tokens=agent.max_tokens,
         created_by=agent.created_by,
     )
 

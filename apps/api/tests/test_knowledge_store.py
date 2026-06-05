@@ -2,7 +2,12 @@
 
 from apps.api.app.services.identity_store import IdentityStore
 from apps.api.app.services.knowledge_store import KnowledgeStore
-from apps.api.app.services.knowledge_vector_index import EmbeddedChunk, InMemoryVectorIndex
+from apps.api.app.services.knowledge_vector_index import (
+    EmbeddedChunk,
+    InMemoryVectorIndex,
+    OllamaEmbeddingProvider,
+    build_embedding_provider_from_env,
+)
 
 
 class RecordingVectorIndex(InMemoryVectorIndex):
@@ -117,3 +122,16 @@ def test_upload_document_writes_embeddings_to_vector_index() -> None:
     assert len(vector_index.upserted_chunks[0].embedding) == ks.embedding_provider.dimension
     assert vector_index.upserted_chunks[0].kb_id == kb.kb_id
     assert vector_index.upserted_chunks[0].org_id == org.org_id
+
+
+def test_builds_ollama_embedding_provider_from_env(monkeypatch) -> None:
+    monkeypatch.setenv("AGENTFLOW_EMBEDDING_PROVIDER", "ollama")
+    monkeypatch.setenv("AGENTFLOW_EMBEDDING_MODEL", "bge-m3:latest")
+    monkeypatch.setenv("AGENTFLOW_EMBEDDING_DIMENSION", "1024")
+    monkeypatch.setenv("AGENTFLOW_EMBEDDING_BASE_URL", "http://127.0.0.1:11434")
+
+    provider = build_embedding_provider_from_env()
+
+    assert isinstance(provider, OllamaEmbeddingProvider)
+    assert provider.model_name == "bge-m3:latest"
+    assert provider.dimension == 1024

@@ -134,6 +134,25 @@ class SessionMessageDBService(BaseDBService[SessionMessageModel]):
         result = await session.execute(stmt)
         return list(result.scalars().all())
 
+    async def list_recent_uncompacted_messages(
+        self,
+        session: AsyncSession,
+        session_id: str,
+        limit: int = 20,
+    ) -> list[SessionMessageModel]:
+        """List recent messages that have not been folded into the compact summary."""
+        stmt = (
+            select(SessionMessageModel)
+            .where(
+                SessionMessageModel.session_id == session_id,
+                SessionMessageModel.compacted == False,
+            )
+            .order_by(SessionMessageModel.sequence.desc())
+            .limit(limit)
+        )
+        result = await session.execute(stmt)
+        return list(reversed(result.scalars().all()))
+
     async def mark_compacted(
         self, session: AsyncSession, session_id: str
     ) -> int:
@@ -142,6 +161,20 @@ class SessionMessageDBService(BaseDBService[SessionMessageModel]):
             select(SessionMessageModel)
             .where(SessionMessageModel.session_id == session_id)
         )
+        result = await session.execute(stmt)
+        messages = list(result.scalars().all())
+        for msg in messages:
+            msg.compacted = True
+        await session.flush()
+        return len(messages)
+
+    async def mark_messages_compacted(
+        self, session: AsyncSession, message_ids: list[str]
+    ) -> int:
+        """Mark selected messages as compacted."""
+        if not message_ids:
+            return 0
+        stmt = select(SessionMessageModel).where(SessionMessageModel.message_id.in_(message_ids))
         result = await session.execute(stmt)
         messages = list(result.scalars().all())
         for msg in messages:

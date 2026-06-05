@@ -1,6 +1,5 @@
-/** 前端常量定义。 */
+/** Frontend constants. */
 
-/** 侧边栏导航项 */
 export const NAV_ITEMS = [
   { key: "agents", label: "Agents", icon: "Bot", href: "/agents" },
   { key: "chat", label: "Chat", icon: "MessageSquare", href: "/chat" },
@@ -10,30 +9,142 @@ export const NAV_ITEMS = [
   { key: "runs", label: "Runs", icon: "Activity", href: "/runs" },
 ] as const;
 
-/** 节点面板项 - 画布中可添加的节点类型 */
-export const NODE_PALETTE = [
-  { label: "LLM", description: "模型推理", icon: "Bot", type: "llm" },
-  { label: "RAG", description: "知识检索", icon: "Database", type: "rag" },
-  { label: "Tool", description: "工具调用", icon: "ShieldCheck", type: "tool" },
-] as const;
+export type WorkflowNodeCapability = "executable" | "schema";
 
-/** 默认画布节点 */
-export const INITIAL_NODES = [
-  { id: "start", type: "start", position: { x: 40, y: 220 }, data: { label: "Start" } },
-  { id: "llm", type: "llm", position: { x: 300, y: 220 }, data: { label: "LLM" } },
-  { id: "end", type: "end", position: { x: 560, y: 220 }, data: { label: "End" } },
+export interface WorkflowPaletteItem {
+  type: string;
+  label: string;
+  description: string;
+  group: "Core" | "AI" | "Knowledge" | "Tools" | "Logic" | "Human" | "Data";
+  icon: string;
+  capability: WorkflowNodeCapability;
+}
+
+export const NODE_PALETTE: WorkflowPaletteItem[] = [
+  {
+    type: "llm",
+    label: "LLM",
+    description: "Model call through a configured provider",
+    group: "AI",
+    icon: "Bot",
+    capability: "executable",
+  },
+  {
+    type: "rag",
+    label: "Knowledge Retrieval",
+    description: "Search a knowledge base with vector retrieval",
+    group: "Knowledge",
+    icon: "Database",
+    capability: "executable",
+  },
+  {
+    type: "tool",
+    label: "Tool",
+    description: "Use an authorized MCP tool plan",
+    group: "Tools",
+    icon: "ShieldCheck",
+    capability: "executable",
+  },
+  {
+    type: "condition",
+    label: "Condition",
+    description: "Branch by expression or upstream value",
+    group: "Logic",
+    icon: "GitBranch",
+    capability: "schema",
+  },
+  {
+    type: "http",
+    label: "HTTP Request",
+    description: "Call an external HTTP endpoint",
+    group: "Tools",
+    icon: "Globe",
+    capability: "schema",
+  },
+  {
+    type: "code",
+    label: "Code",
+    description: "Transform data with sandboxed code",
+    group: "Logic",
+    icon: "Code2",
+    capability: "schema",
+  },
+  {
+    type: "variable",
+    label: "Variable",
+    description: "Assign workflow variables",
+    group: "Data",
+    icon: "Braces",
+    capability: "schema",
+  },
+  {
+    type: "template",
+    label: "Template",
+    description: "Render text from upstream context",
+    group: "Data",
+    icon: "TextCursorInput",
+    capability: "schema",
+  },
+  {
+    type: "human",
+    label: "Human Approval",
+    description: "Pause for manual review",
+    group: "Human",
+    icon: "UserCheck",
+    capability: "schema",
+  },
 ];
 
-/** 默认画布边 */
+export const INITIAL_NODES = [
+  {
+    id: "start",
+    type: "start",
+    position: { x: 80, y: 260 },
+    data: {
+      label: "Start",
+      description: "Workflow input",
+      capability: "executable",
+      config: {},
+    },
+  },
+  {
+    id: "llm",
+    type: "llm",
+    position: { x: 380, y: 260 },
+    data: {
+      label: "LLM",
+      description: "Model call",
+      capability: "executable",
+      config: {
+        provider: "",
+        model: "",
+        system_prompt: "",
+        prompt: "",
+        temperature: 0,
+        max_tokens: 512,
+      },
+    },
+  },
+  {
+    id: "end",
+    type: "end",
+    position: { x: 700, y: 260 },
+    data: {
+      label: "End",
+      description: "Workflow result",
+      capability: "executable",
+      config: {},
+    },
+  },
+];
+
 export const INITIAL_EDGES = [
   { id: "start-llm", source: "start", target: "llm" },
   { id: "llm-end", source: "llm", target: "end" },
 ];
 
-/** Toast 自动消失时间 (ms) */
 export const TOAST_DURATION = 4000;
 
-/** Tailwind 自定义颜色 token */
 export const COLORS = {
   canvas: "#f7f8fa",
   panel: "#ffffff",

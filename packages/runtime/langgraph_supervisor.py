@@ -182,13 +182,13 @@ async def delegate_node(state: SupervisorState, *, subagent_executor: Any = None
     existing_results: list[SubTaskResult] = list(state.get("subtask_results", []))
 
     if not subagent_executor:
-        # 无执行器，mock 结果
         for task in subtasks:
             existing_results.append(SubTaskResult(
                 task=task.get("task", ""),
                 subagent_kind=task.get("subagent_kind", "USER_SUB"),
-                status="succeeded",
-                result_text=f"[Mock 执行] {task.get('task', '')}",
+                status="failed",
+                result_text="",
+                error_message="Supervisor 未配置真实 SubAgent 执行器",
             ))
         return {"subtask_results": existing_results, "subtasks": []}
 

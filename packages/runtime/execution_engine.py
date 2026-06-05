@@ -106,15 +106,14 @@ class SubAgentExecutionEngine:
             ExecutionResult: 执行结果
         """
         if not self.llm_caller:
-            # 没有配置 LLM 调用器，返回 mock 结果
             result = ExecutionResult(
                 run_id=run.run_id,
-                text=f"[SubAgent 执行] {run.task}",
-                status=TaskStatus.SUCCEEDED,
-                usage={"prompt_tokens": 0, "completion_tokens": 0},
+                text="",
+                status=TaskStatus.FAILED,
+                error_message="SubAgentExecutionEngine 未配置真实 LLM 调用器",
             )
-            run.status = TaskStatus.SUCCEEDED
-            run.frozen_result_text = result.text
+            run.status = TaskStatus.FAILED
+            run.error_message = result.error_message
             self._execution_history.append(result)
             return result
 

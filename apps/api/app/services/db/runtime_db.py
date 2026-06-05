@@ -19,6 +19,7 @@ from app.models.runtime import (
     MemoryModel,
     ModelProviderModel,
     BackgroundAgentModel,
+    SkillEvaluationModel,
 )
 from app.services.db.base import BaseDBService
 
@@ -404,6 +405,66 @@ class BackgroundAgentDBService(BaseDBService[BackgroundAgentModel]):
         return config
 
 
+class SkillEvaluationDBService(BaseDBService[SkillEvaluationModel]):
+    """Skill evaluation database service."""
+
+    def __init__(self) -> None:
+        super().__init__(SkillEvaluationModel)
+
+    async def create_evaluation(
+        self,
+        session: AsyncSession,
+        evaluation_id: str,
+        org_id: str,
+        agent_id: str,
+        skill_id: str,
+        user_input: str,
+        assistant_output: str = "",
+        session_id: str | None = None,
+        created_by: str = "",
+        status: str = "pending",
+    ) -> SkillEvaluationModel:
+        evaluation = SkillEvaluationModel(
+            evaluation_id=evaluation_id,
+            org_id=org_id,
+            agent_id=agent_id,
+            skill_id=skill_id,
+            session_id=session_id,
+            user_input=user_input,
+            assistant_output=assistant_output,
+            status=status,
+            created_by=created_by,
+        )
+        session.add(evaluation)
+        await session.flush()
+        return evaluation
+
+    async def list_org_evaluations(
+        self,
+        session: AsyncSession,
+        org_id: str,
+        agent_id: str | None = None,
+        skill_id: str | None = None,
+        limit: int = 50,
+    ) -> list[SkillEvaluationModel]:
+        stmt = select(SkillEvaluationModel).where(SkillEvaluationModel.org_id == org_id)
+        if agent_id:
+            stmt = stmt.where(SkillEvaluationModel.agent_id == agent_id)
+        if skill_id:
+            stmt = stmt.where(SkillEvaluationModel.skill_id == skill_id)
+        stmt = stmt.order_by(SkillEvaluationModel.created_at.desc()).limit(limit)
+        result = await session.execute(stmt)
+        return list(result.scalars().all())
+
+    async def update_evaluation(
+        self,
+        session: AsyncSession,
+        evaluation_id: str,
+        **data: Any,
+    ) -> SkillEvaluationModel:
+        return await self.update_by_id(session, evaluation_id, **data)
+
+
 # 全局数据库服务实例
 skill_db = SkillDBService()
 agent_skill_policy_db = AgentSkillPolicyDBService()
@@ -413,3 +474,4 @@ agent_mcp_policy_db = AgentMCPPolicyDBService()
 memory_db = MemoryDBService()
 model_provider_db = ModelProviderDBService()
 background_agent_db = BackgroundAgentDBService()
+skill_evaluation_db = SkillEvaluationDBService()

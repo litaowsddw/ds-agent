@@ -1,25 +1,19 @@
-/** Knowledge 状态管理。
-
-管理知识库、文档、检索等知识相关状态。
- */
+/** Knowledge 状态管理。 */
 
 import { create } from "zustand";
-import type { KnowledgeBaseItem, DocumentItem, ChunkItem } from "@/types/knowledge";
-import { apiRequest, apiFormRequest } from "@/lib/api";
+import type { ChunkItem, DocumentItem, KnowledgeBaseItem } from "@/types/knowledge";
+import { apiFormRequest, apiRequest } from "@/lib/api";
 
 interface KnowledgeStore {
-  // 数据
   knowledgeBases: KnowledgeBaseItem[];
   selectedKbId: string;
   kbDocuments: DocumentItem[];
   searchResults: ChunkItem[];
 
-  // 表单
   kbForm: { name: string; description: string };
   docForm: { title: string; content: string };
   searchQuery: string;
 
-  // Actions
   setKbForm: (form: { name: string; description: string }) => void;
   setDocForm: (form: { title: string; content: string }) => void;
   setSearchQuery: (query: string) => void;
@@ -38,9 +32,9 @@ export const useKnowledgeStore = create<KnowledgeStore>((set, get) => ({
   kbDocuments: [],
   searchResults: [],
 
-  kbForm: { name: "默认知识库", description: "项目文档知识库" },
-  docForm: { title: "示例文档", content: "这是一段示例知识库内容，用于测试 RAG 检索功能。" },
-  searchQuery: "示例",
+  kbForm: { name: "", description: "" },
+  docForm: { title: "", content: "" },
+  searchQuery: "",
 
   setKbForm: (form) => set({ kbForm: form }),
   setDocForm: (form) => set({ docForm: form }),
@@ -49,11 +43,22 @@ export const useKnowledgeStore = create<KnowledgeStore>((set, get) => ({
 
   createKnowledgeBase: async (actorUserId, orgId) => {
     const { kbForm } = get();
+    if (!kbForm.name.trim()) {
+      throw new Error("请填写知识库名称");
+    }
     const kb = await apiRequest<KnowledgeBaseItem>("/knowledge", {
       method: "POST",
-      body: { actor_user_id: actorUserId, org_id: orgId, name: kbForm.name, description: kbForm.description },
+      body: {
+        actor_user_id: actorUserId,
+        org_id: orgId,
+        name: kbForm.name,
+        description: kbForm.description,
+      },
     });
-    set((state) => ({ knowledgeBases: [...state.knowledgeBases, kb], selectedKbId: kb.kb_id }));
+    set((state) => ({
+      knowledgeBases: [kb, ...state.knowledgeBases],
+      selectedKbId: kb.kb_id,
+    }));
   },
 
   uploadDocument: async (actorUserId, kbId, docFile) => {
@@ -67,6 +72,9 @@ export const useKnowledgeStore = create<KnowledgeStore>((set, get) => ({
       doc = await apiFormRequest<DocumentItem>(`/knowledge/${kbId}/documents/upload`, formData);
     } else {
       const { docForm } = get();
+      if (!docForm.title.trim() || !docForm.content.trim()) {
+        throw new Error("请填写文档标题和内容，或选择一个文件上传");
+      }
       doc = await apiRequest<DocumentItem>(`/knowledge/${kbId}/documents`, {
         method: "POST",
         body: {
@@ -78,10 +86,13 @@ export const useKnowledgeStore = create<KnowledgeStore>((set, get) => ({
         },
       });
     }
-    set((state) => ({ kbDocuments: [...state.kbDocuments, doc] }));
+    set((state) => ({ kbDocuments: [doc, ...state.kbDocuments] }));
   },
 
   searchKnowledge: async (actorUserId, kbId, query) => {
+    if (!query.trim()) {
+      throw new Error("请填写检索关键词");
+    }
     const results = await apiRequest<ChunkItem[]>(`/knowledge/${kbId}/search`, {
       method: "POST",
       body: { actor_user_id: actorUserId, query, limit: 5 },
@@ -93,7 +104,10 @@ export const useKnowledgeStore = create<KnowledgeStore>((set, get) => ({
     const knowledgeBases = await apiRequest<KnowledgeBaseItem[]>(
       `/knowledge?org_id=${orgId}&actor_user_id=${actorUserId}`
     );
-    set({ knowledgeBases });
+    set((state) => ({
+      knowledgeBases,
+      selectedKbId: state.selectedKbId || knowledgeBases[0]?.kb_id || "",
+    }));
   },
 
   refreshDocuments: async (kbId, actorUserId) => {

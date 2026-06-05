@@ -10,8 +10,8 @@ class LLMGenerateRequest(BaseModel):
 
     actor_user_id: str = Field(default="", description="操作用户 ID")
     org_id: str = Field(default="", description="组织 ID")
-    provider: str = Field(default="mock", description="LLM Provider 名称")
-    model: str = Field(default="mock-model", description="模型名称")
+    provider: str = Field(default="", description="LLM Provider 名称")
+    model: str = Field(default="", description="模型名称")
     prompt: str = Field(min_length=1, description="提示词")
     parameters: dict[str, Any] = Field(default_factory=dict, description="模型参数")
 

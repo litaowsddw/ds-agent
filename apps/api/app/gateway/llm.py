@@ -1,14 +1,14 @@
 """LLM Gateway（异步限流版本）。
 
-该模块提供统一的模型调用入口。内置 mock provider 用于本地开发和测试；
-组织级模型供应商配置通过数据库服务读取，并以 OpenAI-compatible 协议调用真实供应商。
+该模块提供统一的模型调用入口。组织级模型供应商配置通过数据库服务读取，
+并以 OpenAI-compatible 协议调用真实供应商。
 限流使用 Redis 全局令牌桶。
 """
 
 import json
 from dataclasses import dataclass, field
 from datetime import datetime
-from typing import Any, Protocol
+from typing import Any, AsyncIterator, Protocol
 from urllib.error import HTTPError, URLError
 from urllib.request import Request, urlopen
 
@@ -68,25 +68,6 @@ class GatewayProviderError(RuntimeError):
     """Provider 调用错误。"""
 
 
-class MockLLMProvider:
-    """Mock LLM Provider。"""
-
-    def generate(self, request: LLMCallRequest) -> LLMCallResponse:
-        prompt_tokens = max(1, len(request.prompt) // 4)
-        return LLMCallResponse(
-            text=f"[mock-llm] {request.prompt}".strip(),
-            provider=request.provider,
-            model=request.model,
-            usage={
-                "prompt_tokens": prompt_tokens,
-                "completion_tokens": 8,
-                "cache_hit_tokens": 0,
-                "cache_miss_tokens": prompt_tokens,
-            },
-            raw={"mock": True},
-        )
-
-
 class OpenAICompatibleProvider:
     """OpenAI-compatible Provider 适配器。"""
 
@@ -100,11 +81,7 @@ class OpenAICompatibleProvider:
         if not self.api_key:
             raise GatewayProviderError("模型供应商未配置 API Key")
 
-        payload = {
-            "model": request.model,
-            "messages": [{"role": "user", "content": request.prompt}],
-            **{key: value for key, value in request.parameters.items() if value is not None},
-        }
+        payload = self._build_payload(request)
         url = f"{self.base_url.rstrip('/')}/chat/completions"
         http_request = Request(
             url=url,
@@ -135,12 +112,67 @@ class OpenAICompatibleProvider:
             raw={"id": body.get("id"), "object": body.get("object")},
         )
 
+    def stream_generate(self, request: LLMCallRequest):
+        if not self.api_key:
+            raise GatewayProviderError("Model provider API key is not configured")
+
+        payload = self._build_payload(request, stream=True)
+        url = f"{self.base_url.rstrip('/')}/chat/completions"
+        http_request = Request(
+            url=url,
+            data=json.dumps(payload).encode("utf-8"),
+            headers={
+                "Authorization": f"Bearer {self.api_key}",
+                "Content-Type": "application/json",
+            },
+            method="POST",
+        )
+
+        try:
+            with urlopen(http_request, timeout=self.timeout_seconds) as response:
+                for raw_line in response:
+                    line = raw_line.decode("utf-8", errors="ignore").strip()
+                    if not line or not line.startswith("data:"):
+                        continue
+                    data = line.removeprefix("data:").strip()
+                    if data == "[DONE]":
+                        break
+                    try:
+                        body = json.loads(data)
+                    except json.JSONDecodeError:
+                        continue
+                    delta = self._extract_stream_delta(body)
+                    if delta:
+                        yield delta
+        except HTTPError as exc:
+            detail = exc.read().decode("utf-8", errors="ignore")
+            raise GatewayProviderError(f"Model provider HTTP {exc.code}: {detail[:300]}") from exc
+        except URLError as exc:
+            raise GatewayProviderError(f"Model provider network error: {exc.reason}") from exc
+
+    def _build_payload(self, request: LLMCallRequest, stream: bool = False) -> dict[str, Any]:
+        payload = {
+            "model": request.model,
+            "messages": [{"role": "user", "content": request.prompt}],
+            **{key: value for key, value in request.parameters.items() if value is not None},
+        }
+        if stream:
+            payload["stream"] = True
+        return payload
+
     def _extract_text(self, body: dict[str, Any]) -> str:
         choices = body.get("choices", [])
         if not choices:
             return ""
         message = choices[0].get("message", {})
         return str(message.get("content", ""))
+
+    def _extract_stream_delta(self, body: dict[str, Any]) -> str:
+        choices = body.get("choices", [])
+        if not choices:
+            return ""
+        delta = choices[0].get("delta", {})
+        return str(delta.get("content", "") or "")
 
     def _extract_usage(self, body: dict[str, Any]) -> dict[str, int]:
         usage = body.get("usage", {})
@@ -162,7 +194,7 @@ class LLMGateway:
         providers: dict[str, LLMProvider] | None = None,
         limiter: HybridRateLimiter | None = None,
     ) -> None:
-        self.providers = providers or {"mock": MockLLMProvider()}
+        self.providers = providers or {}
         self.call_logs: list[LLMCallLog] = []
         self.prompt_compiler = PromptContextCompiler()
         self.limiter = limiter or rate_limiter
@@ -193,6 +225,43 @@ class LLMGateway:
         )
         return response
 
+    async def stream_generate(self, request: LLMCallRequest) -> AsyncIterator[str]:
+        """Stream an LLM response through the configured provider."""
+
+        provider = self._resolve_provider(request)
+        if provider is None:
+            error_message = f"Unregistered LLM provider: {request.provider}"
+            self._append_log(request=request, status="failed", usage={}, error_message=error_message)
+            raise GatewayProviderError(error_message)
+
+        try:
+            await self._check_rate_limit(request)
+            streamer = getattr(provider, "stream_generate", None)
+            if streamer is None:
+                response = provider.generate(request)
+                for index in range(0, len(response.text), 24):
+                    yield response.text[index : index + 24]
+                usage = response.usage
+            else:
+                completion_chars = 0
+                for chunk in streamer(request):
+                    completion_chars += len(chunk)
+                    yield chunk
+                usage = {
+                    "prompt_tokens": 0,
+                    "completion_tokens": max(1, completion_chars // 4) if completion_chars else 0,
+                }
+        except RateLimitExceeded:
+            error_message = "RateLimitExceeded: LLM call rejected by rate limiter"
+            self._append_log(request=request, status="failed", usage={}, error_message=error_message)
+            raise
+        except Exception as exc:
+            error_message = self._normalize_error(exc)
+            self._append_log(request=request, status="failed", usage={}, error_message=error_message)
+            raise GatewayProviderError(error_message) from exc
+
+        self._append_log(request=request, status="succeeded", usage=usage, error_message="")
+
     async def generate_from_workflow_node(
         self,
         config: dict[str, Any],
@@ -200,8 +269,10 @@ class LLMGateway:
     ) -> dict[str, Any]:
         """为 Workflow LLM 节点提供调用入口。"""
 
-        provider = str(config.get("provider", "mock"))
-        model = str(config.get("model", "mock-model"))
+        provider = str(config.get("provider") or "")
+        model = str(config.get("model") or "")
+        if not provider or not model:
+            raise GatewayProviderError("LLM 节点缺少真实模型供应商或模型配置")
         compiled_prompt = self._compile_workflow_prompt(config=config, node_input=node_input)
         prompt = str(compiled_prompt["compiled_prompt"])
         prefix_hash = str(compiled_prompt["prefix_hash"])
@@ -246,7 +317,7 @@ class LLMGateway:
         """编译 Workflow LLM 节点 Prompt。"""
         immutable_prefix = {
             "system_prompt": config.get("system_prompt", ""),
-            "model": config.get("model", "mock-model"),
+            "model": config.get("model", ""),
             "tool_schemas": config.get("tool_schemas", []),
             "output_contract": config.get("output_contract", {}),
         }

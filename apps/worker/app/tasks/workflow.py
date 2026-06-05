@@ -19,6 +19,7 @@ def execute_workflow(
     input_data: dict,
     org_id: str = "",
     agent_id: str = "",
+    actor_user_id: str = "",
 ) -> dict:
     """执行 Workflow DSL 并记录运行状态到数据库。
 
@@ -30,50 +31,27 @@ def execute_workflow(
         agent_id: Agent ID
     """
 
-    # executor 是纯 Python 执行器，不依赖 API 进程状态。
-    from packages.workflow.executor import WorkflowExecutor
-
-    executor = WorkflowExecutor()
+    import asyncio
     start_time = time.time()
 
     try:
-        # 更新运行状态为 running
-        _update_run_status(run_id, "running")
-
-        # 执行工作流
-        result = executor.execute(definition=definition, input_data=input_data)
-
-        # 记录节点运行结果
-        for node_result in result.node_runs:
-            _record_node_run(
+        result = asyncio.run(
+            _execute_workflow_with_real_dependencies(
                 run_id=run_id,
-                node_id=node_result.node_id,
-                node_type=node_result.node_type,
-                status=node_result.status,
-                input_data=node_result.input_data,
-                output_data=node_result.output_data,
-                error_message=node_result.error_message,
-                elapsed_ms=node_result.elapsed_ms,
+                definition=definition,
+                input_data=input_data,
+                org_id=org_id,
+                agent_id=agent_id,
+                actor_user_id=actor_user_id,
             )
-
-        # 更新运行状态
-        elapsed_ms = int((time.time() - start_time) * 1000)
-        final_status = result.status
-        _update_run_status(
-            run_id,
-            final_status,
-            output_data=result.output_data,
-            error_message=result.error_message,
         )
-
-        # 失效相关缓存
+        elapsed_ms = int((time.time() - start_time) * 1000)
         _invalidate_cache("workflow_run", {"run_id": run_id})
-
         return {
-            "status": final_status,
+            "status": result["status"],
             "run_id": run_id,
             "elapsed_ms": elapsed_ms,
-            "node_count": len(result.node_runs),
+            "node_count": result["node_count"],
         }
 
     except Exception as exc:
@@ -81,6 +59,68 @@ def execute_workflow(
             run_id, "failed", error_message=f"{exc.__class__.__name__}: {exc}"
         )
         raise
+
+
+async def _execute_workflow_with_real_dependencies(
+    run_id: str,
+    definition: dict,
+    input_data: dict,
+    org_id: str,
+    agent_id: str,
+    actor_user_id: str,
+) -> dict:
+    """在 Worker 中复用 API 层真实节点执行依赖。"""
+
+    from app.database import async_session_factory
+    from app.routes.workflow_runs import (
+        _execute_llm_node,
+        _execute_rag_node,
+        _execute_tool_node,
+        _persist_executed_node,
+    )
+    from app.services.db.workflow_db import workflow_run_db
+    from packages.workflow.executor import WorkflowExecutor
+
+    async with async_session_factory() as session:
+        run = await workflow_run_db.get_run_required(session, run_id)
+        await workflow_run_db.update_run_status(session, run_id, "running")
+
+        executor = WorkflowExecutor(
+            llm_gateway=lambda config, node_input: _execute_llm_node(
+                session=session,
+                config=config,
+                node_input=node_input,
+                actor_user_id=actor_user_id or run.created_by,
+                org_id=org_id or run.org_id,
+            ),
+            rag_search=lambda config, node_input: _execute_rag_node(
+                session=session,
+                config=config,
+                node_input=node_input,
+                actor_user_id=actor_user_id or run.created_by,
+                org_id=org_id or run.org_id,
+            ),
+            tool_call=lambda config, node_input: _execute_tool_node(
+                session=session,
+                config=config,
+                node_input=node_input,
+                actor_user_id=actor_user_id or run.created_by,
+                org_id=org_id or run.org_id,
+                agent_id=agent_id or run.agent_id,
+            ),
+        )
+        result = await executor.execute_async(definition=definition, input_data=input_data)
+        for index, node_result in enumerate(result.node_runs):
+            await _persist_executed_node(session, run_id, node_result, index)
+        await workflow_run_db.update_run_status(
+            session,
+            run_id,
+            result.status,
+            output_data=result.output_data,
+            error_message=result.error_message,
+        )
+        await session.commit()
+        return {"status": result.status, "node_count": len(result.node_runs)}
 
 
 def _update_run_status(

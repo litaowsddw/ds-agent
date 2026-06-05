@@ -6,7 +6,7 @@
 "use client";
 
 import { useEffect } from "react";
-import { Bot, Brain, Database, Loader2, MessageSquare, Save, Server, ShieldCheck } from "lucide-react";
+import { Bot, Brain, Database, MessageSquare, Server, ShieldCheck, Sparkles } from "lucide-react";
 import { useWorkspaceStore } from "@/stores/workspace";
 import { useRuntimeStore } from "@/stores/runtime";
 import { showToast } from "@/components/layout/AppLayout";
@@ -22,6 +22,7 @@ export default function RuntimePage() {
 
   const modelProviders = useRuntimeStore((s) => s.modelProviders);
   const skills = useRuntimeStore((s) => s.skills);
+  const skillEvaluations = useRuntimeStore((s) => s.skillEvaluations);
   const mcpServers = useRuntimeStore((s) => s.mcpServers);
   const mcpTools = useRuntimeStore((s) => s.mcpTools);
   const memories = useRuntimeStore((s) => s.memories);
@@ -43,6 +44,7 @@ export default function RuntimePage() {
 
   const saveModelProvider = useRuntimeStore((s) => s.saveModelProvider);
   const createSkill = useRuntimeStore((s) => s.createSkill);
+  const suggestSkillEvaluationPatch = useRuntimeStore((s) => s.suggestSkillEvaluationPatch);
   const createMcpTool = useRuntimeStore((s) => s.createMcpTool);
   const createMemory = useRuntimeStore((s) => s.createMemory);
   const createSessionAndAssembleContext = useRuntimeStore((s) => s.createSessionAndAssembleContext);
@@ -144,6 +146,55 @@ export default function RuntimePage() {
         <ResourceList items={skills.map((s) => `${s.name} · ${s.description}`)} />
       </Panel>
 
+      <Panel title="Skill Evaluation" icon={<Sparkles size={17} />}>
+        <div className="mb-3 grid grid-cols-3 gap-2">
+          <Metric label="Records" value={skillEvaluations.length} />
+          <Metric label="Evaluated" value={skillEvaluations.filter((item) => item.status !== "pending").length} />
+          <Metric label="Applied" value={skillEvaluations.filter((item) => item.applied).length} />
+        </div>
+        <div className="space-y-2">
+          {skillEvaluations.length === 0 ? (
+            <p className="rounded-lg border border-dashed border-[#dfe4ee] bg-[#f8fafc] px-3 py-3 text-sm text-[#667085]">
+              暂无 Skill 调用评价记录。只有真正加载并使用 Skill 后才会记录。
+            </p>
+          ) : null}
+          {skillEvaluations.slice(0, 5).map((evaluation) => (
+            <div key={evaluation.evaluation_id} className="rounded-lg border border-[#dfe4ee] bg-white p-3 text-sm">
+              <div className="flex items-center justify-between gap-3">
+                <div className="min-w-0">
+                  <div className="font-medium text-[#172033]">{evaluation.skill_id}</div>
+                  <div className="mt-1 truncate text-xs text-[#667085]">{evaluation.user_input}</div>
+                </div>
+                <span className="shrink-0 rounded-full bg-[#eef4ff] px-2 py-1 text-xs font-medium text-[#2f6feb]">
+                  {evaluation.score === null ? evaluation.status : `${Math.round(evaluation.score * 100)}%`}
+                </span>
+              </div>
+              {evaluation.proposed_skill_patch ? (
+                <pre className="mt-2 max-h-28 overflow-auto rounded-md bg-[#f8fafc] p-2 text-xs leading-5 text-[#344054]">
+                  {evaluation.proposed_skill_patch}
+                </pre>
+              ) : (
+                <button
+                  className="mt-2 inline-flex items-center gap-1.5 rounded-md border border-[#cfd7e6] bg-white px-2.5 py-1.5 text-xs font-medium text-[#172033] transition hover:border-[#2f6feb]"
+                  onClick={async () => {
+                    try {
+                      await suggestSkillEvaluationPatch(workspace.userId, evaluation.evaluation_id);
+                      showToast("success", "已生成候选改进建议。");
+                    } catch (error) {
+                      showToast("error", error instanceof Error ? error.message : "生成建议失败。");
+                    }
+                  }}
+                  type="button"
+                >
+                  <Sparkles size={13} />
+                  生成改进建议
+                </button>
+              )}
+            </div>
+          ))}
+        </div>
+      </Panel>
+
       {/* MCP Tools */}
       <Panel title="MCP Tools" icon={<Server size={17} />}>
         <TextInput
@@ -223,7 +274,7 @@ export default function RuntimePage() {
       {/* Gateway */}
       <Panel title="Gateway" icon={<ShieldCheck size={17} />}>
         <p className="mb-3 text-sm leading-6 text-[#667085]">
-          通过统一网关调用 Mock LLM，并查看 prefix hash 与调用日志。
+          通过统一网关调用当前组织已配置的真实模型供应商，并查看 prefix hash 与调用日志。
         </p>
         <PrimaryButton
           busy={busy}

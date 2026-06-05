@@ -20,12 +20,14 @@ class LLMCallerAdapter:
     def __init__(
         self,
         gateway: LLMGateway | None = None,
-        provider: str = "mock",
-        model: str = "mock-model",
+        provider: str = "",
+        model: str = "",
         org_id: str = "",
         actor_user_id: str = "",
     ) -> None:
         self.gateway = gateway or llm_gateway
+        if not provider or not model:
+            raise ValueError("LLMCallerAdapter 需要真实模型供应商和模型名称")
         self.provider = provider
         self.model = model
         self.org_id = org_id
@@ -110,11 +112,13 @@ updated_at: 更新时间
     def __init__(
         self,
         gateway: LLMGateway | None = None,
-        provider: str = "mock",
-        model: str = "mock-model",
+        provider: str = "",
+        model: str = "",
         org_id: str = "",
     ) -> None:
         self.gateway = gateway or llm_gateway
+        if not provider or not model:
+            raise ValueError("SkillEvolverLLMCaller 需要真实模型供应商和模型名称")
         self.provider = provider
         self.model = model
         self.org_id = org_id

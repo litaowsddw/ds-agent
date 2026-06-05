@@ -48,8 +48,8 @@ class AgentRuntime:
     kind: AgentKind = AgentKind.USER_SUB
 
     # 模型配置
-    model_provider: str = "mock"
-    model_name: str = "mock-model"
+    model_provider: str = ""
+    model_name: str = ""
 
     # Workspace ID
     workspace_id: str = ""
@@ -280,7 +280,7 @@ class AgentRuntime:
     async def _direct_chat(self, user_input: str, session_id: str | None = None) -> dict[str, Any]:
         """普通 Agent 直接调用 LLM。"""
         if not self.llm_caller:
-            return {"response": f"[Agent {self.agent_id}] {user_input}", "mode": "mock"}
+            return {"error": "Agent 未配置真实 LLM 调用器", "mode": "error"}
 
         try:
             response_text = await self.llm_caller.call(prompt=user_input, temperature=0.3)

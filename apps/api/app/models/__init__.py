@@ -21,6 +21,7 @@ from app.models.runtime import (
     MemoryModel,
     ModelProviderModel,
     BackgroundAgentModel,
+    SkillEvaluationModel,
 )
 from app.models.workflow import (
     WorkflowModel,
@@ -50,6 +51,7 @@ __all__ = [
     "MemoryModel",
     "ModelProviderModel",
     "BackgroundAgentModel",
+    "SkillEvaluationModel",
     "WorkflowModel",
     "WorkflowVersionModel",
     "WorkflowRunModel",

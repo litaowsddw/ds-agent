@@ -1,8 +1,3 @@
-/** 自定义 React Flow 节点基础组件。
-
-所有自定义节点共享的基础样式：圆角卡片、图标、标签、连接手柄。
- */
-
 "use client";
 
 import { memo } from "react";
@@ -12,56 +7,82 @@ export interface BaseNodeData extends Record<string, unknown> {
   label: string;
   icon?: React.ReactNode;
   description?: string;
+  capability?: "executable" | "schema";
 }
 
-/** 节点颜色配置 */
 const nodeThemes: Record<string, { bg: string; border: string; iconBg: string; text: string }> = {
   start: { bg: "bg-[#f0fdf4]", border: "border-[#86efac]", iconBg: "bg-[#22c55e]", text: "text-[#166534]" },
   end: { bg: "bg-[#fef2f2]", border: "border-[#fca5a5]", iconBg: "bg-[#ef4444]", text: "text-[#991b1b]" },
   llm: { bg: "bg-[#eef4ff]", border: "border-[#93c5fd]", iconBg: "bg-[#3b82f6]", text: "text-[#1e40af]" },
   rag: { bg: "bg-[#fefce8]", border: "border-[#fde047]", iconBg: "bg-[#eab308]", text: "text-[#854d0e]" },
   tool: { bg: "bg-[#faf5ff]", border: "border-[#d8b4fe]", iconBg: "bg-[#a855f7]", text: "text-[#6b21a8]" },
+  condition: { bg: "bg-[#f8fafc]", border: "border-[#cbd5e1]", iconBg: "bg-[#475569]", text: "text-[#334155]" },
+  http: { bg: "bg-[#ecfeff]", border: "border-[#67e8f9]", iconBg: "bg-[#0891b2]", text: "text-[#155e75]" },
+  code: { bg: "bg-[#f5f5f4]", border: "border-[#d6d3d1]", iconBg: "bg-[#57534e]", text: "text-[#44403c]" },
+  variable: { bg: "bg-[#f0fdfa]", border: "border-[#5eead4]", iconBg: "bg-[#0d9488]", text: "text-[#115e59]" },
+  template: { bg: "bg-[#fff7ed]", border: "border-[#fdba74]", iconBg: "bg-[#f97316]", text: "text-[#9a3412]" },
+  human: { bg: "bg-[#fdf2f8]", border: "border-[#f9a8d4]", iconBg: "bg-[#db2777]", text: "text-[#9d174d]" },
 };
 
+function getNodeStatus(nodeType: string, data: Record<string, unknown>) {
+  const config = (data.config ?? {}) as Record<string, unknown>;
+  if (data.capability === "schema") return { label: "schema", tone: "bg-[#f8fafc] text-[#667085]" };
+  if (nodeType === "llm" && (!config.provider || !config.model)) {
+    return { label: "setup", tone: "bg-[#fff7ed] text-[#c2410c]" };
+  }
+  if (nodeType === "rag" && !config.kb_id) {
+    return { label: "setup", tone: "bg-[#fff7ed] text-[#c2410c]" };
+  }
+  if (nodeType === "tool" && !config.tool_id) {
+    return { label: "setup", tone: "bg-[#fff7ed] text-[#c2410c]" };
+  }
+  return { label: "ready", tone: "bg-[#ecfdf3] text-[#027a48]" };
+}
+
 function BaseNode({ data, type }: NodeProps & { type?: string }) {
+  const nodeType = type ?? "llm";
   const label = String(data.label ?? "");
-  const theme = nodeThemes[type ?? "llm"] ?? nodeThemes.llm;
+  const theme = nodeThemes[nodeType] ?? nodeThemes.llm;
+  const status = getNodeStatus(nodeType, data);
 
   return (
     <div
-      className={`min-w-[140px] rounded-xl border-2 ${theme.border} ${theme.bg} px-4 py-3 shadow-sm transition-shadow hover:shadow-md`}
+      className={`min-w-[188px] rounded-lg border-2 ${theme.border} ${theme.bg} px-4 py-3 shadow-sm transition-shadow hover:shadow-md`}
     >
-      {/* 输入手柄 - 非起始节点 */}
-      {type !== "start" && (
+      {nodeType !== "start" ? (
         <Handle
           type="target"
           position={Position.Left}
           className="!h-3 !w-3 !rounded-full !border-2 !border-white !bg-[#94a3b8]"
         />
-      )}
+      ) : null}
 
       <div className="flex items-center gap-2">
-        <div
-          className={`grid h-7 w-7 place-items-center rounded-md ${theme.iconBg} text-white`}
-        >
-          {data.icon as React.ReactNode ?? null}
+        <div className={`grid h-8 w-8 shrink-0 place-items-center rounded-md ${theme.iconBg} text-xs font-semibold text-white`}>
+          {String(label).slice(0, 2).toUpperCase()}
         </div>
-        <div>
-          <div className={`text-sm font-semibold ${theme.text}`}>{label}</div>
-          {data.description ? (
-            <div className="text-xs text-[#667085]">{String(data.description)}</div>
-          ) : null}
+        <div className="min-w-0">
+          <div className={`truncate text-sm font-semibold ${theme.text}`}>{label}</div>
+          {data.description ? <div className="truncate text-xs text-[#667085]">{String(data.description)}</div> : null}
         </div>
       </div>
 
-      {/* 输出手柄 - 非结束节点 */}
-      {type !== "end" && (
+      <div className="mt-3 flex items-center justify-between gap-2">
+        <span className={`rounded px-2 py-0.5 text-[10px] font-semibold uppercase tracking-normal ${status.tone}`}>
+          {status.label}
+        </span>
+        <span className="truncate text-[10px] font-medium text-[#667085]">
+          {nodeType}
+        </span>
+      </div>
+
+      {nodeType !== "end" ? (
         <Handle
           type="source"
           position={Position.Right}
           className="!h-3 !w-3 !rounded-full !border-2 !border-white !bg-[#94a3b8]"
         />
-      )}
+      ) : null}
     </div>
   );
 }

@@ -65,8 +65,8 @@ def execute_subagent_task(self, run_data: dict[str, Any], org_id: str) -> dict[s
             "name": agent.name,
             "description": agent.description,
             "system_prompt": getattr(agent, "system_prompt", ""),
-            "model_provider": getattr(agent, "model_provider", "mock"),
-            "model_name": getattr(agent, "model_name", "mock-model"),
+            "model_provider": getattr(agent, "model_provider", "") or "",
+            "model_name": getattr(agent, "model_name", "") or "",
         }
 
         # 3. 调用 LLM Gateway
@@ -74,6 +74,12 @@ def execute_subagent_task(self, run_data: dict[str, Any], org_id: str) -> dict[s
 
         prompt = task
         system_prompt = agent_config.get("system_prompt", "")
+        if not agent_config.get("model_provider") or not agent_config.get("model_name"):
+            return {
+                "run_id": run_id,
+                "status": "failed",
+                "error_message": "SubAgent 未配置真实模型供应商和模型",
+            }
 
         if system_prompt:
             prompt = f"[System]\n{system_prompt}\n\n[User]\n{task}"
@@ -81,8 +87,8 @@ def execute_subagent_task(self, run_data: dict[str, Any], org_id: str) -> dict[s
         # 同步调用（Celery worker 中）
         import asyncio
         request = LLMCallRequest(
-            provider=agent_config.get("model_provider", "mock"),
-            model=agent_config.get("model_name", "mock-model"),
+            provider=agent_config.get("model_provider", ""),
+            model=agent_config.get("model_name", ""),
             prompt=prompt,
             parameters={"temperature": 0.3},
             metadata={
@@ -252,16 +258,16 @@ def supervisor_run_cycle(
         from packages.runtime.supervisor import SupervisorAgent
 
         adapter = LLMCallerAdapter(
-            provider=getattr(agent, "model_provider", "mock"),
-            model=getattr(agent, "model_name", "mock-model"),
+            provider=getattr(agent, "model_provider", "") or "",
+            model=getattr(agent, "model_name", "") or "",
             org_id=org_id,
         )
 
         supervisor = SupervisorAgent(
             agent_id=supervisor_agent_id,
             org_id=org_id,
-            model_provider=getattr(agent, "model_provider", "mock"),
-            model_name=getattr(agent, "model_name", "mock-model"),
+            model_provider=getattr(agent, "model_provider", "") or "",
+            model_name=getattr(agent, "model_name", "") or "",
             llm_caller=adapter,
         )
 

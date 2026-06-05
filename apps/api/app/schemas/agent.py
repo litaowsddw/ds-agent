@@ -13,6 +13,24 @@ class AgentCreateRequest(BaseModel):
     team_id: str | None = Field(default=None, description="Agent 所属群组 ID")
     name: str = Field(min_length=1, max_length=80, description="Agent 名称")
     description: str = Field(default="", max_length=500, description="Agent 描述")
+    model_provider: str | None = Field(default=None, description="默认模型供应商 key")
+    model_name: str | None = Field(default=None, description="默认模型名称")
+    system_prompt: str | None = Field(default=None, description="系统提示词")
+    temperature: float | None = Field(default=0.0, ge=0, le=2, description="采样温度")
+    max_tokens: int | None = Field(default=None, ge=128, le=32768, description="最大输出 tokens")
+
+
+class AgentUpdateRequest(BaseModel):
+    """更新 Agent 参数请求。"""
+
+    actor_user_id: str = Field(description="操作者用户 ID")
+    name: str | None = Field(default=None, min_length=1, max_length=80, description="Agent 名称")
+    description: str | None = Field(default=None, max_length=500, description="Agent 描述")
+    model_provider: str | None = Field(default=None, description="默认模型供应商 key")
+    model_name: str | None = Field(default=None, description="默认模型名称")
+    system_prompt: str | None = Field(default=None, description="系统提示词")
+    temperature: float | None = Field(default=None, ge=0, le=2, description="采样温度")
+    max_tokens: int | None = Field(default=None, ge=128, le=32768, description="最大输出 tokens")
 
 
 class AgentResponse(BaseModel):
@@ -23,6 +41,12 @@ class AgentResponse(BaseModel):
     team_id: str | None
     name: str
     description: str
+    kind: str = "USER_SUB"
+    model_provider: str | None = None
+    model_name: str | None = None
+    system_prompt: str | None = None
+    temperature: float | None = None
+    max_tokens: int | None = None
     created_by: str
 
 

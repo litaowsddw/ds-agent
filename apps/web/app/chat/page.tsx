@@ -11,12 +11,13 @@ export default function ChatPage() {
   const [activeTab, setActiveTab] = useState<"chat" | "evolver">("chat");
 
   const orgId = workspace?.orgId || "";
+  const actorUserId = workspace?.userId || "";
   const agentId = selectedAgentId || "";
 
   return (
-    <div className="flex h-full">
+    <div className="flex h-full min-h-0">
       {/* 左侧：Agent 列表 */}
-      <div className="w-64 border-r border-gray-200 dark:border-gray-700 flex flex-col">
+      <div className="flex w-64 flex-col border-r border-gray-200 dark:border-gray-700">
         <div className="px-4 py-3 border-b border-gray-200 dark:border-gray-700">
           <h2 className="text-sm font-medium text-gray-900 dark:text-gray-100">Agents</h2>
         </div>
@@ -40,7 +41,7 @@ export default function ChatPage() {
       </div>
 
       {/* 右侧：Chat/Evolver */}
-      <div className="flex-1 flex flex-col">
+      <div className="flex min-h-0 flex-1 flex-col">
         {/* Tab 切换 */}
         <div className="flex border-b border-gray-200 dark:border-gray-700">
           <button
@@ -66,10 +67,10 @@ export default function ChatPage() {
         </div>
 
         {/* 内容区 */}
-        <div className="flex-1 overflow-hidden">
+        <div className="min-h-0 flex-1 overflow-hidden">
           {agentId ? (
             activeTab === "chat" ? (
-              <ChatPanel agentId={agentId} orgId={orgId} />
+              <ChatPanel agentId={agentId} orgId={orgId} actorUserId={actorUserId} />
             ) : (
               <div className="p-4">
                 <EvolverPanel agentId={agentId} orgId={orgId} />

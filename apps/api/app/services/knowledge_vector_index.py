@@ -7,11 +7,14 @@
 from __future__ import annotations
 
 import hashlib
+import json
 import math
 import os
 import re
 from dataclasses import dataclass
 from typing import Protocol
+from urllib.error import HTTPError, URLError
+from urllib.request import Request, urlopen
 
 
 @dataclass(slots=True)
@@ -131,6 +134,58 @@ class DeterministicEmbeddingProvider:
             if re.fullmatch(r"[\u4e00-\u9fff]+", term) and len(term) > 2:
                 tokens.extend(term[index : index + 2] for index in range(len(term) - 1))
         return tokens
+
+
+class OllamaEmbeddingProvider:
+    """Embedding provider backed by a local Ollama server."""
+
+    def __init__(
+        self,
+        base_url: str = "http://127.0.0.1:11434",
+        model_name: str = "bge-m3:latest",
+        dimension: int = 1024,
+        timeout_seconds: int = 30,
+    ) -> None:
+        self.base_url = base_url.rstrip("/")
+        self.model_name = model_name
+        self.dimension = dimension
+        self.timeout_seconds = timeout_seconds
+
+    def embed_texts(self, texts: list[str]) -> list[list[float]]:
+        return [self._embed_one(text) for text in texts]
+
+    def _embed_one(self, text: str) -> list[float]:
+        payload = {"model": self.model_name, "prompt": text}
+        request = Request(
+            url=f"{self.base_url}/api/embeddings",
+            data=json.dumps(payload).encode("utf-8"),
+            headers={"Content-Type": "application/json"},
+            method="POST",
+        )
+        try:
+            with urlopen(request, timeout=self.timeout_seconds) as response:
+                body = json.loads(response.read().decode("utf-8"))
+        except HTTPError as exc:
+            detail = exc.read().decode("utf-8", errors="ignore")
+            raise RuntimeError(f"Ollama embedding HTTP {exc.code}: {detail[:300]}") from exc
+        except URLError as exc:
+            raise RuntimeError(f"Ollama embedding network error: {exc.reason}") from exc
+
+        embedding = body.get("embedding")
+        if not isinstance(embedding, list):
+            raise RuntimeError("Ollama embedding response missing embedding list")
+        vector = [float(value) for value in embedding]
+        if len(vector) != self.dimension:
+            raise RuntimeError(
+                f"Ollama embedding dimension mismatch: expected {self.dimension}, got {len(vector)}"
+            )
+        return self._normalize(vector)
+
+    def _normalize(self, vector: list[float]) -> list[float]:
+        norm = math.sqrt(sum(value * value for value in vector))
+        if norm == 0:
+            return vector
+        return [value / norm for value in vector]
 
 
 class InMemoryVectorIndex:
@@ -308,6 +363,14 @@ def build_embedding_provider_from_env() -> EmbeddingProvider:
 
     dimension = int(os.getenv("AGENTFLOW_EMBEDDING_DIMENSION", "256"))
     model_name = os.getenv("AGENTFLOW_EMBEDDING_MODEL", "local-hash-embedding-v1")
+    provider = os.getenv("AGENTFLOW_EMBEDDING_PROVIDER", "local-hash").lower()
+    if provider == "ollama":
+        return OllamaEmbeddingProvider(
+            base_url=os.getenv("AGENTFLOW_EMBEDDING_BASE_URL", "http://127.0.0.1:11434"),
+            model_name=model_name,
+            dimension=dimension,
+            timeout_seconds=int(os.getenv("AGENTFLOW_EMBEDDING_TIMEOUT_SECONDS", "30")),
+        )
     return DeterministicEmbeddingProvider(dimension=dimension, model_name=model_name)
 
 

@@ -11,6 +11,9 @@ dist/
 build/
 .env
 .agentflow/
+.tmp/
+test-artifacts/
+*.tsbuildinfo
 *.pyc
 *.log
 coverage/

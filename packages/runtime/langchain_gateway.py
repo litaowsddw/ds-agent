@@ -61,8 +61,8 @@ class GatewayChatModel(BaseChatModel):
     """
 
     gateway: Any = None  # LLMGateway 实例
-    provider: str = "mock"
-    model: str = "mock-model"
+    provider: str = ""
+    model: str = ""
     org_id: str = ""
     actor_user_id: str = ""
     bound_tools: list[dict[str, Any]] = []
@@ -75,8 +75,8 @@ class GatewayChatModel(BaseChatModel):
     def from_gateway(
         cls,
         gateway: Any,
-        provider: str = "mock",
-        model: str = "mock-model",
+        provider: str = "",
+        model: str = "",
         org_id: str = "",
         actor_user_id: str = "",
     ) -> "GatewayChatModel":
@@ -152,7 +152,9 @@ class GatewayChatModel(BaseChatModel):
     ) -> ChatResult:
         """异步生成。"""
         if not self.gateway:
-            return ChatResult(generations=[ChatGeneration(message=AIMessage(content="[GatewayChatModel] 无 Gateway 配置"))])
+            raise ValueError("GatewayChatModel 未配置真实 Gateway")
+        if not self.provider or not self.model:
+            raise ValueError("GatewayChatModel 未配置真实模型供应商和模型")
 
         from apps.api.app.gateway.llm import LLMCallRequest
 
@@ -178,7 +180,7 @@ class GatewayChatModel(BaseChatModel):
             response = await self.gateway.generate(request)
         except Exception as exc:
             logger.error(f"Gateway 调用失败: {exc}")
-            return ChatResult(generations=[ChatGeneration(message=AIMessage(content=f"[Gateway 错误] {exc}"))])
+            raise
 
         # 尝试解析 tool_calls
         tool_calls = self._extract_tool_calls(response.raw_response if hasattr(response, "raw_response") else {})

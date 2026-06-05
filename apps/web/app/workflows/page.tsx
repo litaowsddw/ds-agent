@@ -1,321 +1,498 @@
-/** Workflow 编辑页面。
-
-Dify 风格的工作流编辑器：左侧画布 + 右侧配置面板。
-使用自定义 React Flow 节点。
- */
+/** Dify-style workflow workbench backed by real API data. */
 
 "use client";
 
 import "@xyflow/react/dist/style.css";
 
-import { useEffect } from "react";
+import { Background, Controls, MiniMap, ReactFlow, type NodeMouseHandler } from "@xyflow/react";
 import {
-  Background,
-  Controls,
-  MiniMap,
-  ReactFlow,
-} from "@xyflow/react";
-import {
-  Bot,
   Database,
-  FileText,
   GitBranch,
+  MousePointer2,
   Play,
+  Plus,
+  RotateCcw,
   Save,
+  Search,
   Send,
+  Sparkles,
+  Trash2,
   Workflow,
 } from "lucide-react";
-import { useWorkspaceStore } from "@/stores/workspace";
-import { useWorkflowStore } from "@/stores/workflow";
-import { useRuntimeStore } from "@/stores/runtime";
-import { useKnowledgeStore } from "@/stores/knowledge";
+import { useEffect, useMemo, useState } from "react";
 import { showToast } from "@/components/layout/AppLayout";
 import { nodeTypes } from "@/components/nodes";
-import Panel from "@/components/ui/Panel";
-import { TextInput, TextArea, SelectInput } from "@/components/ui/Form";
-import { PrimaryButton, SecondaryButton } from "@/components/ui/Button";
-import { Metric, EmptyText } from "@/components/ui/DataDisplay";
-import { NODE_PALETTE } from "@/lib/constants";
+import { PrimaryButton } from "@/components/ui/Button";
+import { EmptyText, Metric } from "@/components/ui/DataDisplay";
+import { SelectInput, TextArea, TextInput } from "@/components/ui/Form";
+import { NODE_PALETTE, type WorkflowPaletteItem } from "@/lib/constants";
+import { useKnowledgeStore } from "@/stores/knowledge";
+import { useRuntimeStore } from "@/stores/runtime";
+import { useWorkflowStore } from "@/stores/workflow";
+import { useWorkspaceStore } from "@/stores/workspace";
+import type { CustomNodeData, NodeRun } from "@/types/workflow";
+
+function stringValue(value: unknown): string {
+  if (value === undefined || value === null) return "";
+  if (typeof value === "string") return value;
+  if (typeof value === "number" || typeof value === "boolean") return String(value);
+  return JSON.stringify(value, null, 2);
+}
+
+function numberValue(value: unknown, fallback: number): string {
+  if (typeof value === "number") return String(value);
+  if (typeof value === "string" && value.trim()) return value;
+  return String(fallback);
+}
+
+function groupedPalette(items: WorkflowPaletteItem[]) {
+  return items.reduce<Record<string, WorkflowPaletteItem[]>>((groups, item) => {
+    groups[item.group] = [...(groups[item.group] ?? []), item];
+    return groups;
+  }, {});
+}
 
 export default function WorkflowsPage() {
-  const workspace = useWorkspaceStore((s) => s.workspace);
-  const agents = useWorkspaceStore((s) => s.agents);
-  const selectedAgentId = useWorkspaceStore((s) => s.selectedAgentId);
-  const busy = useWorkspaceStore((s) => s.busy);
+  const workspace = useWorkspaceStore((state) => state.workspace);
+  const selectedAgentId = useWorkspaceStore((state) => state.selectedAgentId);
+  const busy = useWorkspaceStore((state) => state.busy);
 
-  const nodes = useWorkflowStore((s) => s.nodes);
-  const edges = useWorkflowStore((s) => s.edges);
-  const workflows = useWorkflowStore((s) => s.workflows);
-  const selectedWorkflowId = useWorkflowStore((s) => s.selectedWorkflowId);
-  const workflowForm = useWorkflowStore((s) => s.workflowForm);
-  const llmNodeForm = useWorkflowStore((s) => s.llmNodeForm);
-  const ragNodeForm = useWorkflowStore((s) => s.ragNodeForm);
-  const toolNodeForm = useWorkflowStore((s) => s.toolNodeForm);
+  const nodes = useWorkflowStore((state) => state.nodes);
+  const edges = useWorkflowStore((state) => state.edges);
+  const workflows = useWorkflowStore((state) => state.workflows);
+  const runs = useWorkflowStore((state) => state.runs);
+  const nodeRuns = useWorkflowStore((state) => state.nodeRuns);
+  const selectedWorkflowId = useWorkflowStore((state) => state.selectedWorkflowId);
+  const selectedNodeId = useWorkflowStore((state) => state.selectedNodeId);
+  const workflowForm = useWorkflowStore((state) => state.workflowForm);
+  const onNodesChange = useWorkflowStore((state) => state.onNodesChange);
+  const onEdgesChange = useWorkflowStore((state) => state.onEdgesChange);
+  const onConnect = useWorkflowStore((state) => state.onConnect);
+  const addNode = useWorkflowStore((state) => state.addNode);
+  const removeSelectedNode = useWorkflowStore((state) => state.removeSelectedNode);
+  const setSelectedNodeId = useWorkflowStore((state) => state.setSelectedNodeId);
+  const updateSelectedNodeConfig = useWorkflowStore((state) => state.updateSelectedNodeConfig);
+  const setWorkflowForm = useWorkflowStore((state) => state.setWorkflowForm);
+  const setSelectedWorkflowId = useWorkflowStore((state) => state.setSelectedWorkflowId);
+  const createWorkflow = useWorkflowStore((state) => state.createWorkflow);
+  const saveWorkflowDraft = useWorkflowStore((state) => state.saveWorkflowDraft);
+  const publishWorkflow = useWorkflowStore((state) => state.publishWorkflow);
+  const runWorkflow = useWorkflowStore((state) => state.runWorkflow);
+  const refreshWorkflows = useWorkflowStore((state) => state.refreshWorkflows);
+  const refreshRuns = useWorkflowStore((state) => state.refreshRuns);
+  const resetCanvas = useWorkflowStore((state) => state.resetCanvas);
 
-  const onNodesChange = useWorkflowStore((s) => s.onNodesChange);
-  const onEdgesChange = useWorkflowStore((s) => s.onEdgesChange);
-  const onConnect = useWorkflowStore((s) => s.onConnect);
-  const addNode = useWorkflowStore((s) => s.addNode);
-  const setLLMNodeForm = useWorkflowStore((s) => s.setLLMNodeForm);
-  const setRAGNodeForm = useWorkflowStore((s) => s.setRAGNodeForm);
-  const setToolNodeForm = useWorkflowStore((s) => s.setToolNodeForm);
-  const setWorkflowForm = useWorkflowStore((s) => s.setWorkflowForm);
-  const setSelectedWorkflowId = useWorkflowStore((s) => s.setSelectedWorkflowId);
-  const createWorkflow = useWorkflowStore((s) => s.createWorkflow);
-  const saveWorkflowDraft = useWorkflowStore((s) => s.saveWorkflowDraft);
-  const publishWorkflow = useWorkflowStore((s) => s.publishWorkflow);
-  const runWorkflow = useWorkflowStore((s) => s.runWorkflow);
-  const getWorkflowDraft = useWorkflowStore((s) => s.getWorkflowDraft);
+  const modelProviders = useRuntimeStore((state) => state.modelProviders);
+  const mcpTools = useRuntimeStore((state) => state.mcpTools);
+  const refreshRuntimeData = useRuntimeStore((state) => state.refreshRuntimeData);
 
-  const modelProviders = useRuntimeStore((s) => s.modelProviders);
-  const selectedProviderKey = useRuntimeStore((s) => s.selectedProviderKey);
-  const selectedModel = useRuntimeStore((s) => s.selectedModel);
-  const setSelectedProviderKey = useRuntimeStore((s) => s.setSelectedProviderKey);
-  const setSelectedModel = useRuntimeStore((s) => s.setSelectedModel);
-  const mcpTools = useRuntimeStore((s) => s.mcpTools);
+  const knowledgeBases = useKnowledgeStore((state) => state.knowledgeBases);
+  const refreshKbs = useKnowledgeStore((state) => state.refreshKbs);
 
-  const knowledgeBases = useKnowledgeStore((s) => s.knowledgeBases);
-  const selectedKbId = useKnowledgeStore((s) => s.selectedKbId);
-  const setSelectedKbId = useKnowledgeStore((s) => s.setSelectedKbId);
+  const selectedNode = nodes.find((node) => node.id === selectedNodeId);
+  const selectedWorkflow = workflows.find((workflow) => workflow.workflow_id === selectedWorkflowId);
+  const [nodeSearch, setNodeSearch] = useState("");
+  const paletteGroups = useMemo(() => {
+    const query = nodeSearch.trim().toLowerCase();
+    const items = query
+      ? NODE_PALETTE.filter((item) =>
+          `${item.label} ${item.description} ${item.group}`.toLowerCase().includes(query)
+        )
+      : NODE_PALETTE;
+    return groupedPalette(items);
+  }, [nodeSearch]);
 
-  const modelOptions =
-    selectedProviderKey === "mock"
-      ? ["mock-model"]
-      : modelProviders.find((p) => p.provider_key === selectedProviderKey)?.models ?? ["mock-model"];
-
-  // 初始化刷新数据
   useEffect(() => {
-    if (workspace) {
-      const runtimeRefresh = useRuntimeStore.getState().refreshRuntimeData;
-      void runtimeRefresh(workspace.orgId, workspace.userId, selectedAgentId || undefined);
-      void useKnowledgeStore.getState().refreshKbs(workspace.orgId, workspace.userId);
-      void useWorkflowStore.getState().refreshWorkflows(workspace.orgId, workspace.userId);
-      void useWorkflowStore.getState().refreshRuns(workspace.orgId, workspace.userId);
-    }
-  }, [workspace, selectedAgentId]);
+    if (!workspace) return;
+    void refreshRuntimeData(workspace.orgId, workspace.userId, selectedAgentId || undefined);
+    void refreshKbs(workspace.orgId, workspace.userId);
+    void refreshWorkflows(workspace.orgId, workspace.userId);
+    void refreshRuns(workspace.orgId, workspace.userId);
+  }, [workspace, selectedAgentId, refreshRuntimeData, refreshKbs, refreshWorkflows, refreshRuns]);
+
+  const handleNodeClick: NodeMouseHandler = (_, node) => {
+    setSelectedNodeId(node.id);
+  };
 
   if (!workspace) {
-    return (
-      <div className="flex h-64 items-center justify-center text-sm text-[#667085]">
-        请先在首页创建工作空间
-      </div>
-    );
+    return <div className="flex h-64 items-center justify-center text-sm text-[#667085]">Create a workspace first</div>;
   }
 
   return (
-    <div className="grid gap-6 xl:grid-cols-[1fr_380px]">
-      {/* 画布 */}
-      <div className="space-y-4">
-        <div className="h-[calc(100vh-12rem)] overflow-hidden rounded-xl border border-[#dfe4ee] bg-white shadow-sm">
-          <div className="border-b border-[#dfe4ee] px-4 py-3">
-            <div className="flex items-center justify-between">
-              <div>
-                <h3 className="text-sm font-semibold text-[#172033]">Workflow 画布</h3>
-                <p className="mt-0.5 text-xs text-[#667085]">
-                  拖拽节点、连线，然后保存草稿、发布并运行
-                </p>
-              </div>
-              <div className="flex gap-2">
-                {NODE_PALETTE.map((item) => (
+    <div className="grid h-[calc(100vh-7rem)] min-h-[720px] gap-4 xl:grid-cols-[280px_minmax(0,1fr)_400px]">
+      <aside className="min-h-0 overflow-hidden rounded-lg border border-[#dfe4ee] bg-white">
+        <div className="border-b border-[#dfe4ee] px-4 py-3">
+          <div className="flex items-center gap-2 text-sm font-semibold text-[#172033]">
+            <Sparkles size={15} />
+            Nodes
+          </div>
+          <div className="mt-1 text-xs text-[#667085]">Click a node to insert it after the selected step.</div>
+          <label className="mt-3 flex h-9 items-center gap-2 rounded-lg border border-[#dfe4ee] bg-[#f8fafc] px-3 text-sm">
+            <Search size={15} className="text-[#667085]" />
+            <input
+              className="min-w-0 flex-1 bg-transparent outline-none placeholder:text-[#98a2b3]"
+              onChange={(event) => setNodeSearch(event.target.value)}
+              placeholder="Search nodes"
+              value={nodeSearch}
+            />
+          </label>
+        </div>
+        <div className="h-[calc(100%-112px)] overflow-y-auto px-3 py-3">
+          {Object.entries(paletteGroups).map(([group, items]) => (
+            <div key={group} className="mb-4">
+              <div className="mb-2 text-[11px] font-semibold uppercase tracking-normal text-[#667085]">{group}</div>
+              <div className="space-y-2">
+                {items.map((item) => (
                   <button
-                    key={item.label}
-                    className="rounded-lg border border-[#dfe4ee] bg-white px-3 py-1.5 text-xs font-medium text-[#344054] transition hover:border-[#2f6feb] hover:text-[#2f6feb]"
-                    onClick={() => addNode(item.label, item.type)}
+                    key={item.type}
                     type="button"
+                    onClick={() => addNode(item)}
+                    className="w-full rounded-lg border border-[#dfe4ee] bg-white px-3 py-2 text-left transition hover:border-[#2f6feb] hover:bg-[#f8fbff] hover:shadow-sm"
                   >
-                    + {item.label}
+                    <div className="flex items-center justify-between gap-2">
+                      <span className="text-sm font-medium text-[#172033]">{item.label}</span>
+                      <span className={`rounded px-1.5 py-0.5 text-[10px] font-semibold ${item.capability === "executable" ? "bg-[#ecfdf3] text-[#027a48]" : "bg-[#f8fafc] text-[#667085]"}`}>
+                        {item.capability === "executable" ? "live" : "schema"}
+                      </span>
+                    </div>
+                    <div className="mt-1 text-xs leading-5 text-[#667085]">{item.description}</div>
                   </button>
                 ))}
               </div>
             </div>
+          ))}
+          {Object.keys(paletteGroups).length === 0 ? <EmptyText text="No matching nodes" /> : null}
+        </div>
+      </aside>
+
+      <main className="min-h-0 overflow-hidden rounded-lg border border-[#dfe4ee] bg-white">
+        <div className="flex items-center justify-between border-b border-[#dfe4ee] px-4 py-3">
+          <div>
+            <div className="text-sm font-semibold text-[#172033]">Workflow Canvas</div>
+            <div className="mt-1 text-xs text-[#667085]">
+              {selectedWorkflow ? selectedWorkflow.name : "Draft"} · {nodes.length} nodes · {edges.length} edges
+            </div>
           </div>
+          <div className="flex items-center gap-2">
+            <ActionButton icon={<RotateCcw size={14} />} label="Reset" onClick={resetCanvas} />
+            <button
+              type="button"
+              onClick={removeSelectedNode}
+              className="inline-flex h-9 w-9 items-center justify-center rounded-lg border border-[#cfd7e6] bg-white text-[#667085] transition hover:border-[#b42318] hover:text-[#b42318]"
+              title="Delete selected node"
+            >
+              <Trash2 size={16} />
+            </button>
+          </div>
+        </div>
+
+        <div className="relative h-[calc(100%-58px)] bg-[#f7f8fa]">
           <ReactFlow
-            nodes={nodes}
+            connectionLineStyle={{ stroke: "#2f6feb", strokeWidth: 2 }}
+            defaultEdgeOptions={{
+              animated: true,
+              style: { stroke: "#94a3b8", strokeWidth: 2 },
+              type: "smoothstep",
+            }}
             edges={edges}
-            onNodesChange={onNodesChange}
-            onEdgesChange={onEdgesChange}
-            onConnect={onConnect}
-            nodeTypes={nodeTypes}
             fitView
+            fitViewOptions={{ padding: 0.22 }}
+            nodeTypes={nodeTypes}
+            nodes={nodes}
+            onConnect={onConnect}
+            onEdgesChange={onEdgesChange}
+            onNodeClick={handleNodeClick}
+            onNodesChange={onNodesChange}
+            panOnScroll
+            selectionOnDrag
+            snapGrid={[20, 20]}
+            snapToGrid
           >
             <Background color="#d9e0ec" gap={18} />
             <Controls />
-            <MiniMap
-              pannable
-              zoomable
-              nodeStrokeWidth={3}
-              className="!rounded-lg !border !border-[#dfe4ee] !shadow-sm"
-            />
+            <MiniMap pannable zoomable className="!rounded-lg !border !border-[#dfe4ee] !shadow-sm" nodeStrokeWidth={3} />
           </ReactFlow>
+          <div className="pointer-events-none absolute left-4 top-4 flex items-center gap-2 rounded-lg border border-[#dfe4ee] bg-white/90 px-3 py-2 text-xs text-[#667085] shadow-sm">
+            <MousePointer2 size={14} />
+            Select a node, then add from the left to insert into the chain.
+          </div>
         </div>
-      </div>
+      </main>
 
-      {/* 配置面板 */}
-      <div className="space-y-4">
-        <Panel title="Workflow 配置" icon={<Workflow size={17} />}>
-          <div className="space-y-3">
-            <TextInput
-              label="名称"
-              value={workflowForm.name}
-              onChange={(name) => setWorkflowForm({ ...workflowForm, name })}
-            />
-            <TextArea
-              label="描述"
-              rows={2}
-              value={workflowForm.description}
-              onChange={(description) => setWorkflowForm({ ...workflowForm, description })}
-            />
-            <TextArea
-              label="运行输入"
-              rows={3}
-              value={workflowForm.input}
-              onChange={(input) => setWorkflowForm({ ...workflowForm, input })}
-            />
-
-            {/* LLM 节点配置 */}
-            <div className="rounded-lg border border-[#93c5fd] bg-[#eef4ff] p-3">
-              <div className="mb-3 text-xs font-semibold text-[#1e40af]">LLM 节点模型</div>
-              <div className="grid gap-2 sm:grid-cols-2">
-                <SelectInput
-                  label="供应商"
-                  value={selectedProviderKey}
-                  options={[
-                    { label: "Mock / 本地测试", value: "mock" },
-                    ...modelProviders.map((p) => ({
-                      label: p.display_name,
-                      value: p.provider_key,
-                    })),
-                  ]}
-                  onChange={setSelectedProviderKey}
-                />
-                <SelectInput
-                  label="模型"
-                  value={selectedModel}
-                  options={modelOptions.map((m) => ({ label: m, value: m }))}
-                  onChange={setSelectedModel}
-                />
-              </div>
-              <TextArea
-                label="系统提示词"
-                rows={2}
-                value={llmNodeForm.systemPrompt}
-                onChange={(systemPrompt) => setLLMNodeForm({ ...llmNodeForm, systemPrompt })}
-              />
-              <TextArea
-                label="节点提示词"
-                rows={2}
-                value={llmNodeForm.prompt}
-                onChange={(prompt) => setLLMNodeForm({ ...llmNodeForm, prompt })}
-              />
-              <TextInput
-                label="Temperature"
-                value={llmNodeForm.temperature}
-                onChange={(temperature) => setLLMNodeForm({ ...llmNodeForm, temperature })}
-              />
+      <aside className="min-h-0 overflow-y-auto space-y-4">
+        <section className="rounded-lg border border-[#dfe4ee] bg-white">
+          <div className="border-b border-[#dfe4ee] px-4 py-3">
+            <div className="flex items-center gap-2 text-sm font-semibold text-[#172033]">
+              <Workflow size={16} />
+              Workflow
             </div>
-
-            {/* RAG 节点配置 */}
-            <div className="rounded-lg border border-[#fde047] bg-[#fefce8] p-3">
-              <div className="mb-3 text-xs font-semibold text-[#854d0e]">RAG 节点检索</div>
-              <SelectInput
-                label="知识库"
-                value={selectedKbId}
-                options={
-                  knowledgeBases.length > 0
-                    ? knowledgeBases.map((kb) => ({ label: kb.name, value: kb.kb_id }))
-                    : [{ label: "请先在 Knowledge 创建知识库", value: "" }]
-                }
-                onChange={setSelectedKbId}
-              />
-              <TextInput
-                label="Limit"
-                value={ragNodeForm.limit}
-                onChange={(limit) => setRAGNodeForm({ ...ragNodeForm, limit })}
-              />
+          </div>
+          <div className="space-y-3 p-4">
+            <div className="grid grid-cols-2 gap-2">
+              <Metric label="Workflows" value={workflows.length} />
+              <Metric label="Runs" value={runs.length} />
             </div>
-
-            {/* 操作按钮 */}
+            <TextInput label="Name" value={workflowForm.name} onChange={(name) => setWorkflowForm({ ...workflowForm, name })} />
+            <TextArea label="Description" rows={2} value={workflowForm.description} onChange={(description) => setWorkflowForm({ ...workflowForm, description })} />
+            <TextArea label="Run input" rows={3} value={workflowForm.input} onChange={(input) => setWorkflowForm({ ...workflowForm, input })} />
             <PrimaryButton
               busy={busy}
-              label="创建 Workflow"
+              icon={<Plus size={15} />}
+              label="Create"
               onClick={async () => {
                 try {
+                  if (!selectedAgentId) throw new Error("Select an agent first");
                   await createWorkflow(workspace.userId, selectedAgentId);
-                  showToast("success", "Workflow 已创建。");
+                  showToast("success", "Workflow created");
                 } catch (error) {
-                  showToast("error", error instanceof Error ? error.message : "创建失败。");
+                  showToast("error", error instanceof Error ? error.message : "Create failed");
                 }
               }}
             />
             <div className="grid grid-cols-3 gap-2">
-              <SecondaryButton
-                label="保存"
-                onClick={async () => {
-                  try {
-                    await saveWorkflowDraft(workspace.userId);
-                    showToast("success", "草稿已保存。");
-                  } catch (error) {
-                    showToast("error", error instanceof Error ? error.message : "保存失败。");
-                  }
-                }}
-              />
-              <SecondaryButton
-                label="发布"
-                onClick={async () => {
-                  try {
-                    await publishWorkflow(workspace.userId);
-                    showToast("success", "Workflow 已发布。");
-                  } catch (error) {
-                    showToast("error", error instanceof Error ? error.message : "发布失败。");
-                  }
-                }}
-              />
-              <SecondaryButton
-                label="运行"
-                onClick={async () => {
-                  try {
-                    await runWorkflow(workspace.userId, workflowForm.input);
-                    showToast("success", "Workflow 已运行。");
-                  } catch (error) {
-                    showToast("error", error instanceof Error ? error.message : "运行失败。");
-                  }
-                }}
-              />
+              <ActionButton icon={<Save size={14} />} label="Save" onClick={() => void saveWorkflowDraft(workspace.userId).then(() => showToast("success", "Draft saved")).catch((error) => showToast("error", error instanceof Error ? error.message : "Save failed"))} />
+              <ActionButton icon={<Send size={14} />} label="Publish" onClick={() => void publishWorkflow(workspace.userId).then(() => showToast("success", "Published")).catch((error) => showToast("error", error instanceof Error ? error.message : "Publish failed"))} />
+              <ActionButton icon={<Play size={14} />} label="Run" onClick={() => void runWorkflow(workspace.userId, workflowForm.input).then(() => showToast("success", "Run complete")).catch((error) => showToast("error", error instanceof Error ? error.message : "Run failed"))} />
             </div>
           </div>
-        </Panel>
+        </section>
 
-        {/* Workflow 列表 */}
-        <Panel title="Workflow 列表" icon={<GitBranch size={17} />}>
-          <div className="space-y-2">
-            {workflows.length === 0 ? <EmptyText text="暂无 Workflow。" /> : null}
-            {workflows.map((wf) => (
+        <NodeInspector
+          knowledgeBases={knowledgeBases}
+          mcpTools={mcpTools}
+          modelProviders={modelProviders}
+          node={selectedNode}
+          updateConfig={updateSelectedNodeConfig}
+        />
+
+        <section className="rounded-lg border border-[#dfe4ee] bg-white">
+          <div className="border-b border-[#dfe4ee] px-4 py-3 text-sm font-semibold text-[#172033]">Saved Workflows</div>
+          <div className="space-y-2 p-4">
+            {workflows.length === 0 ? <EmptyText text="No saved workflows" /> : null}
+            {workflows.slice(0, 6).map((workflow) => (
               <button
-                key={wf.workflow_id}
-                className={`w-full rounded-lg border p-3 text-left text-sm transition ${
-                  selectedWorkflowId === wf.workflow_id
-                    ? "border-[#2f6feb] bg-[#eef4ff]"
-                    : "border-[#dfe4ee] bg-white hover:border-[#93c5fd]"
-                }`}
-                onClick={() => setSelectedWorkflowId(wf.workflow_id)}
+                key={workflow.workflow_id}
                 type="button"
+                onClick={() => setSelectedWorkflowId(workflow.workflow_id)}
+                className={`w-full rounded-lg border p-3 text-left text-sm transition ${selectedWorkflowId === workflow.workflow_id ? "border-[#2f6feb] bg-[#eef4ff]" : "border-[#dfe4ee] bg-white hover:border-[#93c5fd]"}`}
               >
-                <div className="font-medium text-[#172033]">{wf.name}</div>
-                <div className="mt-1 text-xs text-[#667085]">
-                  {wf.published_version_id ? "已发布" : "草稿"}
-                </div>
+                <div className="font-medium text-[#172033]">{workflow.name}</div>
+                <div className="mt-1 text-xs text-[#667085]">{workflow.published_version_id ? "published" : "draft"}</div>
               </button>
             ))}
           </div>
-        </Panel>
+        </section>
 
-        {/* DSL 预览 */}
-        <Panel title="DSL 预览" icon={<FileText size={17} />}>
-          <pre className="max-h-[220px] overflow-auto rounded-lg bg-[#0f172a] p-3 text-xs leading-5 text-[#dbeafe]">
-            {JSON.stringify(getWorkflowDraft(), null, 2)}
-          </pre>
-        </Panel>
+        <section className="rounded-lg border border-[#dfe4ee] bg-white">
+          <div className="border-b border-[#dfe4ee] px-4 py-3 text-sm font-semibold text-[#172033]">Run Trace</div>
+          <div className="space-y-2 p-4">
+            {nodeRuns.length === 0 ? <EmptyText text="Run a workflow to see node results" /> : null}
+            {nodeRuns.map((run) => (
+              <NodeRunRow key={run.node_run_id} run={run} />
+            ))}
+          </div>
+        </section>
+      </aside>
+    </div>
+  );
+}
+
+function ActionButton({ icon, label, onClick }: { icon: React.ReactNode; label: string; onClick: () => void }) {
+  return (
+    <button
+      type="button"
+      onClick={onClick}
+      className="inline-flex items-center justify-center gap-1 rounded-lg border border-[#cfd7e6] bg-white px-2 py-2 text-xs font-medium text-[#172033] transition hover:border-[#2f6feb]"
+    >
+      {icon}
+      {label}
+    </button>
+  );
+}
+
+function NodeInspector({
+  knowledgeBases,
+  mcpTools,
+  modelProviders,
+  node,
+  updateConfig,
+}: {
+  knowledgeBases: Array<{ kb_id: string; name: string }>;
+  mcpTools: Array<{ tool_id: string; name: string; risk_level: string }>;
+  modelProviders: Array<{ provider_key: string; display_name: string; models: string[]; default_model: string }>;
+  node: { id: string; type?: string; data: CustomNodeData } | undefined;
+  updateConfig: (patch: Record<string, unknown>) => void;
+}) {
+  if (!node) {
+    return (
+      <section className="rounded-lg border border-[#dfe4ee] bg-white p-4">
+        <EmptyText text="Select a node to configure it" />
+      </section>
+    );
+  }
+
+  const type = String(node.type ?? "");
+  const config = node.data.config ?? {};
+  const providerKey = stringValue(config.provider);
+  const modelOptions = modelProviders.find((provider) => provider.provider_key === providerKey)?.models ?? [];
+
+  return (
+    <section className="rounded-lg border border-[#dfe4ee] bg-white">
+      <div className="flex items-center justify-between border-b border-[#dfe4ee] px-4 py-3">
+        <div>
+          <div className="text-sm font-semibold text-[#172033]">{node.data.label}</div>
+          <div className="mt-1 font-mono text-xs text-[#667085]">{node.id}</div>
+        </div>
+        <span className={`rounded px-2 py-1 text-[10px] font-semibold uppercase ${node.data.capability === "schema" ? "bg-[#f8fafc] text-[#667085]" : "bg-[#ecfdf3] text-[#027a48]"}`}>
+          {node.data.capability === "schema" ? "schema" : "live"}
+        </span>
       </div>
+      <div className="space-y-3 p-4">
+        {type === "start" || type === "end" ? <EmptyText text="This node has no required configuration" /> : null}
+
+        {type === "llm" ? (
+          <>
+            <SelectInput
+              label="Provider"
+              onChange={(provider) => {
+                const selected = modelProviders.find((item) => item.provider_key === provider);
+                updateConfig({ provider, model: selected?.default_model || selected?.models[0] || "" });
+              }}
+              options={modelProviders.length ? modelProviders.map((provider) => ({ label: provider.display_name, value: provider.provider_key })) : [{ label: "No providers configured", value: "" }]}
+              value={providerKey}
+            />
+            <SelectInput
+              label="Model"
+              onChange={(model) => updateConfig({ model })}
+              options={modelOptions.length ? modelOptions.map((model) => ({ label: model, value: model })) : [{ label: "No models", value: "" }]}
+              value={stringValue(config.model)}
+            />
+            <TextArea label="System prompt" rows={2} value={stringValue(config.system_prompt)} onChange={(system_prompt) => updateConfig({ system_prompt })} />
+            <TextArea label="Prompt" rows={3} value={stringValue(config.prompt)} onChange={(prompt) => updateConfig({ prompt })} />
+            <div className="grid grid-cols-2 gap-2">
+              <TextInput label="Temperature" value={numberValue(config.temperature, 0)} onChange={(temperature) => updateConfig({ temperature: Number(temperature || 0) })} />
+              <TextInput label="Max tokens" value={numberValue(config.max_tokens, 512)} onChange={(max_tokens) => updateConfig({ max_tokens: Number(max_tokens || 0) })} />
+            </div>
+          </>
+        ) : null}
+
+        {type === "rag" ? (
+          <>
+            <SelectInput
+              label="Knowledge base"
+              onChange={(kb_id) => updateConfig({ kb_id })}
+              options={knowledgeBases.length ? knowledgeBases.map((kb) => ({ label: kb.name, value: kb.kb_id })) : [{ label: "No knowledge bases", value: "" }]}
+              value={stringValue(config.kb_id)}
+            />
+            <TextInput label="Query template" value={stringValue(config.query_template)} onChange={(query_template) => updateConfig({ query_template })} />
+            <TextInput label="Limit" value={numberValue(config.limit, 5)} onChange={(limit) => updateConfig({ limit: Number(limit || 5) })} />
+          </>
+        ) : null}
+
+        {type === "tool" ? (
+          <>
+            <SelectInput
+              label="Authorized tool"
+              onChange={(tool_id) => {
+                const tool = mcpTools.find((item) => item.tool_id === tool_id);
+                updateConfig({ tool_id, tool_name: tool?.name, risk_level: tool?.risk_level ?? "low" });
+              }}
+              options={mcpTools.length ? mcpTools.map((tool) => ({ label: tool.name, value: tool.tool_id })) : [{ label: "No tools authorized", value: "" }]}
+              value={stringValue(config.tool_id)}
+            />
+            <SelectInput
+              label="Risk"
+              onChange={(risk_level) => updateConfig({ risk_level })}
+              options={["low", "medium", "high", "critical"].map((item) => ({ label: item, value: item }))}
+              value={stringValue(config.risk_level) || "low"}
+            />
+            <TextArea label="Arguments JSON" rows={5} value={stringValue(config.arguments)} onChange={(argumentsValue) => updateConfig({ arguments: argumentsValue })} />
+          </>
+        ) : null}
+
+        {type === "condition" ? (
+          <>
+            <TextInput label="Expression" value={stringValue(config.expression)} onChange={(expression) => updateConfig({ expression })} />
+            <div className="grid grid-cols-2 gap-2">
+              <TextInput label="True label" value={stringValue(config.true_label)} onChange={(true_label) => updateConfig({ true_label })} />
+              <TextInput label="False label" value={stringValue(config.false_label)} onChange={(false_label) => updateConfig({ false_label })} />
+            </div>
+            <SchemaNotice />
+          </>
+        ) : null}
+
+        {type === "http" ? (
+          <>
+            <SelectInput label="Method" value={stringValue(config.method) || "GET"} onChange={(method) => updateConfig({ method })} options={["GET", "POST", "PUT", "PATCH", "DELETE"].map((method) => ({ label: method, value: method }))} />
+            <TextInput label="URL" value={stringValue(config.url)} onChange={(url) => updateConfig({ url })} />
+            <TextArea label="Headers JSON" rows={4} value={stringValue(config.headers)} onChange={(headers) => updateConfig({ headers })} />
+            <TextArea label="Body" rows={4} value={stringValue(config.body)} onChange={(body) => updateConfig({ body })} />
+            <SchemaNotice />
+          </>
+        ) : null}
+
+        {type === "code" ? (
+          <>
+            <SelectInput label="Language" value={stringValue(config.language) || "python"} onChange={(language) => updateConfig({ language })} options={[{ label: "python", value: "python" }, { label: "javascript", value: "javascript" }]} />
+            <TextArea label="Code" rows={7} value={stringValue(config.code)} onChange={(code) => updateConfig({ code })} />
+            <SchemaNotice />
+          </>
+        ) : null}
+
+        {type === "variable" ? (
+          <>
+            <TextInput label="Name" value={stringValue(config.name)} onChange={(name) => updateConfig({ name })} />
+            <TextArea label="Value" rows={3} value={stringValue(config.value)} onChange={(value) => updateConfig({ value })} />
+            <SchemaNotice />
+          </>
+        ) : null}
+
+        {type === "template" ? (
+          <>
+            <TextArea label="Template" rows={6} value={stringValue(config.template)} onChange={(template) => updateConfig({ template })} />
+            <SchemaNotice />
+          </>
+        ) : null}
+
+        {type === "human" ? (
+          <>
+            <TextInput label="Title" value={stringValue(config.title)} onChange={(title) => updateConfig({ title })} />
+            <TextArea label="Instructions" rows={4} value={stringValue(config.instructions)} onChange={(instructions) => updateConfig({ instructions })} />
+            <SchemaNotice />
+          </>
+        ) : null}
+      </div>
+    </section>
+  );
+}
+
+function SchemaNotice() {
+  return (
+    <div className="rounded-lg border border-[#fde68a] bg-[#fffbeb] px-3 py-2 text-xs leading-5 text-[#854d0e]">
+      This node is saved in the workflow DSL, but the backend executor is not wired yet.
+    </div>
+  );
+}
+
+function NodeRunRow({ run }: { run: NodeRun }) {
+  const ok = run.status === "succeeded";
+  return (
+    <div className="rounded-lg border border-[#dfe4ee] bg-white px-3 py-2 text-sm">
+      <div className="flex items-center justify-between gap-2">
+        <span className="font-medium text-[#172033]">{run.node_id}</span>
+        <span className={`rounded px-2 py-0.5 text-[10px] font-semibold ${ok ? "bg-[#ecfdf3] text-[#027a48]" : "bg-[#fef2f2] text-[#b42318]"}`}>
+          {run.status}
+        </span>
+      </div>
+      <div className="mt-1 flex items-center gap-2 text-xs text-[#667085]">
+        <Database size={12} />
+        {run.node_type}
+        <GitBranch size={12} />
+        {run.elapsed_ms}ms
+      </div>
+      {run.error_message ? (
+        <div className="mt-2 rounded bg-[#fef2f2] px-2 py-1 text-xs text-[#b42318]">{run.error_message}</div>
+      ) : null}
     </div>
   );
 }

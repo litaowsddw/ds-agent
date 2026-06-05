@@ -239,6 +239,18 @@ class WorkflowRunDBService(BaseDBService[WorkflowRunModel]):
             session, offset=offset, limit=limit, workflow_id=workflow_id
         )
 
+    async def list_org_runs(
+        self,
+        session: AsyncSession,
+        org_id: str,
+        offset: int = 0,
+        limit: int = 50,
+    ) -> tuple[list[WorkflowRunModel], int]:
+        """List workflow runs in one organization for Studio run history."""
+        return await self.list_paginated(
+            session, offset=offset, limit=limit, org_id=org_id
+        )
+
 
 class NodeRunDBService(BaseDBService[NodeRunModel]):
     """节点运行日志数据库服务。"""

@@ -33,8 +33,7 @@ class ContextEngine:
             message: 用户或系统写入的消息。
         """
 
-        # MVP 阶段暂不持久化，后续会写入 session_messages 表。
-        return {"session_id": session_id, "status": "ingested", "message": message}
+        return {"session_id": session_id, "status": "received", "message": message}
 
     def assemble(self, user_input: str, token_budget: int) -> dict[str, object]:
         """组装一次模型调用上下文。"""
@@ -49,7 +48,7 @@ class ContextEngine:
         # agent_section 是 Agent 级上下文，后续来自 Workspace 中的 AGENTS.md / SOUL.md。
         agent_section = ContextSection(
             name="agent",
-            content="当前 Agent 使用 MVP 默认配置。",
+            content="当前 Agent 未传入 Workspace 上下文。",
             estimated_tokens=16,
         )
 

@@ -4,8 +4,9 @@
  */
 
 import { create } from "zustand";
-import type { Agent, WorkspaceState, CreateAgentRequest } from "@/types/agent";
-import { apiRequest } from "@/lib/api";
+import { createJSONStorage, persist } from "zustand/middleware";
+import type { Agent, WorkspaceState } from "@/types/agent";
+import { apiRequest, login, setCurrentOrgId } from "@/lib/api";
 
 interface WorkspaceStore {
   /** 当前工作空间 */
@@ -35,7 +36,26 @@ interface WorkspaceStore {
   }) => Promise<void>;
 
   /** 创建 Agent */
-  createAgent: (form: { name: string; description: string }) => Promise<void>;
+  createAgent: (form: {
+    name: string;
+    description: string;
+    modelProvider?: string;
+    modelName?: string;
+    systemPrompt?: string;
+    temperature?: number | null;
+    maxTokens?: number | null;
+  }) => Promise<void>;
+
+  /** 更新 Agent 参数 */
+  updateAgent: (agentId: string, form: {
+    name: string;
+    description: string;
+    modelProvider?: string;
+    modelName?: string;
+    systemPrompt?: string;
+    temperature?: number | null;
+    maxTokens?: number | null;
+  }) => Promise<void>;
 
   /** 刷新 Agent 列表 */
   refreshAgents: () => Promise<void>;
@@ -44,7 +64,8 @@ interface WorkspaceStore {
   getSelectedAgent: () => Agent | null;
 }
 
-export const useWorkspaceStore = create<WorkspaceStore>((set, get) => ({
+export const useWorkspaceStore = create<WorkspaceStore>()(
+persist((set, get) => ({
   workspace: null,
   agents: [],
   selectedAgentId: "",
@@ -60,32 +81,15 @@ export const useWorkspaceStore = create<WorkspaceStore>((set, get) => ({
   createWorkspace: async (form) => {
     set({ busy: true });
     try {
-      const timestamp = Date.now();
-      const email = form.email.includes("@")
-        ? form.email
-        : `owner-${timestamp}@example.com`;
+      const email = form.email.trim();
+      if (!email || !form.displayName.trim()) {
+        throw new Error("请填写邮箱和显示名称");
+      }
 
-      const user = await apiRequest<{ user_id: string }>("/identity/users/register", {
-        method: "POST",
-        body: {
-          email: email.replace("@example.com", `-${timestamp}@example.com`),
-          display_name: form.displayName,
-          password: "password123",
-        },
-      });
-
-      const organization = await apiRequest<{ org_id: string }>("/identity/organizations", {
-        method: "POST",
-        body: { creator_user_id: user.user_id, name: form.orgName },
-      });
-
-      const team = await apiRequest<{ team_id: string }>(
-        `/identity/organizations/${organization.org_id}/teams`,
-        {
-          method: "POST",
-          body: { actor_user_id: user.user_id, name: form.teamName },
-        }
-      );
+      const user = await ensureLocalUser(email, form.displayName);
+      const organization = await ensureOrganization(user.user_id, form.orgName.trim() || "AgentFlow 工作空间");
+      setCurrentOrgId(organization.org_id);
+      const team = await ensureTeam(user.user_id, organization.org_id, form.teamName.trim() || "默认团队");
 
       set({
         workspace: {
@@ -103,6 +107,7 @@ export const useWorkspaceStore = create<WorkspaceStore>((set, get) => ({
   createAgent: async (form) => {
     const { workspace } = get();
     if (!workspace) throw new Error("请先创建工作空间。");
+    if (!form.name.trim()) throw new Error("请填写 Agent 名称");
 
     set({ busy: true });
     try {
@@ -114,10 +119,45 @@ export const useWorkspaceStore = create<WorkspaceStore>((set, get) => ({
           team_id: workspace.teamId,
           name: form.name,
           description: form.description,
+          model_provider: form.modelProvider || null,
+          model_name: form.modelName || null,
+          system_prompt: form.systemPrompt || null,
+          temperature: form.temperature ?? 0,
+          max_tokens: form.maxTokens ?? null,
         },
       });
       set((state) => ({
         agents: [...state.agents, agent],
+        selectedAgentId: agent.agent_id,
+      }));
+    } finally {
+      set({ busy: false });
+    }
+  },
+
+  updateAgent: async (agentId, form) => {
+    const { workspace } = get();
+    if (!workspace) throw new Error("请先创建工作空间。");
+    if (!agentId) throw new Error("请先选择 Agent");
+    if (!form.name.trim()) throw new Error("请填写 Agent 名称");
+
+    set({ busy: true });
+    try {
+      const agent = await apiRequest<Agent>(`/agents/${agentId}`, {
+        method: "PUT",
+        body: {
+          actor_user_id: workspace.userId,
+          name: form.name,
+          description: form.description,
+          model_provider: form.modelProvider || null,
+          model_name: form.modelName || null,
+          system_prompt: form.systemPrompt || null,
+          temperature: form.temperature ?? 0,
+          max_tokens: form.maxTokens ?? null,
+        },
+      });
+      set((state) => ({
+        agents: state.agents.map((item) => (item.agent_id === agent.agent_id ? agent : item)),
         selectedAgentId: agent.agent_id,
       }));
     } finally {
@@ -139,4 +179,88 @@ export const useWorkspaceStore = create<WorkspaceStore>((set, get) => ({
     const { agents, selectedAgentId } = get();
     return agents.find((a) => a.agent_id === selectedAgentId) ?? null;
   },
+}), {
+  name: "agentflow-workspace",
+  storage: createJSONStorage(() => localStorage),
+  partialize: (state) => ({
+    workspace: state.workspace,
+    agents: state.agents,
+    selectedAgentId: state.selectedAgentId,
+  }),
 }));
+
+const LOCAL_DEFAULT_PASSWORD = "password123";
+
+interface LocalUser {
+  user_id: string;
+  email: string;
+  display_name?: string;
+}
+
+interface LocalOrganization {
+  org_id: string;
+  name?: string;
+  created_by?: string;
+}
+
+interface LocalTeam {
+  team_id: string;
+  org_id: string;
+  name?: string;
+}
+
+async function ensureLocalUser(email: string, displayName: string): Promise<LocalUser> {
+  try {
+    await apiRequest<LocalUser>("/identity/users/register", {
+      method: "POST",
+      body: {
+        email,
+        display_name: displayName,
+        password: LOCAL_DEFAULT_PASSWORD,
+      },
+    });
+  } catch (error) {
+    if (!isDuplicateEmailError(error)) {
+      throw error;
+    }
+  }
+
+  try {
+    const session = await login({ email, password: LOCAL_DEFAULT_PASSWORD });
+    return {
+      user_id: session.user.user_id,
+      email: session.user.email,
+      display_name: session.user.display_name,
+    };
+  } catch (error) {
+    const detail = error instanceof Error ? error.message : String(error);
+    throw new Error(`该邮箱已存在，但无法用本地默认密码恢复登录：${detail}`);
+  }
+}
+
+async function ensureOrganization(userId: string, orgName: string): Promise<LocalOrganization> {
+  const organizations = await apiRequest<LocalOrganization[]>(`/identity/users/${userId}/organizations`);
+  if (organizations.length > 0) {
+    return organizations[0];
+  }
+  return apiRequest<LocalOrganization>("/identity/organizations", {
+    method: "POST",
+    body: { creator_user_id: userId, name: orgName },
+  });
+}
+
+async function ensureTeam(userId: string, orgId: string, teamName: string): Promise<LocalTeam> {
+  const teams = await apiRequest<LocalTeam[]>(`/identity/organizations/${orgId}/teams?actor_user_id=${userId}`);
+  if (teams.length > 0) {
+    return teams[0];
+  }
+  return apiRequest<LocalTeam>(`/identity/organizations/${orgId}/teams`, {
+    method: "POST",
+    body: { actor_user_id: userId, name: teamName },
+  });
+}
+
+function isDuplicateEmailError(error: unknown): boolean {
+  const message = error instanceof Error ? error.message : String(error);
+  return message.includes("邮箱已注册") || message.includes("already") || message.includes("宸叉敞鍐");
+}

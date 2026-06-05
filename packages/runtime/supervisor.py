@@ -172,8 +172,8 @@ class SupervisorAgent:
 
     MAX_REFLECTION_ROUNDS = 3
 
-    def __init__(self, agent_id: str, org_id: str, model_provider: str = "mock",
-                 model_name: str = "mock-model", llm_caller: LLMCaller | None = None) -> None:
+    def __init__(self, agent_id: str, org_id: str, model_provider: str = "",
+                 model_name: str = "", llm_caller: LLMCaller | None = None) -> None:
         self.agent_id = agent_id
         self.org_id = org_id
         self.model_provider = model_provider

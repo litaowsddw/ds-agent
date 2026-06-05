@@ -79,8 +79,8 @@ async def create_model_provider(
 
 @router.get("", response_model=list[ModelProviderResponse])
 async def list_model_providers(
+    auth: CurrentUser,
     org_id: str = Query(description="组织 ID"),
-    auth: CurrentUser = Depends(lambda: None),
     actor_user_id: str = Query(default="", description="操作用户 ID（降级）"),
     session: AsyncSession = Depends(get_db_session),
 ) -> list[ModelProviderResponse]:
