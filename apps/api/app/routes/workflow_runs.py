@@ -134,18 +134,22 @@ async def list_runs(
 ) -> list[WorkflowRunResponse]:
     """列出用户可访问的 Workflow Run。"""
 
-    if workflow_id is not None:
-        runs, _ = await workflow_run_db.list_workflow_runs(session, workflow_id)
-    elif org_id is not None:
-        try:
+    try:
+        if workflow_id is not None:
+            workflow = await workflow_db.get_workflow_required(session, workflow_id)
+            await membership_db.assert_org_access(
+                session, user_id=actor_user_id, org_id=workflow.org_id
+            )
+            runs, _ = await workflow_run_db.list_workflow_runs(session, workflow_id)
+        elif org_id is not None:
             await membership_db.assert_org_access(
                 session, user_id=actor_user_id, org_id=org_id
             )
-        except ValueError as exc:
-            raise HTTPException(status_code=403, detail=str(exc)) from exc
-        runs, _ = await workflow_run_db.list_org_runs(session, org_id)
-    else:
-        runs = []
+            runs, _ = await workflow_run_db.list_org_runs(session, org_id)
+        else:
+            runs = []
+    except ValueError as exc:
+        raise HTTPException(status_code=403, detail=str(exc)) from exc
     return [_to_run_response(run) for run in runs]
 
 

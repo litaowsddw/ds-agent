@@ -64,12 +64,21 @@ async def list_workflows(
 ) -> list[WorkflowResponse]:
     """列出用户可访问的 Workflow。"""
     try:
-        if org_id is not None:
+        effective_org_id = org_id
+        if agent_id is not None:
+            agent = await agent_db.get_agent_required(session, agent_id)
+            if org_id is not None and org_id != agent.org_id:
+                raise ValueError("agent_id 与 org_id 不属于同一组织")
+            await membership_db.assert_org_access(
+                session, user_id=actor_user_id, org_id=agent.org_id
+            )
+            effective_org_id = agent.org_id
+        elif org_id is not None:
             await membership_db.assert_org_access(
                 session, user_id=actor_user_id, org_id=org_id
             )
         workflows, _ = await workflow_db.list_workflows(
-            session, org_id=org_id, agent_id=agent_id
+            session, org_id=effective_org_id, agent_id=agent_id
         )
     except ValueError as exc:
         raise HTTPException(status_code=403, detail=str(exc)) from exc
