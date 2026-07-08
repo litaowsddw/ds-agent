@@ -4,7 +4,8 @@
 
 AgentFlow 的目标是建设一个开源 Agent 框架：
 
-- 前端提供类似 Dify 的可视化工作流搭建体验。
+- 前端以 Agent 工作台为主入口，支持创建、配置、对话和观测 Agent；可视化 Workflow 作为 Agent 的可选流程策略。
+- 单 Agent 不依赖 Workflow 即可运行；Workflow 用于需要稳定输入输出、可复现执行和节点级审计的场景。
 - 后端参考 OpenClaw 的运行时思想，实现 Agent Gateway、上下文管理、MCP 服务、Skill 组织、内存管理和后台 Agent 服务。
 - 异步执行采用 Celery + Redis，支持高并发任务排队、优先级、重试、超时控制。
 - 核心架构采用异步任务队列、工作流隔离、资源限流、全局令牌桶限流。

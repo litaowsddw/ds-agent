@@ -1,6 +1,6 @@
 # AgentFlow
 
-AgentFlow 是一个开源 Agent 工作流平台，目标是提供类似 Dify 的可视化工作流搭建体验，并在后端提供参考 OpenClaw 思路的 Agent Runtime、上下文管理、MCP 服务、Skill 组织、内存管理、后台 Agent 服务、网关、异步任务调度、限流和缓存体系。
+AgentFlow 是一个开源 Agent 构建与运行平台。核心目标是让用户创建、配置、运行和持续优化 Agent；可视化 Workflow 是 Agent 的可选流程策略，用于把开放式 Agent 能力约束到稳定、可复现、可审计的业务链路中。没有 Workflow 的单 Agent 也可以直接处理任务，适合更自主的对话式和探索式场景。
 
 ## 当前阶段
 

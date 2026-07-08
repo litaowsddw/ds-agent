@@ -105,6 +105,8 @@ packages/runtime/
 
 Workflow DSL 与执行逻辑。
 
+Workflow 属于 Agent 的可选执行策略。所有 Workflow 都绑定 `agent_id`，用于在需要稳定流程时约束 Agent 的执行链路；自主 Agent 对话不依赖 Workflow。
+
 ```text
 packages/workflow/
   dsl.py                 Workflow DSL 定义
