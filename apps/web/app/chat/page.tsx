@@ -16,6 +16,7 @@ export default function ChatPage() {
   const orgId = workspace?.orgId || "";
   const actorUserId = workspace?.userId || "";
   const agentId = selectedAgentId || "";
+  const selectedAgent = agents?.find((agent) => agent.agent_id === agentId) || null;
 
   useEffect(() => {
     if (!workspace || !agentId) return;
@@ -78,7 +79,13 @@ export default function ChatPage() {
         <div className="min-h-0 flex-1 overflow-hidden">
           {agentId ? (
             activeTab === "chat" ? (
-              <ChatPanel agentId={agentId} orgId={orgId} actorUserId={actorUserId} workflows={workflows} />
+              <ChatPanel
+                agentId={agentId}
+                orgId={orgId}
+                actorUserId={actorUserId}
+                workflows={workflows}
+                agent={selectedAgent}
+              />
             ) : (
               <div className="p-4">
                 <EvolverPanel agentId={agentId} orgId={orgId} />

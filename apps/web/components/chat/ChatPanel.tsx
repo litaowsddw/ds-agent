@@ -1,8 +1,9 @@
 "use client";
 
-import { useEffect, useRef, useState } from "react";
+import { useEffect, useMemo, useRef, useState } from "react";
 import { CheckCircle2, Loader2, Wrench, XCircle } from "lucide-react";
 import { useChatStore, type ChatExecutionMode } from "@/stores/chat";
+import type { Agent } from "@/types/agent";
 import type { WorkflowItem } from "@/types/workflow";
 
 export default function ChatPanel({
@@ -10,11 +11,13 @@ export default function ChatPanel({
   orgId,
   actorUserId,
   workflows,
+  agent,
 }: {
   agentId: string;
   orgId: string;
   actorUserId: string;
   workflows: WorkflowItem[];
+  agent: Agent | null;
 }) {
   const { messages, traceEvents, isGenerating, intent, subtaskCount, sendMessage, loadLatestSession, clearSession } =
     useChatStore();
@@ -22,7 +25,20 @@ export default function ChatPanel({
   const [executionMode, setExecutionMode] = useState<ChatExecutionMode>("autonomous");
   const [workflowId, setWorkflowId] = useState("");
   const messagesEndRef = useRef<HTMLDivElement>(null);
-  const publishedWorkflows = workflows.filter((workflow) => workflow.published_version_id);
+  const defaultWorkflowId = agent?.default_workflow_id ?? null;
+  const publishedWorkflows = useMemo(
+    () => workflows.filter((workflow) => workflow.agent_id === agentId && workflow.published_version_id),
+    [agentId, workflows]
+  );
+  const workflowModeBlockedReason =
+    executionMode !== "workflow"
+      ? ""
+      : publishedWorkflows.length === 0
+        ? "No published workflows"
+        : !workflowId
+          ? "Select a published workflow"
+          : "";
+  const isSendDisabled = isGenerating || !input.trim() || Boolean(workflowModeBlockedReason);
 
   useEffect(() => {
     messagesEndRef.current?.scrollIntoView({ behavior: "smooth" });
@@ -32,8 +48,15 @@ export default function ChatPanel({
     void loadLatestSession(agentId, actorUserId);
   }, [agentId, actorUserId, loadLatestSession]);
 
+  useEffect(() => {
+    const defaultWorkflow = defaultWorkflowId
+      ? publishedWorkflows.find((workflow) => workflow.workflow_id === defaultWorkflowId)
+      : undefined;
+    setWorkflowId(defaultWorkflow?.workflow_id || publishedWorkflows[0]?.workflow_id || "");
+  }, [agentId, defaultWorkflowId, publishedWorkflows]);
+
   const handleSend = async () => {
-    if (!input.trim() || isGenerating || (executionMode === "workflow" && !workflowId)) return;
+    if (isSendDisabled) return;
     const msg = input.trim();
     setInput("");
     await sendMessage(agentId, orgId, msg, actorUserId, {
@@ -118,18 +141,24 @@ export default function ChatPanel({
               </button>
             </div>
             {executionMode === "workflow" ? (
-              <select
-                className="h-8 rounded-lg border border-gray-300 bg-white px-2 text-xs text-gray-800 dark:border-gray-600 dark:bg-gray-800 dark:text-gray-100"
-                onChange={(event) => setWorkflowId(event.target.value)}
-                value={workflowId}
-              >
-                <option value="">选择已发布 Workflow</option>
-                {publishedWorkflows.map((workflow) => (
-                  <option key={workflow.workflow_id} value={workflow.workflow_id}>
-                    {workflow.name}
-                  </option>
-                ))}
-              </select>
+              <>
+                <select
+                  className="h-8 rounded-lg border border-gray-300 bg-white px-2 text-xs text-gray-800 disabled:cursor-not-allowed disabled:opacity-60 dark:border-gray-600 dark:bg-gray-800 dark:text-gray-100"
+                  disabled={publishedWorkflows.length === 0}
+                  onChange={(event) => setWorkflowId(event.target.value)}
+                  value={workflowId}
+                >
+                  <option value="">选择已发布 Workflow</option>
+                  {publishedWorkflows.map((workflow) => (
+                    <option key={workflow.workflow_id} value={workflow.workflow_id}>
+                      {workflow.name}
+                    </option>
+                  ))}
+                </select>
+                {publishedWorkflows.length === 0 ? (
+                  <span className="text-xs text-gray-400 dark:text-gray-500">No published workflows</span>
+                ) : null}
+              </>
             ) : null}
           </div>
           <div className="flex gap-2">
@@ -144,8 +173,9 @@ export default function ChatPanel({
             />
             <button
               onClick={handleSend}
-              disabled={isGenerating || !input.trim() || (executionMode === "workflow" && !workflowId)}
+              disabled={isSendDisabled}
               className="rounded-lg bg-blue-500 px-4 py-2 text-sm font-medium text-white transition-colors hover:bg-blue-600 disabled:cursor-not-allowed disabled:opacity-50"
+              title={workflowModeBlockedReason || undefined}
               type="button"
             >
               Send
