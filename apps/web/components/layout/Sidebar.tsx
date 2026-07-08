@@ -12,6 +12,7 @@ import {
   Bot,
   Brain,
   Database,
+  House,
   KeyRound,
   MessageSquare,
   Network,
@@ -21,6 +22,7 @@ import {
 import { useWorkspaceStore } from "@/stores/workspace";
 
 const navItems = [
+  { key: "home", label: "Home", icon: House, href: "/" },
   { key: "agents", label: "Agents", icon: Bot, href: "/agents" },
   { key: "models", label: "Models", icon: KeyRound, href: "/models" },
   { key: "knowledge", label: "Knowledge", icon: Database, href: "/knowledge" },
@@ -48,7 +50,10 @@ export default function Sidebar() {
   return (
     <aside className="flex h-screen w-[260px] shrink-0 flex-col border-r border-[#dfe4ee] bg-white">
       {/* Logo */}
-      <div className="flex items-center gap-3 border-b border-[#dfe4ee] px-5 py-4">
+      <Link
+        className="flex items-center gap-3 border-b border-[#dfe4ee] px-5 py-4 transition hover:bg-[#f8fafc]"
+        href="/"
+      >
         <div className="grid h-10 w-10 place-items-center rounded-lg bg-[#2f6feb] text-white">
           <Network size={19} />
         </div>
@@ -56,7 +61,7 @@ export default function Sidebar() {
           <h1 className="text-base font-semibold text-[#172033]">AgentFlow</h1>
           <p className="text-xs text-[#667085]">Agent 应用搭建工作台</p>
         </div>
-      </div>
+      </Link>
 
       {/* API 状态 */}
       <div className="mx-4 mt-4 rounded-lg border border-[#dfe4ee] bg-[#f8fafc] p-3">
@@ -73,7 +78,8 @@ export default function Sidebar() {
       <nav className="mt-4 flex-1 space-y-1 px-3">
         {navItems.map((item) => {
           const Icon = item.icon;
-          const active = pathname === item.href || pathname?.startsWith(item.href + "/");
+          const active =
+            item.href === "/" ? pathname === "/" : pathname === item.href || pathname?.startsWith(item.href + "/");
           return (
             <Link
               key={item.key}
