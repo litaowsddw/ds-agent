@@ -49,6 +49,28 @@ class ChatResponse(BaseModel):
     workflow_run_id: str = ""
 
 
+async def _resolve_workflow_for_chat(db: AsyncSession, *, agent: Any, request: ChatRequest) -> Any:
+    from apps.api.app.services.db.workflow_db import workflow_db
+
+    workflow_id = request.workflow_id or agent.default_workflow_id or ""
+    if not workflow_id:
+        raise HTTPException(status_code=400, detail="请选择 Workflow 或改用自主模式")
+    workflow = await workflow_db.get_workflow_required(db, workflow_id)
+    if workflow.agent_id != request.agent_id:
+        raise HTTPException(status_code=400, detail="Workflow 必须属于当前 Agent")
+    if workflow.published_version_id is None:
+        raise HTTPException(status_code=400, detail="Workflow 必须先发布")
+    return workflow
+
+
+def _workflow_message_metadata(workflow_id: str, workflow_run_id: str) -> dict[str, str]:
+    return {
+        "execution_mode": "workflow",
+        "workflow_id": workflow_id,
+        "workflow_run_id": workflow_run_id,
+    }
+
+
 @router.post("/", response_model=ChatResponse)
 async def chat(
     request: ChatRequest,
@@ -105,17 +127,9 @@ async def chat(
 
         if request.execution_mode == "workflow":
             from apps.api.app.routes.workflow_runs import execute_workflow_version_for_chat
-            from apps.api.app.services.db.workflow_db import workflow_db
 
             actor_user_id = request.actor_user_id or agent.created_by
-            workflow_id = request.workflow_id or agent.default_workflow_id or ""
-            if not workflow_id:
-                raise HTTPException(status_code=400, detail="请选择 Workflow 或改用自主模式")
-            workflow = await workflow_db.get_workflow_required(db, workflow_id)
-            if workflow.agent_id != request.agent_id:
-                raise HTTPException(status_code=400, detail="Workflow 必须属于当前 Agent")
-            if workflow.published_version_id is None:
-                raise HTTPException(status_code=400, detail="Workflow 必须先发布")
+            workflow = await _resolve_workflow_for_chat(db, agent=agent, request=request)
 
             run = await execute_workflow_version_for_chat(
                 db,
@@ -133,11 +147,7 @@ async def chat(
                 role="assistant",
                 content=response_text,
                 estimated_tokens=max(1, len(response_text) // 4),
-                meta_info={
-                    "execution_mode": "workflow",
-                    "workflow_id": workflow.workflow_id,
-                    "workflow_run_id": run.run_id,
-                },
+                meta_info=_workflow_message_metadata(workflow.workflow_id, run.run_id),
             )
             await db.commit()
             return ChatResponse(
@@ -340,16 +350,8 @@ async def _chat_stream_events(request: ChatRequest, db: AsyncSession) -> AsyncIt
 
         if request.execution_mode == "workflow":
             from apps.api.app.routes.workflow_runs import execute_workflow_version_for_chat
-            from apps.api.app.services.db.workflow_db import workflow_db
 
-            workflow_id = request.workflow_id or agent.default_workflow_id or ""
-            if not workflow_id:
-                raise HTTPException(status_code=400, detail="请选择 Workflow 或改用自主模式")
-            workflow = await workflow_db.get_workflow_required(db, workflow_id)
-            if workflow.agent_id != request.agent_id:
-                raise HTTPException(status_code=400, detail="Workflow 必须属于当前 Agent")
-            if workflow.published_version_id is None:
-                raise HTTPException(status_code=400, detail="Workflow 必须先发布")
+            workflow = await _resolve_workflow_for_chat(db, agent=agent, request=request)
 
             yield await emit(
                 "node_started",
@@ -374,11 +376,7 @@ async def _chat_stream_events(request: ChatRequest, db: AsyncSession) -> AsyncIt
                 role="assistant",
                 content=response_text,
                 estimated_tokens=max(1, len(response_text) // 4),
-                meta_info={
-                    "execution_mode": "workflow",
-                    "workflow_id": workflow.workflow_id,
-                    "workflow_run_id": run.run_id,
-                },
+                meta_info=_workflow_message_metadata(workflow.workflow_id, run.run_id),
             )
             yield await emit(
                 "node_finished",

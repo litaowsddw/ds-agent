@@ -181,6 +181,48 @@ def test_streaming_workflow_mode_saves_metadata_in_history(client: TestClient) -
     assert assistant_message["meta_info"]["workflow_run_id"] == workflow_run_id
 
 
+def test_normal_and_stream_workflow_mode_emit_matching_metadata(client: TestClient) -> None:
+    suffix = _suffix("chat-parity")
+    owner_user_id, org_id, agent_id = _create_owner_org_agent(client, suffix)
+    workflow_id = _create_published_passthrough_workflow(client, owner_user_id, agent_id)
+
+    normal_response = client.post(
+        "/chat/",
+        json={
+            "actor_user_id": owner_user_id,
+            "agent_id": agent_id,
+            "org_id": org_id,
+            "message": "normal mode",
+            "execution_mode": "workflow",
+            "workflow_id": workflow_id,
+        },
+    )
+    assert normal_response.status_code == 200
+    normal_body = normal_response.json()
+
+    with client.stream(
+        "POST",
+        "/chat/stream",
+        json={
+            "actor_user_id": owner_user_id,
+            "agent_id": agent_id,
+            "org_id": org_id,
+            "message": "stream mode",
+            "execution_mode": "workflow",
+            "workflow_id": workflow_id,
+        },
+    ) as response:
+        assert response.status_code == 200
+        stream_body = "".join(response.iter_text())
+    events = _parse_sse_events(stream_body)
+    stream_finished = next(event for event in events if event["event"] == "run_finished")
+
+    assert normal_body["mode"] == stream_finished["mode"] == "workflow"
+    assert normal_body["workflow_id"] == stream_finished["workflow_id"] == workflow_id
+    assert normal_body["workflow_run_id"]
+    assert stream_finished["workflow_run_id"]
+
+
 def test_chat_history_preserves_empty_metadata_for_autonomous_messages(client: TestClient) -> None:
     suffix = _suffix("chat-auto-meta")
     owner_user_id, _org_id, agent_id = _create_owner_org_agent(client, suffix)
