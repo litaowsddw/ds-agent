@@ -6,7 +6,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from app.core.security import decrypt_api_key
 from app.database import get_db_session
 from app.services.db.runtime_db import model_provider_db
-from apps.api.app.gateway.llm import (
+from app.gateway.llm import (
     GatewayProviderError,
     LLMCallLog,
     LLMCallRequest,

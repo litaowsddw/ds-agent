@@ -79,8 +79,11 @@ async def lifespan(app: FastAPI):
     # ── 关闭 ──
     logger.info("AgentFlow API 正在关闭...")
     try:
-        from app.database import engine
-        await engine.dispose()
+        from app.database import async_engine, engine
+
+        await async_engine.dispose()
+        if engine is not None:
+            engine.dispose()
         logger.info("数据库连接池已关闭")
     except Exception:
         pass

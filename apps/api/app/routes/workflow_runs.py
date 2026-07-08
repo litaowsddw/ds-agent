@@ -181,7 +181,10 @@ async def list_node_runs(
         await membership_db.assert_org_access(
             session, user_id=actor_user_id, org_id=run.org_id
         )
-        node_runs = await node_run_db.list_run_node_runs(session, run_id)
+        node_runs = sorted(
+            await node_run_db.list_run_node_runs(session, run_id),
+            key=_node_run_sequence,
+        )
     except ValueError as exc:
         raise HTTPException(status_code=404, detail=str(exc)) from exc
 
@@ -290,7 +293,10 @@ async def _execute_llm_node(
         "_org_id": org_id,
         "_actor_user_id": actor_user_id,
     }
-    return await gateway.generate_from_workflow_node(enriched_config, node_input)
+    try:
+        return await gateway.generate_from_workflow_node(enriched_config, node_input)
+    finally:
+        llm_gateway.call_logs.extend(gateway.list_logs())
 
 
 async def _execute_rag_node(
@@ -446,6 +452,13 @@ def _to_run_response(run: WorkflowRunModel) -> WorkflowRunResponse:
         celery_task_id="",
         created_by=run.created_by,
     )
+
+
+def _node_run_sequence(nr: NodeRunModel) -> int:
+    try:
+        return int(nr.node_run_id.rsplit("_", 1)[1])
+    except (IndexError, ValueError):
+        return 0
 
 
 def _to_node_run_response(nr: NodeRunModel, sequence: int = 0) -> NodeRunResponse:

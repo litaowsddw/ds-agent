@@ -8,16 +8,59 @@
 """
 from uuid import uuid4
 
+import pytest
 from fastapi.testclient import TestClient
 
 from apps.api.app.main import app
+from app.gateway.llm import LLMCallRequest, LLMCallResponse
 from apps.api.app.domain.workflow_run import RunStatus
 
 
-def test_e2e_sync_workflow_full_trace() -> None:
+@pytest.fixture
+def client(monkeypatch: pytest.MonkeyPatch) -> TestClient:
+    class FakeOpenAICompatibleProvider:
+        def __init__(self, base_url: str, api_key: str, provider_key: str, timeout_seconds: int = 30) -> None:
+            self.provider_key = provider_key
+
+        def generate(self, request: LLMCallRequest) -> LLMCallResponse:
+            return LLMCallResponse(
+                text=f"mock response for {request.model}",
+                provider=self.provider_key,
+                model=request.model,
+                usage={"prompt_tokens": 8, "completion_tokens": 4},
+            )
+
+    from apps.api.app.routes import workflow_runs
+
+    async def fake_submit_async_run(*args, **kwargs) -> None:
+        return None
+
+    monkeypatch.setattr(workflow_runs, "OpenAICompatibleProvider", FakeOpenAICompatibleProvider)
+    monkeypatch.setattr(workflow_runs, "_submit_async_run", fake_submit_async_run)
+    with TestClient(app) as test_client:
+        yield test_client
+
+
+def _create_mock_provider(client: TestClient, actor_user_id: str, org_id: str) -> None:
+    response = client.post(
+        "/model-providers",
+        json={
+            "actor_user_id": actor_user_id,
+            "org_id": org_id,
+            "provider_key": "mock",
+            "display_name": "Mock Provider",
+            "base_url": "https://mock.local/v1",
+            "api_key": "sk-test",
+            "models": ["mock-model"],
+            "default_model": "mock-model",
+        },
+    )
+    assert response.status_code == 200
+
+
+def test_e2e_sync_workflow_full_trace(client: TestClient) -> None:
     """验证同步工作流端到端执行轨迹完整性。"""
 
-    client = TestClient(app)
     suffix = uuid4().hex
 
     # === 准备环境 ===
@@ -28,6 +71,7 @@ def test_e2e_sync_workflow_full_trace() -> None:
     owner = owner_resp.json()["user_id"]
     org_resp = client.post("/identity/organizations", json={"creator_user_id": owner, "name": "E2E Org"})
     org_id = org_resp.json()["org_id"]
+    _create_mock_provider(client, owner, org_id)
     agent_resp = client.post(
         "/agents",
         json={"actor_user_id": owner, "org_id": org_id, "name": "E2E Agent", "description": ""},
@@ -105,10 +149,9 @@ def test_e2e_sync_workflow_full_trace() -> None:
     )
 
 
-def test_e2e_async_workflow_queuing() -> None:
+def test_e2e_async_workflow_queuing(client: TestClient) -> None:
     """验证异步工作流可投递到队列并返回 pending 状态。"""
 
-    client = TestClient(app)
     suffix = uuid4().hex
 
     owner_resp = client.post(
@@ -118,6 +161,7 @@ def test_e2e_async_workflow_queuing() -> None:
     owner = owner_resp.json()["user_id"]
     org_resp = client.post("/identity/organizations", json={"creator_user_id": owner, "name": "Async Org"})
     org_id = org_resp.json()["org_id"]
+    _create_mock_provider(client, owner, org_id)
     agent_resp = client.post(
         "/agents",
         json={"actor_user_id": owner, "org_id": org_id, "name": "Async Agent", "description": ""},
@@ -135,7 +179,7 @@ def test_e2e_async_workflow_queuing() -> None:
                 "version": "1.0",
                 "nodes": [
                     {"id": "start", "type": "start", "config": {}},
-                    {"id": "llm", "type": "llm", "config": {"prompt": "async test"}},
+                    {"id": "llm", "type": "llm", "config": {"provider": "mock", "model": "mock-model", "prompt": "async test"}},
                     {"id": "end", "type": "end", "config": {}},
                 ],
                 "edges": [
@@ -165,10 +209,9 @@ def test_e2e_async_workflow_queuing() -> None:
     assert run_data["status"] in ("pending", "running", "succeeded")
 
 
-def test_e2e_workflow_error_recovery() -> None:
+def test_e2e_workflow_error_recovery(client: TestClient) -> None:
     """验证工作流执行失败时的错误恢复路径。"""
 
-    client = TestClient(app)
     suffix = uuid4().hex
 
     # === 准备两个组织 ===
@@ -265,10 +308,9 @@ def test_e2e_workflow_error_recovery() -> None:
     assert last_executed["status"] == "failed"
 
 
-def test_e2e_workflow_retry_on_failure() -> None:
+def test_e2e_workflow_retry_on_failure(client: TestClient) -> None:
     """验证失败工作流的状态可查询，后续可创建新的 Run 重试。"""
 
-    client = TestClient(app)
     suffix = uuid4().hex
 
     owner_resp = client.post(
@@ -278,6 +320,7 @@ def test_e2e_workflow_retry_on_failure() -> None:
     owner = owner_resp.json()["user_id"]
     org_resp = client.post("/identity/organizations", json={"creator_user_id": owner, "name": "Retry Org"})
     org_id = org_resp.json()["org_id"]
+    _create_mock_provider(client, owner, org_id)
     agent_resp = client.post(
         "/agents",
         json={"actor_user_id": owner, "org_id": org_id, "name": "Retry Agent", "description": ""},
@@ -295,7 +338,7 @@ def test_e2e_workflow_retry_on_failure() -> None:
                 "version": "1.0",
                 "nodes": [
                     {"id": "start", "type": "start", "config": {}},
-                    {"id": "llm", "type": "llm", "config": {"prompt": "retry"}},
+                    {"id": "llm", "type": "llm", "config": {"provider": "mock", "model": "mock-model", "prompt": "retry"}},
                     {"id": "end", "type": "end", "config": {}},
                 ],
                 "edges": [
@@ -339,10 +382,9 @@ def test_e2e_workflow_retry_on_failure() -> None:
     assert run2_id in run_ids
 
 
-def test_e2e_workflow_output_consistency() -> None:
+def test_e2e_workflow_output_consistency(client: TestClient) -> None:
     """验证相同输入和相同 Workflow 版本产生一致的 immutable prefix hash。"""
 
-    client = TestClient(app)
     suffix = uuid4().hex
 
     owner_resp = client.post(
@@ -352,6 +394,7 @@ def test_e2e_workflow_output_consistency() -> None:
     owner = owner_resp.json()["user_id"]
     org_resp = client.post("/identity/organizations", json={"creator_user_id": owner, "name": "Cons Org"})
     org_id = org_resp.json()["org_id"]
+    _create_mock_provider(client, owner, org_id)
     agent_resp = client.post(
         "/agents",
         json={"actor_user_id": owner, "org_id": org_id, "name": "Cons Agent", "description": ""},
@@ -409,10 +452,9 @@ def test_e2e_workflow_output_consistency() -> None:
     assert hash1 == hash2
 
 
-def test_e2e_workflow_different_inputs_produce_different_hashes() -> None:
-    """验证不同输入产生不同的 prefix hash（当前输入在 CURRENT_TURN 段）。"""
+def test_e2e_workflow_different_inputs_keep_same_prefix_hash(client: TestClient) -> None:
+    """验证不同输入复用相同 immutable prefix hash。"""
 
-    client = TestClient(app)
     suffix = uuid4().hex
 
     owner_resp = client.post(
@@ -422,6 +464,7 @@ def test_e2e_workflow_different_inputs_produce_different_hashes() -> None:
     owner = owner_resp.json()["user_id"]
     org_resp = client.post("/identity/organizations", json={"creator_user_id": owner, "name": "Diff Org"})
     org_id = org_resp.json()["org_id"]
+    _create_mock_provider(client, owner, org_id)
     agent_resp = client.post(
         "/agents",
         json={"actor_user_id": owner, "org_id": org_id, "name": "Diff Agent", "description": ""},
@@ -474,5 +517,5 @@ def test_e2e_workflow_different_inputs_produce_different_hashes() -> None:
     ).json()
     hash_b = nodes_b[1]["output_data"]["prefix_hash"]
 
-    # 不同输入应有不同 hash（因为 prompt 包含输入数据）
-    assert hash_a != hash_b
+    # 当前输入位于 CURRENT_TURN，prefix_hash 只覆盖 immutable prefix。
+    assert hash_a == hash_b
