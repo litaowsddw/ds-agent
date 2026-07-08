@@ -22,6 +22,13 @@ export interface ChatTraceEvent {
   created_at: string;
 }
 
+export type ChatExecutionMode = "autonomous" | "workflow";
+
+export interface SendMessageOptions {
+  executionMode?: ChatExecutionMode;
+  workflowId?: string;
+}
+
 interface ChatState {
   sessionId: string | null;
   messages: Message[];
@@ -31,7 +38,13 @@ interface ChatState {
   intent: string;
   subtaskCount: number;
 
-  sendMessage: (agentId: string, orgId: string, message: string, actorUserId?: string) => Promise<void>;
+  sendMessage: (
+    agentId: string,
+    orgId: string,
+    message: string,
+    actorUserId?: string,
+    options?: SendMessageOptions
+  ) => Promise<void>;
   loadLatestSession: (agentId: string, actorUserId: string) => Promise<void>;
   loadMessages: (sessionId: string) => Promise<void>;
   clearSession: () => void;
@@ -47,7 +60,7 @@ export const useChatStore = create<ChatState>((set, get) => ({
   intent: "",
   subtaskCount: 0,
 
-  sendMessage: async (agentId, orgId, message, actorUserId) => {
+  sendMessage: async (agentId, orgId, message, actorUserId, options) => {
     set({ isGenerating: true, agentId, traceEvents: [] });
 
     const userMsg: Message = {
@@ -74,6 +87,8 @@ export const useChatStore = create<ChatState>((set, get) => ({
         actorUserId,
         message,
         sessionId: get().sessionId,
+        executionMode: options?.executionMode ?? "autonomous",
+        workflowId: options?.workflowId,
         onEvent: (event, data) => {
           if (event === "token") {
             const text = String(data.text ?? "");
@@ -160,6 +175,8 @@ async function streamChat({
   actorUserId,
   message,
   sessionId,
+  executionMode,
+  workflowId,
   onEvent,
 }: {
   agentId: string;
@@ -167,6 +184,8 @@ async function streamChat({
   actorUserId?: string;
   message: string;
   sessionId: string | null;
+  executionMode: ChatExecutionMode;
+  workflowId?: string;
   onEvent: (event: string, data: Record<string, unknown>) => void;
 }) {
   const headers: Record<string, string> = { "Content-Type": "application/json" };
@@ -185,6 +204,8 @@ async function streamChat({
       message,
       session_id: sessionId,
       stream: true,
+      execution_mode: executionMode,
+      workflow_id: workflowId || null,
     }),
   });
 

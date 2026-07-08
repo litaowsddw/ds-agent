@@ -1,18 +1,26 @@
 "use client";
 
-import { useState } from "react";
+import { useEffect, useState } from "react";
 import { useWorkspaceStore } from "@/stores/workspace";
+import { useWorkflowStore } from "@/stores/workflow";
 import ChatPanel from "@/components/chat/ChatPanel";
 import EvolverPanel from "@/components/chat/EvolverPanel";
 
 /** Chat 页面 - 与 Agent 对话 + Skill 自我进化 */
 export default function ChatPage() {
   const { workspace, agents, selectedAgentId, setSelectedAgentId } = useWorkspaceStore();
+  const workflows = useWorkflowStore((state) => state.workflows);
+  const refreshWorkflows = useWorkflowStore((state) => state.refreshWorkflows);
   const [activeTab, setActiveTab] = useState<"chat" | "evolver">("chat");
 
   const orgId = workspace?.orgId || "";
   const actorUserId = workspace?.userId || "";
   const agentId = selectedAgentId || "";
+
+  useEffect(() => {
+    if (!workspace || !agentId) return;
+    void refreshWorkflows(workspace.orgId, workspace.userId, agentId);
+  }, [workspace, agentId, refreshWorkflows]);
 
   return (
     <div className="flex h-full min-h-0">
@@ -70,7 +78,7 @@ export default function ChatPage() {
         <div className="min-h-0 flex-1 overflow-hidden">
           {agentId ? (
             activeTab === "chat" ? (
-              <ChatPanel agentId={agentId} orgId={orgId} actorUserId={actorUserId} />
+              <ChatPanel agentId={agentId} orgId={orgId} actorUserId={actorUserId} workflows={workflows} />
             ) : (
               <div className="p-4">
                 <EvolverPanel agentId={agentId} orgId={orgId} />

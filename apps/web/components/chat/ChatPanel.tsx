@@ -2,21 +2,27 @@
 
 import { useEffect, useRef, useState } from "react";
 import { CheckCircle2, Loader2, Wrench, XCircle } from "lucide-react";
-import { useChatStore } from "@/stores/chat";
+import { useChatStore, type ChatExecutionMode } from "@/stores/chat";
+import type { WorkflowItem } from "@/types/workflow";
 
 export default function ChatPanel({
   agentId,
   orgId,
   actorUserId,
+  workflows,
 }: {
   agentId: string;
   orgId: string;
   actorUserId: string;
+  workflows: WorkflowItem[];
 }) {
   const { messages, traceEvents, isGenerating, intent, subtaskCount, sendMessage, loadLatestSession, clearSession } =
     useChatStore();
   const [input, setInput] = useState("");
+  const [executionMode, setExecutionMode] = useState<ChatExecutionMode>("autonomous");
+  const [workflowId, setWorkflowId] = useState("");
   const messagesEndRef = useRef<HTMLDivElement>(null);
+  const publishedWorkflows = workflows.filter((workflow) => workflow.published_version_id);
 
   useEffect(() => {
     messagesEndRef.current?.scrollIntoView({ behavior: "smooth" });
@@ -27,10 +33,13 @@ export default function ChatPanel({
   }, [agentId, actorUserId, loadLatestSession]);
 
   const handleSend = async () => {
-    if (!input.trim() || isGenerating) return;
+    if (!input.trim() || isGenerating || (executionMode === "workflow" && !workflowId)) return;
     const msg = input.trim();
     setInput("");
-    await sendMessage(agentId, orgId, msg, actorUserId);
+    await sendMessage(agentId, orgId, msg, actorUserId, {
+      executionMode,
+      workflowId: executionMode === "workflow" ? workflowId : undefined,
+    });
   };
 
   const handleKeyDown = (e: React.KeyboardEvent) => {
@@ -91,6 +100,38 @@ export default function ChatPanel({
         </div>
 
         <div className="border-t border-gray-200 px-4 py-3 dark:border-gray-700">
+          <div className="mb-3 flex flex-wrap items-center gap-2">
+            <div className="inline-flex rounded-lg border border-gray-300 bg-white p-1 text-xs dark:border-gray-600 dark:bg-gray-800">
+              <button
+                className={`rounded-md px-3 py-1.5 ${executionMode === "autonomous" ? "bg-blue-500 text-white" : "text-gray-600 dark:text-gray-300"}`}
+                onClick={() => setExecutionMode("autonomous")}
+                type="button"
+              >
+                自主模式
+              </button>
+              <button
+                className={`rounded-md px-3 py-1.5 ${executionMode === "workflow" ? "bg-blue-500 text-white" : "text-gray-600 dark:text-gray-300"}`}
+                onClick={() => setExecutionMode("workflow")}
+                type="button"
+              >
+                流程模式
+              </button>
+            </div>
+            {executionMode === "workflow" ? (
+              <select
+                className="h-8 rounded-lg border border-gray-300 bg-white px-2 text-xs text-gray-800 dark:border-gray-600 dark:bg-gray-800 dark:text-gray-100"
+                onChange={(event) => setWorkflowId(event.target.value)}
+                value={workflowId}
+              >
+                <option value="">选择已发布 Workflow</option>
+                {publishedWorkflows.map((workflow) => (
+                  <option key={workflow.workflow_id} value={workflow.workflow_id}>
+                    {workflow.name}
+                  </option>
+                ))}
+              </select>
+            ) : null}
+          </div>
           <div className="flex gap-2">
             <textarea
               value={input}
@@ -103,7 +144,7 @@ export default function ChatPanel({
             />
             <button
               onClick={handleSend}
-              disabled={isGenerating || !input.trim()}
+              disabled={isGenerating || !input.trim() || (executionMode === "workflow" && !workflowId)}
               className="rounded-lg bg-blue-500 px-4 py-2 text-sm font-medium text-white transition-colors hover:bg-blue-600 disabled:cursor-not-allowed disabled:opacity-50"
               type="button"
             >
