@@ -72,24 +72,21 @@ export default function ChatPanel({
     }
   };
 
-  const lastAssistantId = [...messages].reverse().find((msg) => msg.role === "assistant")?.message_id;
-  const shouldShowThinking = isGenerating && traceEvents.length > 0;
-
   return (
     <div className="flex h-full min-w-0 flex-col">
       <div className="flex min-h-0 min-w-0 flex-1 flex-col">
-        <div className="flex items-center justify-between border-b border-gray-200 px-4 py-3 dark:border-gray-700">
+        <div className="flex items-center justify-between border-b border-[#dfe4ee] bg-white px-4 py-3">
           <div>
-            <h3 className="text-sm font-medium text-gray-900 dark:text-gray-100">Chat with Agent</h3>
+            <h3 className="text-sm font-medium text-[#172033]">Chat with Agent</h3>
             {intent ? (
-              <p className="mt-0.5 text-xs text-blue-500">
+              <p className="mt-0.5 text-xs text-[#2f6feb]">
                 Intent: {intent} | Subtasks: {subtaskCount}
               </p>
             ) : null}
           </div>
           <button
             onClick={clearSession}
-            className="rounded px-2 py-1 text-xs text-gray-500 hover:bg-gray-100 dark:hover:bg-gray-800"
+            className="rounded px-2 py-1 text-xs text-[#667085] hover:bg-[#f8fafc]"
             type="button"
           >
             New Chat
@@ -98,7 +95,7 @@ export default function ChatPanel({
 
         <div className="min-h-0 flex-1 space-y-3 overflow-y-auto px-4 py-3">
           {messages.length === 0 ? (
-            <div className="mt-8 text-center text-gray-400 dark:text-gray-500">
+            <div className="mt-8 text-center text-[#98a2b3]">
               <p className="text-sm">Send a message to start chatting with this Agent</p>
               <p className="mt-1 text-xs">Streaming output and backend trace will appear here</p>
             </div>
@@ -108,32 +105,32 @@ export default function ChatPanel({
               <div
                 className={`max-w-[80%] rounded-lg px-3 py-2 text-sm ${
                   msg.role === "user"
-                    ? "bg-blue-500 text-white"
+                    ? "bg-[#2f6feb] text-white"
                     : msg.role === "system"
-                      ? "bg-red-50 text-red-600 dark:bg-red-900/20 dark:text-red-400"
-                      : "bg-gray-100 text-gray-900 dark:bg-gray-800 dark:text-gray-100"
+                      ? "bg-red-50 text-red-600"
+                      : "bg-[#f2f4f7] text-[#172033]"
                 }`}
               >
                 {msg.content ? <p className="whitespace-pre-wrap">{msg.content}</p> : null}
-                {msg.message_id === lastAssistantId && shouldShowThinking ? <ThinkingTrace events={traceEvents} /> : null}
               </div>
             </div>
           ))}
           <div ref={messagesEndRef} />
         </div>
 
-        <div className="border-t border-gray-200 px-4 py-3 dark:border-gray-700">
+        <div className="border-t border-[#dfe4ee] bg-white px-4 py-3">
+          {traceEvents.length > 0 ? <ThinkingTrace events={traceEvents} /> : null}
           <div className="mb-3 flex flex-wrap items-center gap-2">
-            <div className="inline-flex rounded-lg border border-gray-300 bg-white p-1 text-xs dark:border-gray-600 dark:bg-gray-800">
+            <div className="inline-flex rounded-lg border border-[#dfe4ee] bg-white p-1 text-xs">
               <button
-                className={`rounded-md px-3 py-1.5 ${executionMode === "autonomous" ? "bg-blue-500 text-white" : "text-gray-600 dark:text-gray-300"}`}
+                className={`rounded-md px-3 py-1.5 ${executionMode === "autonomous" ? "bg-[#2f6feb] text-white" : "text-[#667085]"}`}
                 onClick={() => setExecutionMode("autonomous")}
                 type="button"
               >
                 自主模式
               </button>
               <button
-                className={`rounded-md px-3 py-1.5 ${executionMode === "workflow" ? "bg-blue-500 text-white" : "text-gray-600 dark:text-gray-300"}`}
+                className={`rounded-md px-3 py-1.5 ${executionMode === "workflow" ? "bg-[#2f6feb] text-white" : "text-[#667085]"}`}
                 onClick={() => setExecutionMode("workflow")}
                 type="button"
               >
@@ -143,7 +140,7 @@ export default function ChatPanel({
             {executionMode === "workflow" ? (
               <>
                 <select
-                  className="h-8 rounded-lg border border-gray-300 bg-white px-2 text-xs text-gray-800 disabled:cursor-not-allowed disabled:opacity-60 dark:border-gray-600 dark:bg-gray-800 dark:text-gray-100"
+                  className="h-8 rounded-lg border border-[#dfe4ee] bg-white px-2 text-xs text-[#172033] disabled:cursor-not-allowed disabled:opacity-60"
                   disabled={publishedWorkflows.length === 0}
                   onChange={(event) => setWorkflowId(event.target.value)}
                   value={workflowId}
@@ -155,10 +152,16 @@ export default function ChatPanel({
                     </option>
                   ))}
                 </select>
-                {publishedWorkflows.length === 0 ? (
-                  <span className="text-xs text-gray-400 dark:text-gray-500">暂无已发布 Workflow</span>
-                ) : null}
               </>
+            ) : null}
+            {workflowModeBlockedReason ? (
+              <div className="basis-full rounded-lg bg-[#fff7ed] px-3 py-2 text-xs text-[#9a3412]">
+                当前 Agent 还没有可用的已发布 Workflow。请先到{" "}
+                <a className="font-medium text-[#2f6feb] underline" href="/workflows">
+                  Workflows
+                </a>{" "}
+                发布流程，或切回自主模式。
+              </div>
             ) : null}
           </div>
           <div className="flex gap-2">
@@ -168,13 +171,13 @@ export default function ChatPanel({
               onKeyDown={handleKeyDown}
               placeholder="Type a message..."
               rows={1}
-              className="flex-1 resize-none rounded-lg border border-gray-300 bg-white px-3 py-2 text-sm text-gray-900 focus:outline-none focus:ring-2 focus:ring-blue-500 dark:border-gray-600 dark:bg-gray-800 dark:text-gray-100"
+              className="flex-1 resize-none rounded-lg border border-[#dfe4ee] bg-white px-3 py-2 text-sm text-[#172033] focus:outline-none focus:ring-2 focus:ring-[#2f6feb]"
               disabled={isGenerating}
             />
             <button
               onClick={handleSend}
               disabled={isSendDisabled}
-              className="rounded-lg bg-blue-500 px-4 py-2 text-sm font-medium text-white transition-colors hover:bg-blue-600 disabled:cursor-not-allowed disabled:opacity-50"
+              className="rounded-lg bg-[#2f6feb] px-4 py-2 text-sm font-medium text-white transition-colors hover:bg-[#2459c9] disabled:cursor-not-allowed disabled:opacity-50"
               title={workflowModeBlockedReason || undefined}
               type="button"
             >
@@ -194,24 +197,24 @@ function ThinkingTrace({ events }: { events: ReturnType<typeof useChatStore.getS
   const activeEvent = [...visibleEvents].reverse().find((event) => event.status === "running");
 
   return (
-    <div className="mt-1 rounded-md border border-blue-100 bg-blue-50/70 px-2.5 py-2 text-xs dark:border-blue-900/40 dark:bg-blue-950/20">
-      <div className="mb-2 flex items-center gap-2 text-blue-600 dark:text-blue-300">
+    <div className="mb-3 rounded-lg border border-[#dfe4ee] bg-[#f8fafc] px-3 py-2 text-xs">
+      <div className="mb-2 flex items-center gap-2 text-[#2f6feb]">
         <Loader2 size={13} className="animate-spin" />
         <span className="font-medium">思考中</span>
-        {activeEvent ? <span className="truncate text-blue-400">{activeEvent.label || activeEvent.node}</span> : null}
+        {activeEvent ? <span className="truncate text-[#667085]">{activeEvent.label || activeEvent.node}</span> : null}
       </div>
       <div className="space-y-1">
         {visibleEvents.map((event) => (
-          <div key={event.id} className="rounded bg-white/70 px-2 py-1.5 dark:bg-gray-900/30">
+          <div key={event.id} className="rounded bg-white px-2 py-1.5">
             <div className="flex items-start gap-2">
               <TraceIcon status={event.status} event={event.event} />
               <div className="min-w-0 flex-1">
-                <div className="truncate font-medium text-gray-800 dark:text-gray-100">
+                <div className="truncate font-medium text-[#172033]">
                   {event.label || event.node || event.event}
                 </div>
                 {renderTraceDetail(event)}
                 {event.event === "skill_created" ? (
-                  <div className="mt-1 rounded bg-emerald-50 px-2 py-1 text-emerald-700 dark:bg-emerald-900/20 dark:text-emerald-300">
+                  <div className="mt-1 rounded bg-emerald-50 px-2 py-1 text-emerald-700">
                     {String(event.data.name || "Skill created")}
                   </div>
                 ) : null}
@@ -230,8 +233,12 @@ function renderTraceDetail(event: ReturnType<typeof useChatStore.getState>["trac
   const supervisorName = typeof event.data.supervisor_name === "string" ? event.data.supervisor_name : "";
   const model = typeof event.data.model_name === "string" ? event.data.model_name : "";
   const skillTopic = typeof event.data.skill_topic === "string" ? event.data.skill_topic : "";
+  const workflowRunId = typeof event.data.workflow_run_id === "string" ? event.data.workflow_run_id : "";
+  if (workflowRunId) {
+    return <div className="mt-0.5 truncate text-[#667085]">Run {workflowRunId}</div>;
+  }
   const detail = skillTopic || agentName || supervisorName || model || event.event;
-  return <div className="mt-0.5 truncate text-gray-400">{detail}</div>;
+  return <div className="mt-0.5 truncate text-[#667085]">{detail}</div>;
 }
 
 function TraceIcon({ status, event }: { status: string; event: string }) {
