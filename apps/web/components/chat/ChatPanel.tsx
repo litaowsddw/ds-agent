@@ -34,9 +34,9 @@ export default function ChatPanel({
     executionMode !== "workflow"
       ? ""
       : publishedWorkflows.length === 0
-        ? "No published workflows"
+        ? "暂无已发布 Workflow"
         : !workflowId
-          ? "Select a published workflow"
+          ? "请选择已发布 Workflow"
           : "";
   const isSendDisabled = isGenerating || !input.trim() || Boolean(workflowModeBlockedReason);
 
@@ -156,7 +156,7 @@ export default function ChatPanel({
                   ))}
                 </select>
                 {publishedWorkflows.length === 0 ? (
-                  <span className="text-xs text-gray-400 dark:text-gray-500">No published workflows</span>
+                  <span className="text-xs text-gray-400 dark:text-gray-500">暂无已发布 Workflow</span>
                 ) : null}
               </>
             ) : null}

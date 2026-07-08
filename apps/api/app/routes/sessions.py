@@ -3,6 +3,9 @@
 使用 SQLAlchemy 异步数据库服务替代内存 store。
 """
 
+import json
+from typing import Any
+
 from fastapi import APIRouter, HTTPException, Query, Depends
 from sqlalchemy.ext.asyncio import AsyncSession
 
@@ -185,4 +188,18 @@ def _to_message_response(m: SessionMessageModel) -> MessageResponse:
         sequence=m.sequence,
         estimated_tokens=m.estimated_tokens,
         compacted=m.compacted,
+        meta_info=_parse_message_meta_info(getattr(m, "meta_info", "{}")),
     )
+
+
+def _parse_message_meta_info(raw_meta_info: object) -> dict[str, Any]:
+    """Parse persisted message metadata, defaulting safely for legacy rows."""
+    if isinstance(raw_meta_info, dict):
+        return raw_meta_info
+    if not raw_meta_info:
+        return {}
+    try:
+        parsed = json.loads(str(raw_meta_info))
+    except (TypeError, ValueError):
+        return {}
+    return parsed if isinstance(parsed, dict) else {}

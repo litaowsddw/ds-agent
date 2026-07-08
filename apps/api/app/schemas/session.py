@@ -1,6 +1,7 @@
 """Session API Schema。"""
 
 from pydantic import BaseModel, Field
+from typing import Any
 
 from apps.api.app.domain.session import MessageRole, SessionQueueMode, SessionStatus
 
@@ -45,6 +46,7 @@ class MessageResponse(BaseModel):
     sequence: int
     estimated_tokens: int
     compacted: bool
+    meta_info: dict[str, Any] = Field(default_factory=dict)
 
 
 class SessionCompactRequest(BaseModel):

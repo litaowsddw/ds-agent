@@ -61,6 +61,25 @@ def _create_published_passthrough_workflow(client: TestClient, owner_user_id: st
     return workflow["workflow_id"]
 
 
+def _parse_sse_events(body: str) -> list[dict[str, object]]:
+    events: list[dict[str, object]] = []
+    for block in body.split("\n\n"):
+        event_name = ""
+        data = ""
+        for line in block.splitlines():
+            if line.startswith("event: "):
+                event_name = line.removeprefix("event: ")
+            if line.startswith("data: "):
+                data = line.removeprefix("data: ")
+        if event_name and data:
+            import json
+
+            payload = json.loads(data)
+            payload["event"] = event_name
+            events.append(payload)
+    return events
+
+
 def test_chat_workflow_mode_executes_published_workflow_and_saves_session(client: TestClient) -> None:
     suffix = _suffix("chat-wf")
     owner_user_id, org_id, agent_id = _create_owner_org_agent(client, suffix)
@@ -91,6 +110,75 @@ def test_chat_workflow_mode_executes_published_workflow_and_saves_session(client
     assert assistant_message["meta_info"]["execution_mode"] == "workflow"
     assert assistant_message["meta_info"]["workflow_id"] == body["workflow_id"]
     assert assistant_message["meta_info"]["workflow_run_id"] == body["workflow_run_id"]
+
+
+def test_canonical_session_messages_include_workflow_metadata(client: TestClient) -> None:
+    suffix = _suffix("session-wf-meta")
+    owner_user_id, org_id, agent_id = _create_owner_org_agent(client, suffix)
+    workflow_id = _create_published_passthrough_workflow(client, owner_user_id, agent_id)
+
+    chat_response = client.post(
+        "/chat/",
+        json={
+            "actor_user_id": owner_user_id,
+            "agent_id": agent_id,
+            "org_id": org_id,
+            "message": "canonical metadata",
+            "execution_mode": "workflow",
+            "workflow_id": workflow_id,
+        },
+    )
+
+    assert chat_response.status_code == 200
+    chat_body = chat_response.json()
+    messages_response = client.get(
+        f"/sessions/{chat_body['session_id']}/messages",
+        params={"actor_user_id": owner_user_id},
+    )
+
+    assert messages_response.status_code == 200
+    assistant_message = messages_response.json()[-1]
+    assert assistant_message["role"] == "assistant"
+    assert assistant_message["meta_info"]["execution_mode"] == "workflow"
+    assert assistant_message["meta_info"]["workflow_id"] == workflow_id
+    assert assistant_message["meta_info"]["workflow_run_id"] == chat_body["workflow_run_id"]
+
+
+def test_streaming_workflow_mode_saves_metadata_in_history(client: TestClient) -> None:
+    suffix = _suffix("stream-wf-meta")
+    owner_user_id, org_id, agent_id = _create_owner_org_agent(client, suffix)
+    workflow_id = _create_published_passthrough_workflow(client, owner_user_id, agent_id)
+
+    with client.stream(
+        "POST",
+        "/chat/stream",
+        json={
+            "actor_user_id": owner_user_id,
+            "agent_id": agent_id,
+            "org_id": org_id,
+            "message": "stream metadata",
+            "execution_mode": "workflow",
+            "workflow_id": workflow_id,
+        },
+    ) as response:
+        assert response.status_code == 200
+        body = "".join(response.iter_text())
+
+    events = _parse_sse_events(body)
+    run_finished = next(event for event in events if event["event"] == "run_finished")
+    session_id = str(run_finished["session_id"])
+    workflow_run_id = str(run_finished["workflow_run_id"])
+
+    messages_response = client.get(
+        f"/sessions/{session_id}/messages",
+        params={"actor_user_id": owner_user_id},
+    )
+    assert messages_response.status_code == 200
+    assistant_message = messages_response.json()[-1]
+    assert assistant_message["role"] == "assistant"
+    assert assistant_message["meta_info"]["execution_mode"] == "workflow"
+    assert assistant_message["meta_info"]["workflow_id"] == workflow_id
+    assert assistant_message["meta_info"]["workflow_run_id"] == workflow_run_id
 
 
 def test_chat_history_preserves_empty_metadata_for_autonomous_messages(client: TestClient) -> None:
