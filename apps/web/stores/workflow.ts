@@ -54,6 +54,7 @@ interface WorkflowStore {
   runWorkflow: (actorUserId: string, input: string) => Promise<void>;
   loadNodeRuns: (runId: string, actorUserId: string) => Promise<void>;
   clearRunSelection: () => void;
+  resetWorkspaceData: () => void;
   refreshWorkflows: (orgId: string, actorUserId: string, agentId?: string) => Promise<void>;
   refreshRuns: (orgId: string, actorUserId: string) => Promise<void>;
 }
@@ -412,6 +413,20 @@ export const useWorkflowStore = create<WorkflowStore>((set, get) => ({
   },
 
   clearRunSelection: () => set({ selectedRunId: "", nodeRuns: [] }),
+
+  resetWorkspaceData: () =>
+    set({
+      nodes: INITIAL_NODES as Node<CustomNodeData>[],
+      edges: INITIAL_EDGES as Edge[],
+      workflows: [],
+      selectedWorkflowId: "",
+      selectedNodeId: "llm",
+      versions: [],
+      runs: [],
+      selectedRunId: "",
+      nodeRuns: [],
+      workflowForm: { name: "", description: "", input: "" },
+    }),
 
   refreshWorkflows: async (orgId, actorUserId, agentId) => {
     const params = new URLSearchParams({ org_id: orgId, actor_user_id: actorUserId });

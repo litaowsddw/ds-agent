@@ -31,6 +31,12 @@ export function clearAccessToken(): void {
   localStorage.removeItem(TOKEN_ORG_KEY);
 }
 
+/** 清除当前组织上下文，保留登录 Token。 */
+export function clearCurrentOrgId(): void {
+  if (typeof window === "undefined") return;
+  localStorage.removeItem(TOKEN_ORG_KEY);
+}
+
 /** 获取当前组织 ID */
 export function getCurrentOrgId(): string | null {
   if (typeof window === "undefined") return null;
