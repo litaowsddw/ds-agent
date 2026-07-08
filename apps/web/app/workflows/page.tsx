@@ -54,6 +54,7 @@ function groupedPalette(items: WorkflowPaletteItem[]) {
 
 export default function WorkflowsPage() {
   const workspace = useWorkspaceStore((state) => state.workspace);
+  const agents = useWorkspaceStore((state) => state.agents);
   const selectedAgentId = useWorkspaceStore((state) => state.selectedAgentId);
   const busy = useWorkspaceStore((state) => state.busy);
 
@@ -91,6 +92,7 @@ export default function WorkflowsPage() {
 
   const selectedNode = nodes.find((node) => node.id === selectedNodeId);
   const selectedWorkflow = workflows.find((workflow) => workflow.workflow_id === selectedWorkflowId);
+  const selectedAgent = agents.find((agent) => agent.agent_id === selectedAgentId);
   const [nodeSearch, setNodeSearch] = useState("");
   const paletteGroups = useMemo(() => {
     const query = nodeSearch.trim().toLowerCase();
@@ -118,6 +120,14 @@ export default function WorkflowsPage() {
     return <div className="flex h-64 items-center justify-center text-sm text-[#667085]">Create a workspace first</div>;
   }
 
+  if (!selectedAgentId) {
+    return (
+      <div className="flex h-64 items-center justify-center text-sm text-[#667085]">
+        请先在 Agents 中选择或创建一个 Agent，再为它设计 Workflow 策略。
+      </div>
+    );
+  }
+
   return (
     <div className="grid h-[calc(100vh-7rem)] min-h-[720px] gap-4 xl:grid-cols-[280px_minmax(0,1fr)_400px]">
       <aside className="min-h-0 overflow-hidden rounded-lg border border-[#dfe4ee] bg-white">
@@ -126,7 +136,7 @@ export default function WorkflowsPage() {
             <Sparkles size={15} />
             Nodes
           </div>
-          <div className="mt-1 text-xs text-[#667085]">Click a node to insert it after the selected step.</div>
+          <div className="mt-1 text-xs text-[#667085]">Build an optional stable process for the selected Agent.</div>
           <label className="mt-3 flex h-9 items-center gap-2 rounded-lg border border-[#dfe4ee] bg-[#f8fafc] px-3 text-sm">
             <Search size={15} className="text-[#667085]" />
             <input
@@ -168,9 +178,9 @@ export default function WorkflowsPage() {
       <main className="min-h-0 overflow-hidden rounded-lg border border-[#dfe4ee] bg-white">
         <div className="flex items-center justify-between border-b border-[#dfe4ee] px-4 py-3">
           <div>
-            <div className="text-sm font-semibold text-[#172033]">Workflow Canvas</div>
+            <div className="text-sm font-semibold text-[#172033]">Agent Workflow Strategy</div>
             <div className="mt-1 text-xs text-[#667085]">
-              {selectedWorkflow ? selectedWorkflow.name : "Draft"} · {nodes.length} nodes · {edges.length} edges
+              {selectedAgent ? selectedAgent.name : "Selected Agent"} · {selectedWorkflow ? selectedWorkflow.name : "Draft"} · {nodes.length} nodes · {edges.length} edges
             </div>
           </div>
           <div className="flex items-center gap-2">
