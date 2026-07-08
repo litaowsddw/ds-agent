@@ -53,6 +53,7 @@ interface WorkflowStore {
   publishWorkflow: (actorUserId: string) => Promise<void>;
   runWorkflow: (actorUserId: string, input: string) => Promise<void>;
   loadNodeRuns: (runId: string, actorUserId: string) => Promise<void>;
+  clearRunSelection: () => void;
   refreshWorkflows: (orgId: string, actorUserId: string, agentId?: string) => Promise<void>;
   refreshRuns: (orgId: string, actorUserId: string) => Promise<void>;
 }
@@ -409,6 +410,8 @@ export const useWorkflowStore = create<WorkflowStore>((set, get) => ({
     );
     set({ nodeRuns, selectedRunId: runId });
   },
+
+  clearRunSelection: () => set({ selectedRunId: "", nodeRuns: [] }),
 
   refreshWorkflows: async (orgId, actorUserId, agentId) => {
     const params = new URLSearchParams({ org_id: orgId, actor_user_id: actorUserId });
