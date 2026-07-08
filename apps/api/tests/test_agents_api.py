@@ -1,15 +1,27 @@
 """Agent API 测试。"""
 
+from uuid import uuid4
+
+import pytest
 from fastapi.testclient import TestClient
 
 from apps.api.app.main import app
 
 
-def test_agent_api_create_and_read_workspace() -> None:
+@pytest.fixture()
+def client() -> TestClient:
+    with TestClient(app) as test_client:
+        yield test_client
+
+
+def _suffix(label: str) -> str:
+    return f"{label}-{uuid4().hex[:8]}"
+
+
+def test_agent_api_create_and_read_workspace(client: TestClient) -> None:
     """验证 Agent 创建和 Workspace 读取主流程。"""
 
-    client = TestClient(app)
-    suffix = "agent-api-main"
+    suffix = _suffix("agent-api-main")
 
     owner_response = client.post(
         "/identity/users/register",
@@ -47,11 +59,10 @@ def test_agent_api_create_and_read_workspace() -> None:
     assert "AGENTS.md" in workspace_response.json()["files"]
 
 
-def test_agent_api_rejects_cross_org_workspace_read() -> None:
+def test_agent_api_rejects_cross_org_workspace_read(client: TestClient) -> None:
     """验证其他组织用户不能读取 Agent Workspace。"""
 
-    client = TestClient(app)
-    suffix = "agent-api-cross-org"
+    suffix = _suffix("agent-api-cross")
 
     alice_response = client.post(
         "/identity/users/register",
@@ -94,3 +105,119 @@ def test_agent_api_rejects_cross_org_workspace_read() -> None:
         params={"actor_user_id": bob_user_id},
     )
     assert blocked_response.status_code == 403
+
+
+def test_agent_default_workflow_starts_empty(client: TestClient) -> None:
+    suffix = _suffix("agent-wf-empty")
+    owner_response = client.post(
+        "/identity/users/register",
+        json={"email": f"owner-{suffix}@example.com", "display_name": "Owner", "password": "password123"},
+    )
+    owner_user_id = owner_response.json()["user_id"]
+    org_response = client.post(
+        "/identity/organizations",
+        json={"creator_user_id": owner_user_id, "name": "Default Workflow Org"},
+    )
+    org_id = org_response.json()["org_id"]
+
+    agent_response = client.post(
+        "/agents",
+        json={"actor_user_id": owner_user_id, "org_id": org_id, "name": "Autonomous Agent", "description": ""},
+    )
+
+    assert agent_response.status_code == 200
+    assert agent_response.json()["default_workflow_id"] is None
+
+
+def test_agent_update_rejects_default_workflow_from_other_agent(client: TestClient) -> None:
+    suffix = _suffix("agent-wf-cross")
+    owner_response = client.post(
+        "/identity/users/register",
+        json={"email": f"owner-{suffix}@example.com", "display_name": "Owner", "password": "password123"},
+    )
+    owner_user_id = owner_response.json()["user_id"]
+    org_id = client.post(
+        "/identity/organizations",
+        json={"creator_user_id": owner_user_id, "name": "Cross Workflow Org"},
+    ).json()["org_id"]
+    agent_a = client.post(
+        "/agents",
+        json={"actor_user_id": owner_user_id, "org_id": org_id, "name": "Agent A", "description": ""},
+    ).json()
+    agent_b = client.post(
+        "/agents",
+        json={"actor_user_id": owner_user_id, "org_id": org_id, "name": "Agent B", "description": ""},
+    ).json()
+    workflow = client.post(
+        "/workflows",
+        json={
+            "actor_user_id": owner_user_id,
+            "agent_id": agent_b["agent_id"],
+            "name": "Agent B Workflow",
+            "description": "",
+            "draft_definition": {
+                "version": "1.0",
+                "nodes": [{"id": "start", "type": "start", "config": {}}, {"id": "end", "type": "end", "config": {}}],
+                "edges": [{"source": "start", "target": "end"}],
+            },
+        },
+    ).json()
+    client.post(f"/workflows/{workflow['workflow_id']}/publish", json={"actor_user_id": owner_user_id})
+
+    update_response = client.put(
+        f"/agents/{agent_a['agent_id']}",
+        json={
+            "actor_user_id": owner_user_id,
+            "name": "Agent A",
+            "description": "",
+            "default_workflow_id": workflow["workflow_id"],
+        },
+    )
+
+    assert update_response.status_code == 400
+    assert "默认 Workflow 必须属于当前 Agent" in update_response.text
+
+
+def test_agent_update_accepts_own_published_default_workflow(client: TestClient) -> None:
+    suffix = _suffix("agent-wf-own")
+    owner_response = client.post(
+        "/identity/users/register",
+        json={"email": f"owner-{suffix}@example.com", "display_name": "Owner", "password": "password123"},
+    )
+    owner_user_id = owner_response.json()["user_id"]
+    org_id = client.post(
+        "/identity/organizations",
+        json={"creator_user_id": owner_user_id, "name": "Own Workflow Org"},
+    ).json()["org_id"]
+    agent = client.post(
+        "/agents",
+        json={"actor_user_id": owner_user_id, "org_id": org_id, "name": "Agent", "description": ""},
+    ).json()
+    workflow = client.post(
+        "/workflows",
+        json={
+            "actor_user_id": owner_user_id,
+            "agent_id": agent["agent_id"],
+            "name": "Default Workflow",
+            "description": "",
+            "draft_definition": {
+                "version": "1.0",
+                "nodes": [{"id": "start", "type": "start", "config": {}}, {"id": "end", "type": "end", "config": {}}],
+                "edges": [{"source": "start", "target": "end"}],
+            },
+        },
+    ).json()
+    client.post(f"/workflows/{workflow['workflow_id']}/publish", json={"actor_user_id": owner_user_id})
+
+    update_response = client.put(
+        f"/agents/{agent['agent_id']}",
+        json={
+            "actor_user_id": owner_user_id,
+            "name": "Agent",
+            "description": "",
+            "default_workflow_id": workflow["workflow_id"],
+        },
+    )
+
+    assert update_response.status_code == 200
+    assert update_response.json()["default_workflow_id"] == workflow["workflow_id"]

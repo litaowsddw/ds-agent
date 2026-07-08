@@ -43,6 +43,7 @@ class AgentDBService(BaseDBService[AgentModel]):
         system_prompt: str | None = None,
         temperature: float | None = 0.0,
         max_tokens: int | None = None,
+        default_workflow_id: str | None = None,
     ) -> AgentModel:
         """创建 Agent。"""
         agent = AgentModel(
@@ -58,6 +59,7 @@ class AgentDBService(BaseDBService[AgentModel]):
             system_prompt=system_prompt,
             temperature=temperature,
             max_tokens=max_tokens,
+            default_workflow_id=default_workflow_id,
             created_by=created_by,
         )
         session.add(agent)
@@ -85,7 +87,12 @@ class AgentDBService(BaseDBService[AgentModel]):
         self, session: AsyncSession, agent_id: str, **data
     ) -> AgentModel:
         """更新 Agent。"""
-        return await self.update_by_id(session, agent_id, **data)
+        agent = await self.get_agent_required(session, agent_id)
+        for key, value in data.items():
+            if hasattr(agent, key) and (value is not None or key == "default_workflow_id"):
+                setattr(agent, key, value)
+        await session.flush()
+        return agent
 
     async def delete_agent(self, session: AsyncSession, agent_id: str) -> bool:
         """删除 Agent。"""

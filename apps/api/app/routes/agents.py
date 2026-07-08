@@ -17,6 +17,7 @@ from app.schemas.agent import (
 )
 from app.services.db.agent_db import agent_db, workspace_db
 from app.services.db.identity_db import membership_db
+from app.services.db.workflow_db import workflow_db
 from app.domain.identity import new_id
 
 router = APIRouter()
@@ -46,8 +47,10 @@ async def create_agent(
             system_prompt=request.system_prompt,
             temperature=request.temperature,
             max_tokens=request.max_tokens,
+            default_workflow_id=request.default_workflow_id,
             created_by=request.actor_user_id,
         )
+        await _validate_default_workflow(session, agent, request.default_workflow_id)
 
         # 自动创建 Workspace
         await workspace_db.create_workspace(
@@ -83,6 +86,8 @@ async def update_agent(
         for key in ("name", "description", "system_prompt", "model_provider", "model_name"):
             if key in update_data and isinstance(update_data[key], str):
                 update_data[key] = update_data[key].strip()
+        if "default_workflow_id" in update_data:
+            await _validate_default_workflow(session, agent, update_data["default_workflow_id"])
         agent = await agent_db.update_agent(session, agent_id, **update_data)
         await session.commit()
     except ValueError as exc:
@@ -137,9 +142,17 @@ async def get_workspace(
     """读取 Agent Workspace。"""
     try:
         agent = await agent_db.get_agent_required(session, agent_id)
+    except ValueError as exc:
+        raise HTTPException(status_code=404, detail=str(exc)) from exc
+
+    try:
         await membership_db.assert_org_access(
             session, user_id=actor_user_id, org_id=agent.org_id
         )
+    except ValueError as exc:
+        raise HTTPException(status_code=403, detail=str(exc)) from exc
+
+    try:
         workspace = await workspace_db.get_by_agent_id_required(session, agent_id)
     except ValueError as exc:
         raise HTTPException(status_code=404, detail=str(exc)) from exc
@@ -188,6 +201,22 @@ async def update_workspace_file(
     return _to_workspace_response(workspace)
 
 
+async def _validate_default_workflow(
+    session: AsyncSession,
+    agent: AgentModel,
+    default_workflow_id: str | None,
+) -> None:
+    """校验默认 Workflow 属于当前 Agent 且已发布。"""
+
+    if not default_workflow_id:
+        return
+    workflow = await workflow_db.get_workflow_required(session, default_workflow_id)
+    if workflow.agent_id != agent.agent_id:
+        raise ValueError("默认 Workflow 必须属于当前 Agent")
+    if workflow.published_version_id is None:
+        raise ValueError("默认 Workflow 必须先发布")
+
+
 def _to_agent_response(agent: AgentModel) -> AgentResponse:
     """把 Agent ORM 模型转换为 API 响应。"""
     return AgentResponse(
@@ -202,6 +231,7 @@ def _to_agent_response(agent: AgentModel) -> AgentResponse:
         system_prompt=agent.system_prompt,
         temperature=agent.temperature,
         max_tokens=agent.max_tokens,
+        default_workflow_id=agent.default_workflow_id,
         created_by=agent.created_by,
     )
 
@@ -214,9 +244,13 @@ def _to_workspace_response(workspace: AgentWorkspaceModel) -> WorkspaceResponse:
         agent_id=workspace.agent_id,
         files={
             "AGENTS": workspace.agents_md,
+            "AGENTS.md": workspace.agents_md,
             "SOUL": workspace.soul_md,
+            "SOUL.md": workspace.soul_md,
             "TOOLS": workspace.tools_md,
+            "TOOLS.md": workspace.tools_md,
             "MEMORY": workspace.memory_md,
+            "MEMORY.md": workspace.memory_md,
         },
         updated_by=workspace.updated_by,
     )
