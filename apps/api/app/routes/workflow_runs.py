@@ -12,32 +12,25 @@ import json
 from typing import Any
 
 from fastapi import APIRouter, Depends, HTTPException, Query
-from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from app.core.security import decrypt_api_key
 from app.database import get_db_session
 from app.domain.identity import new_id
-from app.gateway.llm import LLMGateway, OpenAICompatibleProvider, llm_gateway
-from app.models.runtime import AgentMCPPolicyModel, MCPServerModel, MCPToolModel
+from app.gateway.llm import OpenAICompatibleProvider
 from app.models.workflow import NodeRunModel, WorkflowRunModel
-from app.schemas.knowledge import SearchRequest
 from app.schemas.workflow_run import (
     NodeRunResponse,
     WorkflowRunCreateRequest,
     WorkflowRunResponse,
 )
 from app.services.db.identity_db import membership_db
-from app.services.db.runtime_db import model_provider_db
 from app.services.db.workflow_db import (
-    knowledge_base_db,
-    node_run_db,
     workflow_db,
     workflow_run_db,
     workflow_version_db,
 )
-from app.routes.knowledge import search_knowledge_base
-from packages.workflow.executor import ExecutedNode, WorkflowExecutor
+from app.services import workflow_execution as workflow_execution_module
+from app.services.workflow_execution import workflow_execution_service
 
 router = APIRouter()
 
@@ -58,31 +51,29 @@ async def create_run(
             session, user_id=request.actor_user_id, org_id=workflow.org_id
         )
 
-        run = await workflow_run_db.create_run(
-            session,
-            run_id=new_id("run"),
-            workflow_id=workflow.workflow_id,
-            version_id=version.version_id,
-            org_id=workflow.org_id,
-            agent_id=workflow.agent_id,
-            created_by=request.actor_user_id,
-            input_data=request.input_data,
-        )
-        await session.commit()
-
         definition = json.loads(version.definition)
         if request.async_mode:
+            run = await workflow_run_db.create_run(
+                session,
+                run_id=new_id("run"),
+                workflow_id=workflow.workflow_id,
+                version_id=version.version_id,
+                org_id=workflow.org_id,
+                agent_id=workflow.agent_id,
+                created_by=request.actor_user_id,
+                input_data=request.input_data,
+            )
+            await session.commit()
             await _submit_async_run(run=run, definition=definition, request=request)
         else:
-            await _execute_run_now(
-                session=session,
-                run=run,
-                definition=definition,
+            workflow_execution_module.OpenAICompatibleProvider = OpenAICompatibleProvider
+            run = await workflow_execution_service.create_and_execute(
+                session,
+                version_id=version.version_id,
                 input_data=request.input_data,
                 actor_user_id=request.actor_user_id,
             )
             await session.commit()
-            run = await workflow_run_db.get_run_required(session, run.run_id)
 
     except ValueError as exc:
         await session.rollback()
@@ -100,29 +91,13 @@ async def execute_workflow_version_for_chat(
 ) -> WorkflowRunModel:
     """创建并同步执行 Workflow Run，供 Chat 流程模式复用。"""
 
-    version = await workflow_version_db.get_by_id_required(session, version_id, "version_id")
-    workflow = await workflow_db.get_workflow_required(session, version.workflow_id)
-    await membership_db.assert_org_access(session, user_id=actor_user_id, org_id=workflow.org_id)
-    run = await workflow_run_db.create_run(
+    workflow_execution_module.OpenAICompatibleProvider = OpenAICompatibleProvider
+    return await workflow_execution_service.create_and_execute(
         session,
-        run_id=new_id("run"),
-        workflow_id=workflow.workflow_id,
-        version_id=version.version_id,
-        org_id=workflow.org_id,
-        agent_id=workflow.agent_id,
-        created_by=actor_user_id,
-        input_data=input_data,
-    )
-    await session.flush()
-    await _execute_run_now(
-        session=session,
-        run=run,
-        definition=json.loads(version.definition),
+        version_id=version_id,
         input_data=input_data,
         actor_user_id=actor_user_id,
     )
-    await session.flush()
-    return await workflow_run_db.get_run_required(session, run.run_id)
 
 
 @router.get("", response_model=list[WorkflowRunResponse])
@@ -217,229 +192,6 @@ async def _submit_async_run(
         )
     except Exception as exc:
         raise ValueError(f"异步队列不可用：{exc}") from exc
-
-
-async def _execute_run_now(
-    session: AsyncSession,
-    run: WorkflowRunModel,
-    definition: dict[str, Any],
-    input_data: dict[str, Any],
-    actor_user_id: str,
-) -> None:
-    """在 API 进程内同步执行一次 Workflow。"""
-
-    await workflow_run_db.update_run_status(session, run.run_id, "running")
-    executor = WorkflowExecutor(
-        llm_gateway=lambda config, node_input: _execute_llm_node(
-            session=session,
-            config=config,
-            node_input=node_input,
-            actor_user_id=actor_user_id,
-            org_id=run.org_id,
-        ),
-        rag_search=lambda config, node_input: _execute_rag_node(
-            session=session,
-            config=config,
-            node_input=node_input,
-            actor_user_id=actor_user_id,
-            org_id=run.org_id,
-        ),
-        tool_call=lambda config, node_input: _execute_tool_node(
-            session=session,
-            config=config,
-            node_input=node_input,
-            actor_user_id=actor_user_id,
-            org_id=run.org_id,
-            agent_id=run.agent_id,
-        ),
-    )
-    result = await executor.execute_async(definition=definition, input_data=input_data)
-
-    for index, executed_node in enumerate(result.node_runs):
-        await _persist_executed_node(session, run.run_id, executed_node, index)
-
-    await workflow_run_db.update_run_status(
-        session,
-        run.run_id,
-        result.status,
-        output_data=result.output_data,
-        error_message=result.error_message,
-    )
-
-
-async def _execute_llm_node(
-    session: AsyncSession,
-    config: dict[str, Any],
-    node_input: dict[str, Any],
-    actor_user_id: str,
-    org_id: str,
-) -> dict[str, Any]:
-    """执行真实 LLM 节点。"""
-
-    provider_key = str(config.get("provider") or "")
-    if not provider_key:
-        raise ValueError("LLM 节点必须选择真实模型供应商")
-
-    provider_config = await model_provider_db.get_by_key(session, org_id, provider_key)
-    if provider_config is None or not provider_config.is_enabled:
-        raise ValueError(f"模型供应商未配置或已禁用：{provider_key}")
-
-    gateway = LLMGateway(
-        providers={
-            provider_key: OpenAICompatibleProvider(
-                base_url=provider_config.base_url,
-                api_key=decrypt_api_key(provider_config.api_key_encrypted),
-                provider_key=provider_key,
-            )
-        },
-        limiter=llm_gateway.limiter,
-    )
-    enriched_config = {
-        **config,
-        "_org_id": org_id,
-        "_actor_user_id": actor_user_id,
-    }
-    try:
-        return await gateway.generate_from_workflow_node(enriched_config, node_input)
-    finally:
-        llm_gateway.call_logs.extend(gateway.list_logs())
-
-
-async def _execute_rag_node(
-    session: AsyncSession,
-    config: dict[str, Any],
-    node_input: dict[str, Any],
-    actor_user_id: str,
-    org_id: str,
-) -> dict[str, Any]:
-    """执行真实 RAG 节点。"""
-
-    kb_id = str(config.get("kb_id") or "")
-    if not kb_id:
-        raise ValueError("RAG 节点必须选择知识库")
-    kb = await knowledge_base_db.get_by_id_required(session, kb_id, "kb_id")
-    if kb.org_id != org_id:
-        raise ValueError("RAG 节点不能访问其他组织的知识库")
-
-    query = _render_template(
-        template=str(config.get("query_template") or ""),
-        node_input=node_input,
-    )
-    if not query:
-        query = _stringify_for_query(node_input.get("workflow_input", {}))
-    limit = int(config.get("limit") or 5)
-    chunks = await search_knowledge_base(
-        kb_id=kb_id,
-        request=SearchRequest(actor_user_id=actor_user_id, query=query, limit=limit),
-        session=session,
-    )
-    return {
-        "kb_id": kb_id,
-        "query": query,
-        "chunks": [chunk.model_dump() for chunk in chunks],
-        "token_estimate": sum(chunk.estimated_tokens for chunk in chunks),
-        "upstream": node_input.get("upstream", {}),
-    }
-
-
-async def _execute_tool_node(
-    session: AsyncSession,
-    config: dict[str, Any],
-    node_input: dict[str, Any],
-    actor_user_id: str,
-    org_id: str,
-    agent_id: str,
-) -> dict[str, Any]:
-    """执行真实 Tool 节点授权校验并生成调用计划。
-
-    MVP 阶段仍不主动请求外部 MCP Server，避免不可控副作用；但工具、授权和风险等级都来自真实接口。
-    """
-
-    tool_id = str(config.get("tool_id") or "")
-    if not tool_id:
-        raise ValueError("Tool 节点必须选择已授权工具")
-    await membership_db.assert_org_access(
-        session, user_id=actor_user_id, org_id=org_id
-    )
-    stmt = (
-        select(MCPToolModel, MCPServerModel)
-        .join(MCPServerModel, MCPToolModel.server_id == MCPServerModel.server_id)
-        .join(AgentMCPPolicyModel, AgentMCPPolicyModel.server_id == MCPServerModel.server_id)
-        .where(
-            AgentMCPPolicyModel.agent_id == agent_id,
-            AgentMCPPolicyModel.allowed == True,
-            MCPToolModel.tool_id == tool_id,
-            MCPServerModel.org_id == org_id,
-        )
-    )
-    result = await session.execute(stmt)
-    row = result.first()
-    if row is None:
-        raise ValueError("Agent 未授权调用该 MCP Tool")
-    tool, server = row
-
-    risk_level = str(config.get("risk_level") or tool.risk_level or "low")
-    arguments = config.get("arguments", {})
-    requires_approval = risk_level in {"high", "critical"}
-    return {
-        "tool_id": tool.tool_id,
-        "tool_name": tool.name,
-        "server_id": tool.server_id,
-        "server_url": server.url,
-        "risk_level": risk_level,
-        "arguments": arguments if isinstance(arguments, dict) else {},
-        "status": "requires_approval" if requires_approval else "planned",
-        "requires_approval": requires_approval,
-        "upstream": node_input.get("upstream", {}),
-    }
-
-
-async def _persist_executed_node(
-    session: AsyncSession,
-    run_id: str,
-    executed_node: ExecutedNode,
-    sequence: int,
-) -> None:
-    """把执行器节点结果写入数据库。"""
-
-    node_run = await node_run_db.create_node_run(
-        session,
-        node_run_id=f"{new_id('nr')}_{sequence:04d}",
-        run_id=run_id,
-        node_id=executed_node.node_id,
-        node_type=executed_node.node_type,
-        input_data=executed_node.input_data,
-    )
-    await node_run_db.update_node_run(
-        session,
-        node_run.node_run_id,
-        status=executed_node.status,
-        output_data=executed_node.output_data,
-        error_message=executed_node.error_message,
-        elapsed_ms=executed_node.elapsed_ms,
-    )
-
-
-def _render_template(template: str, node_input: dict[str, Any]) -> str:
-    """渲染 RAG query_template。"""
-
-    if not template.strip():
-        return ""
-    workflow_input = node_input.get("workflow_input", {})
-    upstream = node_input.get("upstream", {})
-    rendered = template
-    rendered = rendered.replace("{{input}}", _stringify_for_query(workflow_input))
-    rendered = rendered.replace("{{workflow_input}}", _stringify_for_query(workflow_input))
-    rendered = rendered.replace("{{upstream}}", _stringify_for_query(upstream))
-    return rendered.strip()
-
-
-def _stringify_for_query(value: Any) -> str:
-    """把任意输入压缩成检索 query。"""
-
-    if isinstance(value, str):
-        return value.strip()
-    return json.dumps(value, ensure_ascii=False, sort_keys=True)
 
 
 def _to_run_response(run: WorkflowRunModel) -> WorkflowRunResponse:
