@@ -235,9 +235,20 @@ class WorkflowRunDBService(BaseDBService[WorkflowRunModel]):
         limit: int = 50,
     ) -> tuple[list[WorkflowRunModel], int]:
         """列出 Workflow 运行。"""
-        return await self.list_paginated(
-            session, offset=offset, limit=limit, workflow_id=workflow_id
+        count_stmt = select(func.count()).select_from(WorkflowRunModel).where(
+            WorkflowRunModel.workflow_id == workflow_id
         )
+        count_result = await session.execute(count_stmt)
+        total = count_result.scalar() or 0
+        stmt = (
+            select(WorkflowRunModel)
+            .where(WorkflowRunModel.workflow_id == workflow_id)
+            .order_by(WorkflowRunModel.created_at.desc())
+            .offset(offset)
+            .limit(limit)
+        )
+        result = await session.execute(stmt)
+        return list(result.scalars().all()), total
 
     async def list_org_runs(
         self,
@@ -247,9 +258,20 @@ class WorkflowRunDBService(BaseDBService[WorkflowRunModel]):
         limit: int = 50,
     ) -> tuple[list[WorkflowRunModel], int]:
         """List workflow runs in one organization for Studio run history."""
-        return await self.list_paginated(
-            session, offset=offset, limit=limit, org_id=org_id
+        count_stmt = select(func.count()).select_from(WorkflowRunModel).where(
+            WorkflowRunModel.org_id == org_id
         )
+        count_result = await session.execute(count_stmt)
+        total = count_result.scalar() or 0
+        stmt = (
+            select(WorkflowRunModel)
+            .where(WorkflowRunModel.org_id == org_id)
+            .order_by(WorkflowRunModel.created_at.desc())
+            .offset(offset)
+            .limit(limit)
+        )
+        result = await session.execute(stmt)
+        return list(result.scalars().all()), total
 
 
 class NodeRunDBService(BaseDBService[NodeRunModel]):
