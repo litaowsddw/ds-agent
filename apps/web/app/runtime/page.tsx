@@ -14,6 +14,7 @@ import Panel from "@/components/ui/Panel";
 import { TextInput, TextArea } from "@/components/ui/Form";
 import { PrimaryButton } from "@/components/ui/Button";
 import { Metric, ResourceList } from "@/components/ui/DataDisplay";
+import WorkspaceRequired from "@/components/ui/WorkspaceRequired";
 
 export default function RuntimePage() {
   const workspace = useWorkspaceStore((s) => s.workspace);
@@ -58,11 +59,7 @@ export default function RuntimePage() {
   }, [workspace, selectedAgentId, refreshRuntimeData]);
 
   if (!workspace) {
-    return (
-      <div className="flex h-64 items-center justify-center text-sm text-[#667085]">
-        请先在首页创建工作空间
-      </div>
-    );
+    return <WorkspaceRequired />;
   }
 
   return (

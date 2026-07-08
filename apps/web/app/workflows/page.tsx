@@ -25,6 +25,7 @@ import { nodeTypes } from "@/components/nodes";
 import { PrimaryButton } from "@/components/ui/Button";
 import { EmptyText, Metric } from "@/components/ui/DataDisplay";
 import { SelectInput, TextArea, TextInput } from "@/components/ui/Form";
+import WorkspaceRequired from "@/components/ui/WorkspaceRequired";
 import { NODE_PALETTE, type WorkflowPaletteItem } from "@/lib/constants";
 import { useKnowledgeStore } from "@/stores/knowledge";
 import { useRuntimeStore } from "@/stores/runtime";
@@ -127,7 +128,7 @@ export default function WorkflowsPage() {
   };
 
   if (!workspace) {
-    return <div className="flex h-64 items-center justify-center text-sm text-[#667085]">Create a workspace first</div>;
+    return <WorkspaceRequired />;
   }
 
   if (!selectedAgentId) {

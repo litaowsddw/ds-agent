@@ -9,6 +9,7 @@ import { PrimaryButton, SecondaryButton } from "@/components/ui/Button";
 import { EmptyText, Metric } from "@/components/ui/DataDisplay";
 import { TextArea, TextInput } from "@/components/ui/Form";
 import Panel from "@/components/ui/Panel";
+import WorkspaceRequired from "@/components/ui/WorkspaceRequired";
 import { useRuntimeStore } from "@/stores/runtime";
 import { useWorkspaceStore } from "@/stores/workspace";
 
@@ -55,7 +56,7 @@ export default function ModelsPage() {
   const currentWorkspace = workspace;
 
   if (!currentWorkspace) {
-    return <div className="flex h-64 items-center justify-center text-sm text-[#667085]">Create a workspace first</div>;
+    return <WorkspaceRequired />;
   }
 
   const workspaceUserId = currentWorkspace.userId;

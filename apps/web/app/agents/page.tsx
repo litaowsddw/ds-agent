@@ -9,6 +9,7 @@ import { PrimaryButton } from "@/components/ui/Button";
 import { EmptyText, Metric } from "@/components/ui/DataDisplay";
 import { SelectInput, TextArea, TextInput } from "@/components/ui/Form";
 import Panel from "@/components/ui/Panel";
+import WorkspaceRequired from "@/components/ui/WorkspaceRequired";
 import { apiRequest } from "@/lib/api";
 import { useRuntimeStore } from "@/stores/runtime";
 import { useWorkflowStore } from "@/stores/workflow";
@@ -100,7 +101,7 @@ export default function AgentsPage() {
   }, [selectedAgent]);
 
   if (!workspace) {
-    return <div className="flex h-64 items-center justify-center text-sm text-[#667085]">请先创建工作空间</div>;
+    return <WorkspaceRequired />;
   }
 
   return (

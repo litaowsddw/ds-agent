@@ -11,6 +11,7 @@ import { useWorkspaceStore } from "@/stores/workspace";
 import { useWorkflowStore } from "@/stores/workflow";
 import Panel from "@/components/ui/Panel";
 import { EmptyText } from "@/components/ui/DataDisplay";
+import WorkspaceRequired from "@/components/ui/WorkspaceRequired";
 
 export default function RunsPage() {
   const workspace = useWorkspaceStore((s) => s.workspace);
@@ -46,11 +47,7 @@ export default function RunsPage() {
   }, [agentRuns, selectedRunId, clearRunSelection]);
 
   if (!workspace) {
-    return (
-      <div className="flex h-64 items-center justify-center text-sm text-[#667085]">
-        请先在首页创建工作空间
-      </div>
-    );
+    return <WorkspaceRequired />;
   }
 
   if (!selectedAgentId) {
