@@ -106,7 +106,7 @@ export default function WorkflowsPage() {
     if (!workspace) return;
     void refreshRuntimeData(workspace.orgId, workspace.userId, selectedAgentId || undefined);
     void refreshKbs(workspace.orgId, workspace.userId);
-    void refreshWorkflows(workspace.orgId, workspace.userId);
+    void refreshWorkflows(workspace.orgId, workspace.userId, selectedAgentId || undefined);
     void refreshRuns(workspace.orgId, workspace.userId);
   }, [workspace, selectedAgentId, refreshRuntimeData, refreshKbs, refreshWorkflows, refreshRuns]);
 

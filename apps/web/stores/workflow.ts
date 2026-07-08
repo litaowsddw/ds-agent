@@ -53,7 +53,7 @@ interface WorkflowStore {
   publishWorkflow: (actorUserId: string) => Promise<void>;
   runWorkflow: (actorUserId: string, input: string) => Promise<void>;
   loadNodeRuns: (runId: string, actorUserId: string) => Promise<void>;
-  refreshWorkflows: (orgId: string, actorUserId: string) => Promise<void>;
+  refreshWorkflows: (orgId: string, actorUserId: string, agentId?: string) => Promise<void>;
   refreshRuns: (orgId: string, actorUserId: string) => Promise<void>;
 }
 
@@ -410,12 +410,14 @@ export const useWorkflowStore = create<WorkflowStore>((set, get) => ({
     set({ nodeRuns, selectedRunId: runId });
   },
 
-  refreshWorkflows: async (orgId, actorUserId) => {
-    const workflows = await apiRequest<WorkflowItem[]>(
-      `/workflows?org_id=${orgId}&actor_user_id=${actorUserId}`
-    );
+  refreshWorkflows: async (orgId, actorUserId, agentId) => {
+    const params = new URLSearchParams({ org_id: orgId, actor_user_id: actorUserId });
+    if (agentId) params.set("agent_id", agentId);
+    const workflows = await apiRequest<WorkflowItem[]>(`/workflows?${params.toString()}`);
     set((state) => {
-      const selectedWorkflowId = state.selectedWorkflowId || workflows[0]?.workflow_id || "";
+      const selectedWorkflowId = workflows.some((item) => item.workflow_id === state.selectedWorkflowId)
+        ? state.selectedWorkflowId
+        : workflows[0]?.workflow_id || "";
       const selectedWorkflow = workflows.find((item) => item.workflow_id === selectedWorkflowId);
       const nodes = selectedWorkflow ? hydrateNodes(selectedWorkflow.draft_definition) : state.nodes;
       return {
