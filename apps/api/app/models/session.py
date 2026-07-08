@@ -37,6 +37,7 @@ class SessionMessageModel(Base):
     sequence: Mapped[int] = mapped_column(Integer, nullable=False)
     estimated_tokens: Mapped[int] = mapped_column(Integer, default=0)
     compacted: Mapped[bool] = mapped_column(Boolean, default=False)
+    meta_info: Mapped[str] = mapped_column(Text, default="{}")
     created_at: Mapped[datetime] = mapped_column(DateTime, default=datetime.utcnow)
 
     # 关系

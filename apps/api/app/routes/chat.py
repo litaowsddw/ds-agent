@@ -3,7 +3,7 @@
 import json
 import os
 from pathlib import Path
-from typing import AsyncIterator, Literal
+from typing import Any, AsyncIterator, Literal
 
 from fastapi import APIRouter, Depends, HTTPException, Query
 from pydantic import BaseModel
@@ -133,6 +133,11 @@ async def chat(
                 role="assistant",
                 content=response_text,
                 estimated_tokens=max(1, len(response_text) // 4),
+                meta_info={
+                    "execution_mode": "workflow",
+                    "workflow_id": workflow.workflow_id,
+                    "workflow_run_id": run.run_id,
+                },
             )
             await db.commit()
             return ChatResponse(
@@ -369,6 +374,11 @@ async def _chat_stream_events(request: ChatRequest, db: AsyncSession) -> AsyncIt
                 role="assistant",
                 content=response_text,
                 estimated_tokens=max(1, len(response_text) // 4),
+                meta_info={
+                    "execution_mode": "workflow",
+                    "workflow_id": workflow.workflow_id,
+                    "workflow_run_id": run.run_id,
+                },
             )
             yield await emit(
                 "node_finished",
@@ -760,19 +770,7 @@ async def get_session_messages(
         messages = await session_message_db.list_session_messages(db, session_id, limit=limit)
         return {
             "session_id": session_id,
-            "messages": [
-                {
-                    "message_id": str(message.message_id),
-                    "role": message.role,
-                    "content": message.content,
-                    "sequence": message.sequence,
-                    "meta_info": {},
-                    "created_at": str(message.created_at) if message.created_at else "",
-                }
-                for message in messages
-            ]
-            if messages
-            else [],
+            "messages": [_to_chat_message_response(message) for message in messages] if messages else [],
         }
     except Exception as exc:
         raise HTTPException(status_code=500, detail=f"Failed to load chat messages: {exc}") from exc
@@ -808,19 +806,32 @@ async def get_latest_agent_session(
         messages = await session_message_db.list_session_messages(db, session.session_id)
         return {
             "session_id": session.session_id,
-            "messages": [
-                {
-                    "message_id": str(message.message_id),
-                    "role": message.role,
-                    "content": message.content,
-                    "sequence": message.sequence,
-                    "meta_info": {},
-                    "created_at": str(message.created_at) if message.created_at else "",
-                }
-                for message in messages
-            ],
+            "messages": [_to_chat_message_response(message) for message in messages],
         }
     except ValueError as exc:
         raise HTTPException(status_code=404, detail=str(exc)) from exc
     except Exception as exc:
         raise HTTPException(status_code=500, detail=f"Failed to load latest chat session: {exc}") from exc
+
+
+def _parse_message_meta_info(raw_meta_info: object) -> dict[str, Any]:
+    if isinstance(raw_meta_info, dict):
+        return raw_meta_info
+    if not raw_meta_info:
+        return {}
+    try:
+        parsed = json.loads(str(raw_meta_info))
+    except (TypeError, ValueError):
+        return {}
+    return parsed if isinstance(parsed, dict) else {}
+
+
+def _to_chat_message_response(message: object) -> dict[str, object]:
+    return {
+        "message_id": str(getattr(message, "message_id", "")),
+        "role": getattr(message, "role", ""),
+        "content": getattr(message, "content", ""),
+        "sequence": getattr(message, "sequence", 0),
+        "meta_info": _parse_message_meta_info(getattr(message, "meta_info", "{}")),
+        "created_at": str(message.created_at) if getattr(message, "created_at", None) else "",
+    }

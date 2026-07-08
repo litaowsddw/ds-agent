@@ -87,6 +87,31 @@ def test_chat_workflow_mode_executes_published_workflow_and_saves_session(client
 
     messages = client.get(f"/chat/sessions/{body['session_id']}/messages").json()["messages"]
     assert [message["role"] for message in messages][-2:] == ["user", "assistant"]
+    assistant_message = messages[-1]
+    assert assistant_message["meta_info"]["execution_mode"] == "workflow"
+    assert assistant_message["meta_info"]["workflow_id"] == body["workflow_id"]
+    assert assistant_message["meta_info"]["workflow_run_id"] == body["workflow_run_id"]
+
+
+def test_chat_history_preserves_empty_metadata_for_autonomous_messages(client: TestClient) -> None:
+    suffix = _suffix("chat-auto-meta")
+    owner_user_id, _org_id, agent_id = _create_owner_org_agent(client, suffix)
+    session_id = client.post(
+        "/sessions",
+        json={"actor_user_id": owner_user_id, "agent_id": agent_id},
+    ).json()["session_id"]
+
+    append_response = client.post(
+        f"/sessions/{session_id}/messages",
+        json={"actor_user_id": owner_user_id, "role": "assistant", "content": "自主回复"},
+    )
+
+    assert append_response.status_code == 200
+    messages_response = client.get(f"/chat/sessions/{session_id}/messages")
+    assert messages_response.status_code == 200
+    message = messages_response.json()["messages"][0]
+    assert message["role"] == "assistant"
+    assert message["meta_info"] == {}
 
 
 def test_chat_workflow_mode_rejects_cross_agent_workflow(client: TestClient) -> None:

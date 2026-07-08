@@ -6,7 +6,7 @@
 
 import os
 from sqlalchemy.ext.asyncio import AsyncSession, create_async_engine, async_sessionmaker
-from sqlalchemy import create_engine as sync_create_engine
+from sqlalchemy import create_engine as sync_create_engine, inspect, text
 from sqlalchemy.orm import DeclarativeBase, sessionmaker
 
 # 数据库连接配置 - 从环境变量读取
@@ -73,3 +73,16 @@ async def init_db() -> None:
 
     async with async_engine.begin() as conn:
         await conn.run_sync(Base.metadata.create_all)
+        await conn.run_sync(_ensure_session_message_meta_info_column)
+
+
+def _ensure_session_message_meta_info_column(connection) -> None:
+    """Backfill lightweight schema changes for create_all-managed local DBs."""
+    inspector = inspect(connection)
+    if "session_messages" not in inspector.get_table_names():
+        return
+    columns = {column["name"] for column in inspector.get_columns("session_messages")}
+    if "meta_info" in columns:
+        return
+    connection.execute(text("ALTER TABLE session_messages ADD COLUMN meta_info TEXT"))
+    connection.execute(text("UPDATE session_messages SET meta_info = '{}' WHERE meta_info IS NULL"))

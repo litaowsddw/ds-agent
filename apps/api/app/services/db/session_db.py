@@ -4,6 +4,8 @@
 """
 
 from datetime import datetime
+import json
+from typing import Any
 
 from sqlalchemy import select, func
 from sqlalchemy.ext.asyncio import AsyncSession
@@ -93,6 +95,7 @@ class SessionMessageDBService(BaseDBService[SessionMessageModel]):
         role: str,
         content: str,
         estimated_tokens: int = 0,
+        meta_info: dict[str, Any] | None = None,
     ) -> SessionMessageModel:
         """追加消息（append-only）。"""
         # 计算序号
@@ -111,6 +114,7 @@ class SessionMessageDBService(BaseDBService[SessionMessageModel]):
             content=content,
             sequence=sequence,
             estimated_tokens=estimated_tokens,
+            meta_info=json.dumps(meta_info or {}, ensure_ascii=False, sort_keys=True),
         )
         session.add(message)
         await session.flush()
