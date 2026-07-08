@@ -1,8 +1,9 @@
 """Chat API routes."""
 
+import json
 import os
 from pathlib import Path
-from typing import AsyncIterator
+from typing import AsyncIterator, Literal
 
 from fastapi import APIRouter, Depends, HTTPException, Query
 from pydantic import BaseModel
@@ -31,6 +32,8 @@ class ChatRequest(BaseModel):
     actor_user_id: str | None = None
     stream: bool = False
     async_exec: bool = False
+    execution_mode: Literal["autonomous", "workflow"] = "autonomous"
+    workflow_id: str | None = None
 
 
 class ChatResponse(BaseModel):
@@ -42,6 +45,8 @@ class ChatResponse(BaseModel):
     subtask_count: int = 0
     succeeded_count: int = 0
     plan_id: str = ""
+    workflow_id: str = ""
+    workflow_run_id: str = ""
 
 
 @router.post("/", response_model=ChatResponse)
@@ -97,6 +102,47 @@ async def chat(
             content=request.message,
             estimated_tokens=max(1, len(request.message) // 4),
         )
+
+        if request.execution_mode == "workflow":
+            from apps.api.app.routes.workflow_runs import execute_workflow_version_for_chat
+            from apps.api.app.services.db.workflow_db import workflow_db
+
+            actor_user_id = request.actor_user_id or agent.created_by
+            workflow_id = request.workflow_id or agent.default_workflow_id or ""
+            if not workflow_id:
+                raise HTTPException(status_code=400, detail="请选择 Workflow 或改用自主模式")
+            workflow = await workflow_db.get_workflow_required(db, workflow_id)
+            if workflow.agent_id != request.agent_id:
+                raise HTTPException(status_code=400, detail="Workflow 必须属于当前 Agent")
+            if workflow.published_version_id is None:
+                raise HTTPException(status_code=400, detail="Workflow 必须先发布")
+
+            run = await execute_workflow_version_for_chat(
+                db,
+                version_id=workflow.published_version_id,
+                input_data={"text": request.message},
+                actor_user_id=actor_user_id,
+            )
+            response_text = json.dumps(json.loads(run.output_data), ensure_ascii=False, sort_keys=True)
+            await session_message_db.append_message(
+                db,
+                message_id=new_id("msg"),
+                session_id=session_id,
+                org_id=request.org_id,
+                agent_id=request.agent_id,
+                role="assistant",
+                content=response_text,
+                estimated_tokens=max(1, len(response_text) // 4),
+            )
+            await db.commit()
+            return ChatResponse(
+                response=response_text,
+                agent_id=request.agent_id,
+                session_id=session_id,
+                mode="workflow",
+                workflow_id=workflow.workflow_id,
+                workflow_run_id=run.run_id,
+            )
 
         model_provider = agent.model_provider or ""
         model_name = agent.model_name or ""

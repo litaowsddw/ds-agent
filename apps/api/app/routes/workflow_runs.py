@@ -91,6 +91,40 @@ async def create_run(
     return _to_run_response(run)
 
 
+async def execute_workflow_version_for_chat(
+    session: AsyncSession,
+    *,
+    version_id: str,
+    input_data: dict[str, Any],
+    actor_user_id: str,
+) -> WorkflowRunModel:
+    """创建并同步执行 Workflow Run，供 Chat 流程模式复用。"""
+
+    version = await workflow_version_db.get_by_id_required(session, version_id, "version_id")
+    workflow = await workflow_db.get_workflow_required(session, version.workflow_id)
+    await membership_db.assert_org_access(session, user_id=actor_user_id, org_id=workflow.org_id)
+    run = await workflow_run_db.create_run(
+        session,
+        run_id=new_id("run"),
+        workflow_id=workflow.workflow_id,
+        version_id=version.version_id,
+        org_id=workflow.org_id,
+        agent_id=workflow.agent_id,
+        created_by=actor_user_id,
+        input_data=input_data,
+    )
+    await session.flush()
+    await _execute_run_now(
+        session=session,
+        run=run,
+        definition=json.loads(version.definition),
+        input_data=input_data,
+        actor_user_id=actor_user_id,
+    )
+    await session.flush()
+    return await workflow_run_db.get_run_required(session, run.run_id)
+
+
 @router.get("", response_model=list[WorkflowRunResponse])
 async def list_runs(
     actor_user_id: str = Query(description="操作用户 ID"),
