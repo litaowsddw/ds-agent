@@ -11,6 +11,7 @@ import { SelectInput, TextArea, TextInput } from "@/components/ui/Form";
 import Panel from "@/components/ui/Panel";
 import { apiRequest } from "@/lib/api";
 import { useRuntimeStore } from "@/stores/runtime";
+import { useWorkflowStore } from "@/stores/workflow";
 import { useWorkspaceStore } from "@/stores/workspace";
 
 export default function AgentsPage() {
@@ -30,6 +31,8 @@ export default function AgentsPage() {
   const sessions = useRuntimeStore((state) => state.sessions);
   const modelProviders = useRuntimeStore((state) => state.modelProviders);
   const refreshRuntimeData = useRuntimeStore((state) => state.refreshRuntimeData);
+  const workflows = useWorkflowStore((state) => state.workflows);
+  const refreshWorkflows = useWorkflowStore((state) => state.refreshWorkflows);
 
   const [agentForm, setAgentForm] = useState({
     name: "",
@@ -39,6 +42,7 @@ export default function AgentsPage() {
     systemPrompt: "",
     temperature: "0.3",
     maxTokens: "",
+    defaultWorkflowId: "",
   });
   const [parameterForm, setParameterForm] = useState({
     name: "",
@@ -48,6 +52,7 @@ export default function AgentsPage() {
     systemPrompt: "",
     temperature: "0.3",
     maxTokens: "",
+    defaultWorkflowId: "",
   });
   const [workspaceText, setWorkspaceText] = useState("");
   const selectedAgent = getSelectedAgent();
@@ -65,7 +70,8 @@ export default function AgentsPage() {
   useEffect(() => {
     if (!workspace || !selectedAgentId) return;
     void refreshRuntimeData(workspace.orgId, workspace.userId, selectedAgentId);
-  }, [workspace, selectedAgentId, refreshRuntimeData]);
+    void refreshWorkflows(workspace.orgId, workspace.userId, selectedAgentId);
+  }, [workspace, selectedAgentId, refreshRuntimeData, refreshWorkflows]);
 
   useEffect(() => {
     if (!selectedAgent) {
@@ -77,6 +83,7 @@ export default function AgentsPage() {
         systemPrompt: "",
         temperature: "0.3",
         maxTokens: "",
+        defaultWorkflowId: "",
       });
       return;
     }
@@ -88,6 +95,7 @@ export default function AgentsPage() {
       systemPrompt: selectedAgent.system_prompt ?? "",
       temperature: String(selectedAgent.temperature ?? 0.3),
       maxTokens: selectedAgent.max_tokens ? String(selectedAgent.max_tokens) : "",
+      defaultWorkflowId: selectedAgent.default_workflow_id ?? "",
     });
   }, [selectedAgent]);
 
@@ -147,8 +155,9 @@ export default function AgentsPage() {
                     systemPrompt: agentForm.systemPrompt,
                     temperature: Number(agentForm.temperature || 0),
                     maxTokens: agentForm.maxTokens ? Number(agentForm.maxTokens) : null,
+                    defaultWorkflowId: null,
                   });
-                  setAgentForm({ name: "", description: "", modelProvider: "", modelName: "", systemPrompt: "", temperature: "0.3", maxTokens: "" });
+                  setAgentForm({ name: "", description: "", modelProvider: "", modelName: "", systemPrompt: "", temperature: "0.3", maxTokens: "", defaultWorkflowId: "" });
                   showToast("success", "Agent 已创建");
                 } catch (error) {
                   showToast("error", error instanceof Error ? error.message : "创建 Agent 失败");
@@ -235,6 +244,7 @@ export default function AgentsPage() {
                       systemPrompt: parameterForm.systemPrompt,
                       temperature: Number(parameterForm.temperature || 0),
                       maxTokens: parameterForm.maxTokens ? Number(parameterForm.maxTokens) : null,
+                      defaultWorkflowId: parameterForm.defaultWorkflowId || null,
                     });
                     showToast("success", "Agent 参数已保存");
                   } catch (error) {
@@ -245,6 +255,42 @@ export default function AgentsPage() {
             </div>
           ) : (
             <EmptyText text="请选择一个 Agent 后修改参数" />
+          )}
+        </Panel>
+
+        <Panel title="Workflow 策略" icon={<Network size={17} />}>
+          {selectedAgent ? (
+            <div className="space-y-3">
+              <div className="grid gap-2 sm:grid-cols-3">
+                <Metric label="Workflows" value={workflows.length} />
+                <Metric label="Published" value={workflows.filter((workflow) => workflow.published_version_id).length} />
+                <Metric label="Mode" value={parameterForm.defaultWorkflowId ? "流程" : "自主"} />
+              </div>
+              <SelectInput
+                label="默认 Workflow"
+                value={parameterForm.defaultWorkflowId}
+                onChange={(defaultWorkflowId) => setParameterForm({ ...parameterForm, defaultWorkflowId })}
+                options={[
+                  { label: "不设置默认流程，使用自主模式", value: "" },
+                  ...workflows
+                    .filter((workflow) => workflow.published_version_id)
+                    .map((workflow) => ({ label: workflow.name, value: workflow.workflow_id })),
+                ]}
+              />
+              <div className="space-y-2">
+                {workflows.length === 0 ? <EmptyText text="当前 Agent 暂无 Workflow" /> : null}
+                {workflows.slice(0, 5).map((workflow) => (
+                  <div key={workflow.workflow_id} className="rounded-lg border border-[#dfe4ee] bg-white px-3 py-2 text-sm">
+                    <div className="font-medium text-[#172033]">{workflow.name}</div>
+                    <div className="mt-1 text-xs text-[#667085]">
+                      {workflow.published_version_id ? "已发布" : "草稿"}
+                    </div>
+                  </div>
+                ))}
+              </div>
+            </div>
+          ) : (
+            <EmptyText text="请选择 Agent 后配置 Workflow 策略" />
           )}
         </Panel>
 

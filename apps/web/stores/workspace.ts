@@ -44,6 +44,7 @@ interface WorkspaceStore {
     systemPrompt?: string;
     temperature?: number | null;
     maxTokens?: number | null;
+    defaultWorkflowId?: string | null;
   }) => Promise<void>;
 
   /** 更新 Agent 参数 */
@@ -55,6 +56,7 @@ interface WorkspaceStore {
     systemPrompt?: string;
     temperature?: number | null;
     maxTokens?: number | null;
+    defaultWorkflowId?: string | null;
   }) => Promise<void>;
 
   /** 刷新 Agent 列表 */
@@ -124,6 +126,7 @@ persist((set, get) => ({
           system_prompt: form.systemPrompt || null,
           temperature: form.temperature ?? 0,
           max_tokens: form.maxTokens ?? null,
+          default_workflow_id: form.defaultWorkflowId ?? null,
         },
       });
       set((state) => ({
@@ -154,6 +157,7 @@ persist((set, get) => ({
           system_prompt: form.systemPrompt || null,
           temperature: form.temperature ?? 0,
           max_tokens: form.maxTokens ?? null,
+          default_workflow_id: form.defaultWorkflowId ?? null,
         },
       });
       set((state) => ({
