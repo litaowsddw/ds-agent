@@ -7,6 +7,7 @@ import { create } from "zustand";
 import { createJSONStorage, persist } from "zustand/middleware";
 import type { Agent, WorkspaceState } from "@/types/agent";
 import { apiRequest, login, setCurrentOrgId } from "@/lib/api";
+import { useWorkflowStore } from "@/stores/workflow";
 
 interface WorkspaceStore {
   /** 当前工作空间 */
@@ -76,7 +77,12 @@ persist((set, get) => ({
 
   setWorkspace: (ws) => set({ workspace: ws }),
   setAgents: (agents) => set({ agents }),
-  setSelectedAgentId: (id) => set({ selectedAgentId: id }),
+  setSelectedAgentId: (id) => {
+    if (get().selectedAgentId !== id) {
+      useWorkflowStore.getState().clearRunSelection();
+    }
+    set({ selectedAgentId: id });
+  },
   setBusy: (busy) => set({ busy }),
   setApiStatus: (status) => set({ apiStatus: status }),
 

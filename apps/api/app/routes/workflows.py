@@ -63,6 +63,9 @@ async def list_workflows(
     session: AsyncSession = Depends(get_db_session),
 ) -> list[WorkflowResponse]:
     """列出用户可访问的 Workflow。"""
+    if org_id is None and agent_id is None:
+        raise HTTPException(status_code=400, detail="org_id or agent_id is required")
+
     try:
         effective_org_id = org_id
         if agent_id is not None:

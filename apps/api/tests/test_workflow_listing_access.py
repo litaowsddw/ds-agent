@@ -75,6 +75,7 @@ class _WorkflowDB:
     ) -> None:
         self.workflows_by_id = workflows_by_id or {}
         self.listed_workflows = listed_workflows or []
+        self.list_workflows_calls: list[dict[str, str | None]] = []
 
     async def get_workflow_required(self, session: object, workflow_id: str) -> _Workflow:
         return self.workflows_by_id[workflow_id]
@@ -85,19 +86,55 @@ class _WorkflowDB:
         org_id: str | None = None,
         agent_id: str | None = None,
     ) -> tuple[list[_Workflow], int]:
+        self.list_workflows_calls.append({"org_id": org_id, "agent_id": agent_id})
         return self.listed_workflows, len(self.listed_workflows)
 
 
 class _WorkflowRunDB:
     def __init__(self, listed_runs: list[_Run]) -> None:
         self.listed_runs = listed_runs
+        self.list_workflow_runs_calls: list[str] = []
+        self.list_org_runs_calls: list[str] = []
 
     async def list_workflow_runs(
         self,
         session: object,
         workflow_id: str,
     ) -> tuple[list[_Run], int]:
+        self.list_workflow_runs_calls.append(workflow_id)
         return self.listed_runs, len(self.listed_runs)
+
+    async def list_org_runs(
+        self,
+        session: object,
+        org_id: str,
+    ) -> tuple[list[_Run], int]:
+        self.list_org_runs_calls.append(org_id)
+        return self.listed_runs, len(self.listed_runs)
+
+
+@pytest.mark.asyncio
+async def test_list_workflows_rejects_missing_scope(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    workflow_db = _WorkflowDB(
+        listed_workflows=[
+            _Workflow(workflow_id="workflow-a", org_id="org-a", agent_id="agent-a"),
+            _Workflow(workflow_id="workflow-b", org_id="org-b", agent_id="agent-b"),
+        ]
+    )
+    monkeypatch.setattr(workflows, "workflow_db", workflow_db)
+
+    with pytest.raises(HTTPException) as exc_info:
+        await workflows.list_workflows(
+            actor_user_id="user-a",
+            org_id=None,
+            agent_id=None,
+            session=object(),  # type: ignore[arg-type]
+        )
+
+    assert exc_info.value.status_code in {400, 403}
+    assert workflow_db.list_workflows_calls == []
 
 
 @pytest.mark.asyncio
@@ -134,7 +171,8 @@ async def test_list_workflows_accepts_same_org_agent_id(
         _AgentDB({"agent-a": _Agent("agent-a", "org-a")}),
     )
     monkeypatch.setattr(workflows, "membership_db", _MembershipDB({"user-a": {"org-a"}}))
-    monkeypatch.setattr(workflows, "workflow_db", _WorkflowDB(listed_workflows=[workflow]))
+    workflow_db = _WorkflowDB(listed_workflows=[workflow])
+    monkeypatch.setattr(workflows, "workflow_db", workflow_db)
 
     response = await workflows.list_workflows(
         actor_user_id="user-a",
@@ -144,6 +182,9 @@ async def test_list_workflows_accepts_same_org_agent_id(
     )
 
     assert [item.workflow_id for item in response] == ["workflow-a"]
+    assert workflow_db.list_workflows_calls == [
+        {"org_id": "org-a", "agent_id": "agent-a"}
+    ]
 
 
 @pytest.mark.asyncio
@@ -219,3 +260,31 @@ async def test_list_runs_accepts_same_org_workflow_id(
     )
 
     assert [item.run_id for item in response] == ["run-a"]
+
+
+@pytest.mark.asyncio
+async def test_list_runs_rejects_org_id_that_does_not_match_workflow(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    workflow = _Workflow(workflow_id="workflow-a", org_id="org-a", agent_id="agent-a")
+    workflow_run_db = _WorkflowRunDB(
+        [_Run(run_id="run-a", org_id="org-a", workflow_id="workflow-a")]
+    )
+    monkeypatch.setattr(workflow_runs, "workflow_db", _WorkflowDB({"workflow-a": workflow}))
+    monkeypatch.setattr(
+        workflow_runs,
+        "membership_db",
+        _MembershipDB({"user-a": {"org-a", "org-b"}}),
+    )
+    monkeypatch.setattr(workflow_runs, "workflow_run_db", workflow_run_db)
+
+    with pytest.raises(HTTPException) as exc_info:
+        await workflow_runs.list_runs(
+            actor_user_id="user-a",
+            workflow_id="workflow-a",
+            org_id="org-b",
+            session=object(),  # type: ignore[arg-type]
+        )
+
+    assert exc_info.value.status_code == 403
+    assert workflow_run_db.list_workflow_runs_calls == []

@@ -137,6 +137,8 @@ async def list_runs(
     try:
         if workflow_id is not None:
             workflow = await workflow_db.get_workflow_required(session, workflow_id)
+            if org_id is not None and org_id != workflow.org_id:
+                raise ValueError("workflow_id 与 org_id 不属于同一组织")
             await membership_db.assert_org_access(
                 session, user_id=actor_user_id, org_id=workflow.org_id
             )
