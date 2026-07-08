@@ -103,6 +103,16 @@ export default function WorkflowsPage() {
       : NODE_PALETTE;
     return groupedPalette(items);
   }, [nodeSearch]);
+  const latestRun = runs.find((run) => run.workflow_id === selectedWorkflowId);
+  const schemaNodeCount = nodes.filter((node) => node.data.capability === "schema").length;
+  const hasWorkflow = Boolean(selectedWorkflowId && selectedWorkflow);
+  const isPublished = Boolean(selectedWorkflow?.published_version_id);
+  const workflowCanRun = hasWorkflow && isPublished;
+  const runDisabledReason = !hasWorkflow
+    ? "Create or select a workflow first"
+    : !isPublished
+      ? "Publish the workflow before running it"
+      : "";
 
   useEffect(() => {
     if (!workspace) return;
@@ -165,7 +175,10 @@ export default function WorkflowsPage() {
                         {item.capability === "executable" ? "live" : "schema"}
                       </span>
                     </div>
-                    <div className="mt-1 text-xs leading-5 text-[#667085]">{item.description}</div>
+                    <div className="mt-1 text-xs leading-5 text-[#667085]">
+                      {item.description}
+                      {item.capability === "schema" ? " 可设计，暂不参与真实执行。" : ""}
+                    </div>
                   </button>
                 ))}
               </div>
@@ -182,6 +195,12 @@ export default function WorkflowsPage() {
             <div className="mt-1 text-xs text-[#667085]">
               {selectedAgent ? selectedAgent.name : "Selected Agent"} · {selectedWorkflow ? selectedWorkflow.name : "Draft"} · {nodes.length} nodes · {edges.length} edges
             </div>
+            <WorkflowProgress
+              hasAgent={Boolean(selectedAgentId)}
+              hasWorkflow={hasWorkflow}
+              isPublished={isPublished}
+              hasRun={Boolean(latestRun)}
+            />
           </div>
           <div className="flex items-center gap-2">
             <ActionButton icon={<RotateCcw size={14} />} label="Reset" onClick={resetCanvas} />
@@ -262,8 +281,18 @@ export default function WorkflowsPage() {
             <div className="grid grid-cols-3 gap-2">
               <ActionButton icon={<Save size={14} />} label="Save" onClick={() => void saveWorkflowDraft(workspace.userId).then(() => showToast("success", "Draft saved")).catch((error) => showToast("error", error instanceof Error ? error.message : "Save failed"))} />
               <ActionButton icon={<Send size={14} />} label="Publish" onClick={() => void publishWorkflow(workspace.userId).then(() => showToast("success", "Published")).catch((error) => showToast("error", error instanceof Error ? error.message : "Publish failed"))} />
-              <ActionButton icon={<Play size={14} />} label="Run" onClick={() => void runWorkflow(workspace.userId, workflowForm.input).then(() => showToast("success", "Run complete")).catch((error) => showToast("error", error instanceof Error ? error.message : "Run failed"))} />
+              <ActionButton
+                disabled={!workflowCanRun}
+                icon={<Play size={14} />}
+                label="Run"
+                onClick={() => void runWorkflow(workspace.userId, workflowForm.input).then(() => showToast("success", "Run complete")).catch((error) => showToast("error", error instanceof Error ? error.message : "Run failed"))}
+                title={runDisabledReason || undefined}
+              />
             </div>
+            {runDisabledReason ? <ActionHint text={runDisabledReason} /> : null}
+            {schemaNodeCount > 0 ? (
+              <ActionHint text={`${schemaNodeCount} schema-only node${schemaNodeCount > 1 ? "s are" : " is"} design-only in this phase.`} />
+            ) : null}
           </div>
         </section>
 
@@ -307,12 +336,63 @@ export default function WorkflowsPage() {
   );
 }
 
-function ActionButton({ icon, label, onClick }: { icon: React.ReactNode; label: string; onClick: () => void }) {
+function WorkflowProgress({
+  hasAgent,
+  hasWorkflow,
+  isPublished,
+  hasRun,
+}: {
+  hasAgent: boolean;
+  hasWorkflow: boolean;
+  isPublished: boolean;
+  hasRun: boolean;
+}) {
+  const steps = [
+    { label: "Agent selected", done: hasAgent },
+    { label: "Draft saved", done: hasWorkflow },
+    { label: "Published", done: isPublished },
+    { label: "Run complete", done: hasRun },
+  ];
+  return (
+    <div className="mt-2 flex flex-wrap gap-1.5">
+      {steps.map((step) => (
+        <span
+          key={step.label}
+          className={`rounded px-2 py-1 text-[11px] font-medium ${
+            step.done ? "bg-[#ecfdf3] text-[#027a48]" : "bg-[#f8fafc] text-[#667085]"
+          }`}
+        >
+          {step.label}
+        </span>
+      ))}
+    </div>
+  );
+}
+
+function ActionHint({ text }: { text: string }) {
+  return <div className="rounded-lg bg-[#f8fafc] px-3 py-2 text-xs text-[#667085]">{text}</div>;
+}
+
+function ActionButton({
+  disabled = false,
+  icon,
+  label,
+  onClick,
+  title,
+}: {
+  disabled?: boolean;
+  icon: React.ReactNode;
+  label: string;
+  onClick: () => void;
+  title?: string;
+}) {
   return (
     <button
       type="button"
+      disabled={disabled}
       onClick={onClick}
-      className="inline-flex items-center justify-center gap-1 rounded-lg border border-[#cfd7e6] bg-white px-2 py-2 text-xs font-medium text-[#172033] transition hover:border-[#2f6feb]"
+      title={title}
+      className="inline-flex items-center justify-center gap-1 rounded-lg border border-[#cfd7e6] bg-white px-2 py-2 text-xs font-medium text-[#172033] transition hover:border-[#2f6feb] disabled:cursor-not-allowed disabled:opacity-50"
     >
       {icon}
       {label}
