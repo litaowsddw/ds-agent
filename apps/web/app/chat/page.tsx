@@ -1,10 +1,13 @@
 "use client";
 
 import { useEffect, useState } from "react";
+import Link from "next/link";
+import { Bot } from "lucide-react";
 import { useWorkspaceStore } from "@/stores/workspace";
 import { useWorkflowStore } from "@/stores/workflow";
 import ChatPanel from "@/components/chat/ChatPanel";
 import EvolverPanel from "@/components/chat/EvolverPanel";
+import WorkspaceRequired from "@/components/ui/WorkspaceRequired";
 
 /** Chat 页面 - 与 Agent 对话 + Skill 自我进化 */
 export default function ChatPage() {
@@ -13,15 +16,19 @@ export default function ChatPage() {
   const refreshWorkflows = useWorkflowStore((state) => state.refreshWorkflows);
   const [activeTab, setActiveTab] = useState<"chat" | "evolver">("chat");
 
-  const orgId = workspace?.orgId || "";
-  const actorUserId = workspace?.userId || "";
+  useEffect(() => {
+    if (!workspace || !selectedAgentId) return;
+    void refreshWorkflows(workspace.orgId, workspace.userId, selectedAgentId);
+  }, [workspace, selectedAgentId, refreshWorkflows]);
+
+  if (!workspace) {
+    return <WorkspaceRequired />;
+  }
+
+  const orgId = workspace.orgId;
+  const actorUserId = workspace.userId;
   const agentId = selectedAgentId || "";
   const selectedAgent = agents?.find((agent) => agent.agent_id === agentId) || null;
-
-  useEffect(() => {
-    if (!workspace || !agentId) return;
-    void refreshWorkflows(workspace.orgId, workspace.userId, agentId);
-  }, [workspace, agentId, refreshWorkflows]);
 
   return (
     <div className="flex h-full min-h-0 flex-col bg-[#f7f8fa]">
@@ -87,8 +94,22 @@ export default function ChatPage() {
             </div>
           )
         ) : (
-          <div className="flex h-full items-center justify-center text-[#667085]">
-            <p className="text-sm">Select an Agent to start</p>
+          <div className="flex h-full items-center justify-center px-4">
+            <div className="w-full max-w-md rounded-lg border border-[#dfe4ee] bg-white px-6 py-8 text-center shadow-sm">
+              <div className="mx-auto grid h-12 w-12 place-items-center rounded-lg bg-[#eef4ff] text-[#2f6feb]">
+                <Bot size={22} />
+              </div>
+              <h2 className="mt-4 text-base font-semibold text-[#172033]">请选择或创建 Agent</h2>
+              <p className="mx-auto mt-2 max-w-sm text-sm leading-6 text-[#667085]">
+                Chat 需要一个 Agent 作为运行主体。你可以在 Agents 页面创建 Agent，或从上方选择已有 Agent。
+              </p>
+              <Link
+                className="mt-5 inline-flex h-9 items-center justify-center rounded-lg bg-[#2f6feb] px-4 text-sm font-medium text-white transition hover:bg-[#255dc7]"
+                href="/agents"
+              >
+                前往 Agents
+              </Link>
+            </div>
           </div>
         )}
       </div>
