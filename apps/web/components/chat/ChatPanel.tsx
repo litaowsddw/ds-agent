@@ -2,6 +2,7 @@
 
 import { useEffect, useMemo, useRef, useState } from "react";
 import { CheckCircle2, Loader2, Wrench, XCircle } from "lucide-react";
+import Link from "next/link";
 import { useChatStore, type ChatExecutionMode } from "@/stores/chat";
 import type { Agent } from "@/types/agent";
 import type { WorkflowItem } from "@/types/workflow";
@@ -38,6 +39,12 @@ export default function ChatPanel({
         : !workflowId
           ? "请选择已发布 Workflow"
           : "";
+  const workflowModeBlockedMessage =
+    workflowModeBlockedReason === "暂无已发布 Workflow"
+      ? "当前 Agent 还没有可用的已发布 Workflow。请先发布流程，或切回自主模式。"
+      : workflowModeBlockedReason === "请选择已发布 Workflow"
+        ? "请选择一个已发布 Workflow 后再发送消息。"
+        : "";
   const isSendDisabled = isGenerating || !input.trim() || Boolean(workflowModeBlockedReason);
 
   useEffect(() => {
@@ -156,11 +163,10 @@ export default function ChatPanel({
             ) : null}
             {workflowModeBlockedReason ? (
               <div className="basis-full rounded-lg bg-[#fff7ed] px-3 py-2 text-xs text-[#9a3412]">
-                当前 Agent 还没有可用的已发布 Workflow。请先到{" "}
-                <a className="font-medium text-[#2f6feb] underline" href="/workflows">
+                {workflowModeBlockedMessage}{" "}
+                <Link className="font-medium text-[#2f6feb] underline" href="/workflows">
                   Workflows
-                </a>{" "}
-                发布流程，或切回自主模式。
+                </Link>
               </div>
             ) : null}
           </div>
@@ -195,16 +201,21 @@ function ThinkingTrace({ events }: { events: ReturnType<typeof useChatStore.getS
     ["node_started", "node_finished", "skill_created", "error"].includes(event.event)
   );
   const activeEvent = [...visibleEvents].reverse().find((event) => event.status === "running");
+  const displayEvents = activeEvent ? visibleEvents : visibleEvents.slice(-5);
 
   return (
     <div className="mb-3 rounded-lg border border-[#dfe4ee] bg-[#f8fafc] px-3 py-2 text-xs">
       <div className="mb-2 flex items-center gap-2 text-[#2f6feb]">
-        <Loader2 size={13} className="animate-spin" />
-        <span className="font-medium">思考中</span>
+        {activeEvent ? (
+          <Loader2 size={13} className="animate-spin" />
+        ) : (
+          <CheckCircle2 size={13} className="text-emerald-500" />
+        )}
+        <span className="font-medium">{activeEvent ? "执行中" : "执行 Trace"}</span>
         {activeEvent ? <span className="truncate text-[#667085]">{activeEvent.label || activeEvent.node}</span> : null}
       </div>
       <div className="space-y-1">
-        {visibleEvents.map((event) => (
+        {displayEvents.map((event) => (
           <div key={event.id} className="rounded bg-white px-2 py-1.5">
             <div className="flex items-start gap-2">
               <TraceIcon status={event.status} event={event.event} />

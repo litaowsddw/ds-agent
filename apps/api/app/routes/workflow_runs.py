@@ -1,9 +1,7 @@
 """Workflow Run API。
 
-这个路由负责把已发布 Workflow 版本真正执行起来：
-- LLM 节点调用组织配置的真实模型供应商；
-- RAG 节点调用知识库向量/关键词检索；
-- Tool 节点校验 MCP 授权并生成受控调用计划。
+这个路由负责 Workflow Run 的 HTTP 契约、鉴权和响应转换。
+真实执行逻辑集中在 workflow_execution_service，供 API 与 Chat 流程模式复用。
 """
 
 from __future__ import annotations
