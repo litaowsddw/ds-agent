@@ -29,6 +29,14 @@ export interface SendMessageOptions {
   workflowId?: string;
 }
 
+export interface FailedSendSnapshot {
+  agentId: string;
+  orgId: string;
+  actorUserId?: string;
+  message: string;
+  options: SendMessageOptions;
+}
+
 interface ChatState {
   sessionId: string | null;
   messages: Message[];
@@ -37,6 +45,7 @@ interface ChatState {
   agentId: string | null;
   intent: string;
   subtaskCount: number;
+  failedSendSnapshot: FailedSendSnapshot | null;
 
   sendMessage: (
     agentId: string,
@@ -45,6 +54,7 @@ interface ChatState {
     actorUserId?: string,
     options?: SendMessageOptions
   ) => Promise<void>;
+  retryLastMessage: () => Promise<void>;
   loadLatestSession: (agentId: string, actorUserId: string) => Promise<void>;
   loadMessages: (sessionId: string) => Promise<void>;
   clearSession: () => void;
@@ -59,9 +69,21 @@ export const useChatStore = create<ChatState>((set, get) => ({
   agentId: null,
   intent: "",
   subtaskCount: 0,
+  failedSendSnapshot: null,
 
   sendMessage: async (agentId, orgId, message, actorUserId, options) => {
-    set({ isGenerating: true, agentId, traceEvents: [] });
+    const snapshot: FailedSendSnapshot = {
+      agentId,
+      orgId,
+      actorUserId,
+      message,
+      options: {
+        executionMode: options?.executionMode ?? "autonomous",
+        workflowId: options?.workflowId,
+      },
+    };
+    let streamFailed = false;
+    set({ isGenerating: true, agentId, traceEvents: [], failedSendSnapshot: null });
 
     const userMsg: Message = {
       message_id: `temp_${Date.now()}`,
@@ -107,19 +129,21 @@ export const useChatStore = create<ChatState>((set, get) => ({
           }
 
           if (event === "error") {
+            streamFailed = true;
             const errorText = String(data.error ?? "Chat failed");
             set((state) => ({
               messages: state.messages.map((item) =>
                 item.message_id === assistantId ? { ...item, role: "system", content: errorText } : item
               ),
               isGenerating: false,
+              failedSendSnapshot: snapshot,
             }));
           }
 
           appendTraceEvent(set, event, data);
         },
       });
-      set({ isGenerating: false });
+      set({ isGenerating: false, failedSendSnapshot: streamFailed ? snapshot : null });
     } catch (error) {
       const errorText = error instanceof Error ? error.message : "Message send failed";
       set((state) => ({
@@ -127,16 +151,37 @@ export const useChatStore = create<ChatState>((set, get) => ({
           item.message_id === assistantId ? { ...item, role: "system", content: errorText } : item
         ),
         isGenerating: false,
+        failedSendSnapshot: snapshot,
       }));
     }
   },
 
+  retryLastMessage: async () => {
+    const snapshot = get().failedSendSnapshot;
+    if (!snapshot || get().isGenerating) return;
+    await get().sendMessage(
+      snapshot.agentId,
+      snapshot.orgId,
+      snapshot.message,
+      snapshot.actorUserId,
+      { ...snapshot.options }
+    );
+  },
+
   loadLatestSession: async (agentId, actorUserId) => {
     if (!agentId || !actorUserId) return;
+    set({
+      agentId,
+      sessionId: null,
+      messages: [],
+      traceEvents: [],
+      failedSendSnapshot: null,
+    });
     try {
       const result = await apiRequest<{ session_id: string | null; messages: Message[] }>(
         `/chat/agents/${agentId}/latest-session?actor_user_id=${actorUserId}`
       );
+      if (get().agentId !== agentId) return;
       set({
         agentId,
         sessionId: result.session_id,
@@ -144,6 +189,7 @@ export const useChatStore = create<ChatState>((set, get) => ({
         traceEvents: [],
       });
     } catch {
+      if (get().agentId !== agentId) return;
       set({ agentId, sessionId: null, messages: [], traceEvents: [] });
     }
   },
@@ -158,7 +204,14 @@ export const useChatStore = create<ChatState>((set, get) => ({
   },
 
   clearSession: () => {
-    set({ sessionId: null, messages: [], traceEvents: [], intent: "", subtaskCount: 0 });
+    set({
+      sessionId: null,
+      messages: [],
+      traceEvents: [],
+      intent: "",
+      subtaskCount: 0,
+      failedSendSnapshot: null,
+    });
   },
 
   subscribeMessages: () => {

@@ -36,9 +36,9 @@ export default function ChatPage() {
       <div className="border-b border-[#dfe4ee] bg-white px-4 py-3">
         <div className="flex flex-wrap items-center gap-3">
           <div>
-            <div className="text-sm font-semibold text-[#172033]">Agent Runtime</div>
+            <div className="text-sm font-semibold text-[#172033]">Agent 运行台</div>
             <div className="mt-1 text-xs text-[#667085]">
-              {selectedAgent ? selectedAgent.name : "Select an Agent"} · {workflows.length} workflows
+              {selectedAgent ? selectedAgent.name : "请选择 Agent"} · {workflows.length} 个 Workflow
             </div>
           </div>
         </div>
@@ -53,7 +53,7 @@ export default function ChatPage() {
               : "text-[#667085] hover:text-[#172033]"
           }`}
         >
-          Chat
+          对话
         </button>
         <button
           onClick={() => setActiveTab("evolver")}
@@ -63,7 +63,7 @@ export default function ChatPage() {
               : "text-[#667085] hover:text-[#172033]"
           }`}
         >
-          Skill Evolver
+          Skill 进化
         </button>
       </div>
 
