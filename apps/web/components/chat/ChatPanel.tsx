@@ -34,6 +34,11 @@ export default function ChatPanel({
     loadLatestSession,
     clearSession,
   } = useChatStore();
+  const isCurrentAgent = useChatStore((state) => state.agentId) === agentId;
+  const visibleMessages = isCurrentAgent ? messages : [];
+  const visibleTraceEvents = isCurrentAgent ? traceEvents : [];
+  const visibleIsGenerating = isCurrentAgent && isGenerating;
+  const visibleFailedSnapshot = isCurrentAgent ? failedSendSnapshot : null;
   const [executionMode, setExecutionMode] = useState<ChatExecutionMode>("autonomous");
   const [workflowId, setWorkflowId] = useState("");
   const messagesEndRef = useRef<HTMLDivElement>(null);
@@ -56,17 +61,17 @@ export default function ChatPanel({
       : workflowModeBlockedReason === "请选择已发布 Workflow"
         ? "请选择一个已发布 Workflow 后再发送消息。"
         : "";
-  const isComposerDisabled = isGenerating || Boolean(workflowModeBlockedReason);
+  const isComposerDisabled = !isCurrentAgent || visibleIsGenerating || Boolean(workflowModeBlockedReason);
   const retryBlockedMessage =
-    failedSendSnapshot?.options.executionMode === "workflow" &&
-    (!failedSendSnapshot.options.workflowId ||
-      !publishedWorkflows.some((workflow) => workflow.workflow_id === failedSendSnapshot.options.workflowId))
+    visibleFailedSnapshot?.options.executionMode === "workflow" &&
+    (!visibleFailedSnapshot.options.workflowId ||
+      !publishedWorkflows.some((workflow) => workflow.workflow_id === visibleFailedSnapshot.options.workflowId))
       ? "上次消息使用的 Workflow 已不可用，请重新选择后发送。"
       : "";
 
   useEffect(() => {
     messagesEndRef.current?.scrollIntoView({ behavior: "smooth" });
-  }, [messages, traceEvents, isGenerating]);
+  }, [visibleMessages, visibleTraceEvents, visibleIsGenerating]);
 
   useEffect(() => {
     void loadLatestSession(agentId, actorUserId);
@@ -109,25 +114,25 @@ export default function ChatPanel({
         </div>
 
         <div className="min-h-0 flex-1 space-y-3 overflow-y-auto px-4 py-3">
-          {messages.length === 0 ? (
+          {visibleMessages.length === 0 ? (
             <div className="mt-8 text-center text-[#98a2b3]">
-              <p className="text-sm">发送消息，开始与此 Agent 对话</p>
-              <p className="mt-1 text-xs">流式回答和执行 Trace 将显示在这里</p>
+              <p className="text-sm">{isCurrentAgent ? "发送消息，开始与此 Agent 对话" : "正在加载 Agent 对话…"}</p>
+              {isCurrentAgent ? <p className="mt-1 text-xs">流式回答和执行 Trace 将显示在这里</p> : null}
             </div>
           ) : null}
-          {messages.map((message, index) => (
+          {visibleMessages.map((message, index) => (
             <MessageBubble key={message.message_id || index} message={message} />
           ))}
           <div ref={messagesEndRef} />
         </div>
 
         <div className="border-t border-[#dfe4ee] bg-white px-4 py-3">
-          {traceEvents.length > 0 ? <ThinkingTrace events={traceEvents} /> : null}
+          {visibleTraceEvents.length > 0 ? <ThinkingTrace events={visibleTraceEvents} /> : null}
           <ChatComposer
             disabled={isComposerDisabled}
-            retryDisabled={isGenerating}
+            retryDisabled={visibleIsGenerating}
             onSend={handleSend}
-            onRetry={failedSendSnapshot ? retryLastMessage : undefined}
+            onRetry={visibleFailedSnapshot ? retryLastMessage : undefined}
             retryBlockedMessage={retryBlockedMessage}
           >
             <div className="mb-3 flex flex-wrap items-center gap-2">

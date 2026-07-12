@@ -42,4 +42,18 @@ describe("ThinkingTrace", () => {
     expect(screen.getByText("执行失败")).toBeInTheDocument();
     expect(screen.getByText("模型不可用")).toBeInTheDocument();
   });
+
+  it("shows a failed heading for a node_started then error sequence", () => {
+    render(
+      <ThinkingTrace
+        events={[
+          event(1, { event: "node_started", status: "running" }),
+          event(2, { event: "error", status: "failed", data: { error: "模型不可用" } }),
+        ]}
+      />
+    );
+
+    expect(screen.getByText("执行失败")).toBeInTheDocument();
+    expect(screen.queryByText("执行中")).not.toBeInTheDocument();
+  });
 });

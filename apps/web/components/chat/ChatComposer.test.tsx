@@ -3,15 +3,17 @@ import { describe, expect, it, vi } from "vitest";
 import ChatComposer from "@/components/chat/ChatComposer";
 
 describe("ChatComposer", () => {
-  it("sends with Enter and keeps Shift+Enter for a newline", () => {
+  it("sends with Enter and keeps a controlled Shift+Enter newline", () => {
     const onSend = vi.fn();
     render(<ChatComposer disabled={false} onSend={onSend} />);
     const textbox = screen.getByRole("textbox", { name: "消息" });
     fireEvent.change(textbox, { target: { value: "你好" } });
     fireEvent.keyDown(textbox, { key: "Enter", shiftKey: true });
+    fireEvent.change(textbox, { target: { value: "你好\n世界" } });
+    expect(textbox).toHaveValue("你好\n世界");
     expect(onSend).not.toHaveBeenCalled();
     fireEvent.keyDown(textbox, { key: "Enter" });
-    expect(onSend).toHaveBeenCalledWith("你好");
+    expect(onSend).toHaveBeenCalledWith("你好\n世界");
   });
 
   it("blocks retry and explains when the captured Workflow is unavailable", () => {

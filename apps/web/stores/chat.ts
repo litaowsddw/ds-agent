@@ -61,6 +61,8 @@ interface ChatState {
   subscribeMessages: () => () => void;
 }
 
+let activeChatGeneration = 0;
+
 export const useChatStore = create<ChatState>((set, get) => ({
   sessionId: null,
   messages: [],
@@ -72,6 +74,8 @@ export const useChatStore = create<ChatState>((set, get) => ({
   failedSendSnapshot: null,
 
   sendMessage: async (agentId, orgId, message, actorUserId, options) => {
+    const generation = ++activeChatGeneration;
+    const isActive = () => generation === activeChatGeneration && get().agentId === agentId;
     const snapshot: FailedSendSnapshot = {
       agentId,
       orgId,
@@ -112,6 +116,7 @@ export const useChatStore = create<ChatState>((set, get) => ({
         executionMode: options?.executionMode ?? "autonomous",
         workflowId: options?.workflowId,
         onEvent: (event, data) => {
+          if (!isActive()) return;
           if (event === "token") {
             const text = String(data.text ?? "");
             set((state) => ({
@@ -130,7 +135,8 @@ export const useChatStore = create<ChatState>((set, get) => ({
 
           if (event === "error") {
             streamFailed = true;
-            const errorText = String(data.error ?? "Chat failed");
+            const detail = typeof data.error === "string" ? data.error.trim() : "";
+            const errorText = detail ? `对话失败：${detail}` : "对话失败";
             set((state) => ({
               messages: state.messages.map((item) =>
                 item.message_id === assistantId ? { ...item, role: "system", content: errorText } : item
@@ -143,9 +149,16 @@ export const useChatStore = create<ChatState>((set, get) => ({
           appendTraceEvent(set, event, data);
         },
       });
+      if (!isActive()) return;
       set({ isGenerating: false, failedSendSnapshot: streamFailed ? snapshot : null });
     } catch (error) {
-      const errorText = error instanceof Error ? error.message : "Message send failed";
+      if (!isActive()) return;
+      const detail = error instanceof Error ? error.message.trim() : "";
+      const errorText = detail.startsWith("请求失败")
+        ? detail
+        : detail
+          ? `消息发送失败：${detail}`
+          : "消息发送失败";
       set((state) => ({
         messages: state.messages.map((item) =>
           item.message_id === assistantId ? { ...item, role: "system", content: errorText } : item
@@ -170,18 +183,20 @@ export const useChatStore = create<ChatState>((set, get) => ({
 
   loadLatestSession: async (agentId, actorUserId) => {
     if (!agentId || !actorUserId) return;
+    const generation = ++activeChatGeneration;
     set({
       agentId,
       sessionId: null,
       messages: [],
       traceEvents: [],
       failedSendSnapshot: null,
+      isGenerating: false,
     });
     try {
       const result = await apiRequest<{ session_id: string | null; messages: Message[] }>(
         `/chat/agents/${agentId}/latest-session?actor_user_id=${actorUserId}`
       );
-      if (get().agentId !== agentId) return;
+      if (generation !== activeChatGeneration || get().agentId !== agentId) return;
       set({
         agentId,
         sessionId: result.session_id,
@@ -189,7 +204,7 @@ export const useChatStore = create<ChatState>((set, get) => ({
         traceEvents: [],
       });
     } catch {
-      if (get().agentId !== agentId) return;
+      if (generation !== activeChatGeneration || get().agentId !== agentId) return;
       set({ agentId, sessionId: null, messages: [], traceEvents: [] });
     }
   },
@@ -204,6 +219,7 @@ export const useChatStore = create<ChatState>((set, get) => ({
   },
 
   clearSession: () => {
+    activeChatGeneration += 1;
     set({
       sessionId: null,
       messages: [],
@@ -263,7 +279,8 @@ async function streamChat({
   });
 
   if (!response.ok || !response.body) {
-    throw new Error(`Request failed: ${response.statusText}`);
+    const detail = response.statusText.trim();
+    throw new Error(detail ? `请求失败：${detail}` : "请求失败");
   }
 
   const reader = response.body.getReader();
@@ -336,6 +353,13 @@ function upsertTraceEvent(
     data,
     created_at: new Date().toISOString(),
   };
+
+  if (event === "error") {
+    return [
+      ...events.map((item) => (item.status === "running" ? { ...item, status: "failed" as const } : item)),
+      nextEvent,
+    ];
+  }
 
   if (event === "node_finished" && node) {
     const index = findLastIndex(events, (item) => item.node === node && item.event === "node_started");

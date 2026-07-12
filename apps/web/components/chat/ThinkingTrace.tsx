@@ -9,8 +9,10 @@ export default function ThinkingTrace({ events }: { events: ChatTraceEvent[] }) 
   const visibleEvents = events.filter((event) =>
     ["node_started", "node_finished", "skill_created", "error"].includes(event.event)
   );
-  const activeEvent = [...visibleEvents].reverse().find((event) => event.status === "running");
   const failed = visibleEvents.some((event) => event.status === "failed");
+  const activeEvent = failed
+    ? undefined
+    : [...visibleEvents].reverse().find((event) => event.status === "running");
   const displayEvents = expanded ? visibleEvents : visibleEvents.slice(-5);
   const heading = activeEvent ? "执行中" : failed ? "执行失败" : "执行 Trace";
 

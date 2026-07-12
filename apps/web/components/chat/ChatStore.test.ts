@@ -26,6 +26,39 @@ function successfulStream(): Response {
   } as unknown as Response;
 }
 
+function streamWithFrames(frames: string): Response {
+  const chunk = new TextEncoder().encode(frames);
+  return {
+    ok: true,
+    body: {
+      getReader: () => ({
+        read: vi.fn().mockResolvedValueOnce({ done: false, value: chunk }).mockResolvedValueOnce({ done: true }),
+      }),
+    },
+  } as unknown as Response;
+}
+
+function delayedStream() {
+  let release: ((result: { done: false; value: Uint8Array }) => void) | undefined;
+  const read = vi
+    .fn()
+    .mockImplementationOnce(
+      () =>
+        new Promise<{ done: false; value: Uint8Array }>((resolve) => {
+          release = resolve;
+        })
+    )
+    .mockResolvedValueOnce({ done: true });
+  return {
+    response: { ok: true, body: { getReader: () => ({ read }) } } as unknown as Response,
+    emit(frames: string) {
+      if (!release) throw new Error("stream reader is not waiting");
+      release({ done: false, value: new TextEncoder().encode(frames) });
+    },
+    read,
+  };
+}
+
 describe("chat store retry safety", () => {
   beforeEach(() => {
     vi.restoreAllMocks();
@@ -106,5 +139,88 @@ describe("chat store retry safety", () => {
     });
     resolveRequest?.({ session_id: "session-new", messages: [] });
     await loading;
+  });
+
+  it("ignores every late token, error, completion and final write from the previous Agent stream", async () => {
+    const oldStream = delayedStream();
+    vi.stubGlobal("fetch", vi.fn().mockResolvedValue(oldStream.response));
+    const oldSend = useChatStore.getState().sendMessage("agent-old", "org-a", "旧请求", "user-a");
+    await vi.waitFor(() => expect(oldStream.read).toHaveBeenCalled());
+    const oldAssistantId = useChatStore.getState().messages[1].message_id;
+    vi.mocked(apiRequest).mockResolvedValueOnce({
+      session_id: "session-new",
+      messages: [
+        {
+          message_id: oldAssistantId,
+          role: "assistant",
+          content: "新 Agent 回答",
+          sequence: 0,
+          created_at: "2026-07-12T02:00:00Z",
+        },
+      ],
+    });
+
+    await useChatStore.getState().loadLatestSession("agent-new", "user-a");
+    useChatStore.setState({ isGenerating: true });
+    oldStream.emit(
+      'event: token\ndata: {"text":"旧 token"}\n\n' +
+        'event: error\ndata: {"error":"旧错误"}\n\n' +
+        'event: run_finished\ndata: {"session_id":"session-old-finished"}\n\n'
+    );
+    await oldSend;
+
+    expect(useChatStore.getState()).toMatchObject({
+      agentId: "agent-new",
+      sessionId: "session-new",
+      isGenerating: true,
+      failedSendSnapshot: null,
+      traceEvents: [],
+      messages: [expect.objectContaining({ content: "新 Agent 回答", role: "assistant" })],
+    });
+  });
+
+  it("terminates running Trace entries as failed when an SSE error arrives", async () => {
+    vi.stubGlobal(
+      "fetch",
+      vi.fn().mockResolvedValue(
+        streamWithFrames(
+          'event: node_started\ndata: {"node":"model","label":"调用模型"}\n\n' +
+            'event: error\ndata: {"error":"模型不可用"}\n\n'
+        )
+      )
+    );
+
+    await useChatStore.getState().sendMessage("agent-a", "org-a", "你好", "user-a");
+
+    expect(useChatStore.getState().traceEvents).toEqual([
+      expect.objectContaining({ node: "model", status: "failed" }),
+      expect.objectContaining({ event: "error", status: "failed" }),
+    ]);
+  });
+
+  it("uses a Chinese HTTP error while retaining response detail", async () => {
+    vi.stubGlobal(
+      "fetch",
+      vi.fn().mockResolvedValue({ ok: false, statusText: "Bad Gateway", body: {} } as Response)
+    );
+
+    await useChatStore.getState().sendMessage("agent-a", "org-a", "你好", "user-a");
+
+    expect(useChatStore.getState().messages.at(-1)?.content).toBe("请求失败：Bad Gateway");
+  });
+
+  it("uses a Chinese SSE fallback and keeps backend error detail", async () => {
+    vi.stubGlobal(
+      "fetch",
+      vi
+        .fn()
+        .mockResolvedValueOnce(streamWithFrames("event: error\ndata: {}\n\n"))
+        .mockResolvedValueOnce(streamWithFrames('event: error\ndata: {"error":"provider detail"}\n\n'))
+    );
+
+    await useChatStore.getState().sendMessage("agent-a", "org-a", "第一次", "user-a");
+    expect(useChatStore.getState().messages.at(-1)?.content).toBe("对话失败");
+    await useChatStore.getState().sendMessage("agent-a", "org-a", "第二次", "user-a");
+    expect(useChatStore.getState().messages.at(-1)?.content).toBe("对话失败：provider detail");
   });
 });

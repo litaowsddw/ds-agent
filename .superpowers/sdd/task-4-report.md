@@ -94,3 +94,76 @@ Exit 0.
 - Agent switching: local content is cleared before the network await and stale cross-Agent responses are discarded.
 - Regression: full Web tests, TypeScript, and production build pass; `.next` is absent.
 - Remaining concern: the two API test files require a reachable local MySQL service for six integration cases. This environment had no MySQL listener on port 3306.
+
+## Review fix: cross-Agent stream isolation
+
+### Findings and root cause
+
+- An in-flight `sendMessage` stream closed over the global Zustand setter without a request-generation check. Starting `loadLatestSession` for another Agent cleared the UI, but late token/error/run-finished frames and the old send's catch/final path could still overwrite the new Agent state.
+- `ChatPanel` rendered store messages before its Agent-change effect ran, allowing one paint of the previous Agent's messages.
+- An SSE `error` appended a failed event but left earlier `node_started` events running, so Trace could continue to announce “执行中”.
+- HTTP/SSE fallback strings were English, and the Shift+Enter test verified only that no send occurred rather than that a controlled newline remained editable.
+
+### Review RED
+
+```text
+npm test -- --run components/chat
+```
+
+Exit 1: 3 files failed / 2 passed; 6 tests failed / 10 passed. The failures reproduced late old-stream mutation of the new Agent's message, session, Trace, failure snapshot, and generating state; old-message first-paint leakage; running Trace after error; and English HTTP/SSE fallback text.
+
+The ChatPanel test harness was then corrected to provide jsdom's missing `scrollIntoView`; its isolated RED failed on the intended assertion because the old Agent message remained in the document after rerender.
+
+### Review GREEN and implementation
+
+- Added a module-scoped monotonically increasing Chat generation. Every send captures its generation and checks both generation and Agent before all SSE, catch, and post-await writes.
+- Starting any send, `loadLatestSession`, or clearing the session invalidates older streams. Session loads also compare their captured generation, covering same-Agent load/send races.
+- Added an Agent identity render gate in `ChatPanel`; mismatched store messages, Trace, generating state, and retry snapshot remain hidden until the selected Agent state matches.
+- SSE errors now settle every running Trace entry as failed before appending the error, and failure takes precedence in the Trace heading.
+- HTTP, network, and SSE errors use Chinese fallback prefixes while retaining available response/backend detail.
+- Shift+Enter now has a controlled textarea test that verifies the multiline value and then verifies Enter sends that exact value.
+
+```text
+npm test -- --run components/chat
+```
+
+Exit 0: 5 files passed, 16 tests passed.
+
+### Review final verification
+
+```text
+npm test -- --run
+```
+
+Exit 0: 11 test files passed, 48 tests passed.
+
+```text
+npx tsc --noEmit --incremental false
+```
+
+Exit 0 with no diagnostics.
+
+```text
+npm run build
+```
+
+Exit 0: Next.js 15.5.18 compiled successfully and generated 12/12 static pages. `apps/web/.next` was removed after verification.
+
+```text
+pytest apps/api/tests/test_chat_workflow_mode.py apps/api/tests/test_chat_streaming_skill_creator.py -q
+```
+
+Completed in 83.80 seconds: 5 passed, 6 failed. As in the initial Task 4 run, all six integration failures were caused by `localhost:3306` refusing the MySQL connection; no frontend or stream-isolation regression was reported.
+
+```text
+git diff --check
+```
+
+Exit 0.
+
+### Review self-check
+
+- A delayed-stream regression emits token, error, and run-finished frames after Agent switch and proves the new Agent's message, session ID, Trace, failure snapshot, and generating state are unchanged.
+- The render-gate test rerenders `ChatPanel` with a new Agent prop while the mocked store still belongs to the old Agent and proves the old message is absent immediately.
+- Trace sequence, HTTP non-OK, empty/detail SSE errors, and controlled Shift+Enter behavior are covered directly.
+- No responsive shell, global Agent selector, Runs, Tool/MCP, API implementation, or deployment files were modified.
