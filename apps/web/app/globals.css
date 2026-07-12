@@ -9,7 +9,9 @@
 html,
 body {
   margin: 0;
+  max-width: 100%;
   min-height: 100%;
+  overflow-x: hidden;
   background: #f6f7f9;
   color: #172033;
 }

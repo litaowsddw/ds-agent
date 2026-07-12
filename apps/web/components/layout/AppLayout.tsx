@@ -6,10 +6,11 @@ Dify 风格布局：左侧固定侧边栏 + 右侧主内容区。
 
 "use client";
 
-import { useEffect, useState } from "react";
+import { useCallback, useEffect, useState } from "react";
 import { usePathname, useRouter } from "next/navigation";
 import Sidebar from "./Sidebar";
 import Header from "./Header";
+import MobileNavOverlay from "./MobileNavOverlay";
 import { useWorkspaceStore } from "@/stores/workspace";
 import { checkHealth } from "@/lib/api";
 import type { ToastKind } from "@/types/api";
@@ -49,6 +50,12 @@ export default function AppLayout({ children }: { children: React.ReactNode }) {
   const setApiStatus = useWorkspaceStore((s) => s.setApiStatus);
 
   const [toast, setToast] = useState<{ kind: ToastKind; text: string } | null>(null);
+  const [navigationOpen, setNavigationOpen] = useState(false);
+  const closeNavigation = useCallback(() => setNavigationOpen(false), []);
+
+  useEffect(() => {
+    setNavigationOpen(false);
+  }, [pathname]);
 
   // 检测 API 状态
   useEffect(() => {
@@ -80,12 +87,16 @@ export default function AppLayout({ children }: { children: React.ReactNode }) {
   }, []);
 
   return (
-    <div className="flex h-screen bg-[#f6f7f9] text-[#172033]">
+    <div className="flex h-dvh bg-[#f6f7f9] text-[#172033]">
       <Sidebar />
       <div className="flex min-w-0 flex-1 flex-col overflow-hidden">
-        <Header />
-        <main className="min-h-0 flex-1 overflow-auto p-6">{children}</main>
+        <Header
+          navigationOpen={navigationOpen}
+          onOpenNavigation={() => setNavigationOpen(true)}
+        />
+        <main className="min-h-0 min-w-0 flex-1 overflow-auto p-3 sm:p-6">{children}</main>
       </div>
+      <MobileNavOverlay open={navigationOpen} onClose={closeNavigation} />
       {toast && (
         <Toast kind={toast.kind} text={toast.text} onClose={() => setToast(null)} />
       )}

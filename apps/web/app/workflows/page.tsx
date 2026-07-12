@@ -9,6 +9,8 @@ import {
   Database,
   GitBranch,
   MousePointer2,
+  PanelLeft,
+  PanelRight,
   Play,
   Plus,
   RotateCcw,
@@ -18,6 +20,7 @@ import {
   Sparkles,
   Trash2,
   Workflow,
+  X,
 } from "lucide-react";
 import { useEffect, useMemo, useState } from "react";
 import { showToast } from "@/components/layout/AppLayout";
@@ -96,6 +99,7 @@ export default function WorkflowsPage() {
   const selectedWorkflow = workflows.find((workflow) => workflow.workflow_id === selectedWorkflowId);
   const selectedAgent = agents.find((agent) => agent.agent_id === selectedAgentId);
   const [nodeSearch, setNodeSearch] = useState("");
+  const [mobilePanel, setMobilePanel] = useState<"palette" | "inspector" | null>(null);
   const paletteGroups = useMemo(() => {
     const query = nodeSearch.trim().toLowerCase();
     const items = query
@@ -137,12 +141,48 @@ export default function WorkflowsPage() {
   }
 
   return (
-    <div className="grid h-[calc(100vh-7rem)] min-h-[720px] gap-4 xl:grid-cols-[280px_minmax(0,1fr)_400px]">
-      <aside className="min-h-0 overflow-hidden rounded-lg border border-[#dfe4ee] bg-white">
+    <div className="grid h-[calc(100dvh-5rem)] min-h-[620px] min-w-0 grid-rows-[auto_minmax(0,1fr)] gap-3 sm:h-[calc(100dvh-7rem)] sm:min-h-[720px] sm:gap-4 xl:grid-cols-[280px_minmax(0,1fr)_400px] xl:grid-rows-1">
+      <div className="flex items-center gap-2 xl:hidden">
+        <ActionButton
+          icon={<PanelLeft size={14} />}
+          label="Nodes"
+          onClick={() => setMobilePanel("palette")}
+        />
+        <ActionButton
+          icon={<PanelRight size={14} />}
+          label="Workflow & inspector"
+          onClick={() => setMobilePanel("inspector")}
+        />
+      </div>
+
+      {mobilePanel ? (
+        <button
+          aria-label="Close workflow panel"
+          className="fixed inset-0 z-20 bg-[#172033]/35 xl:hidden"
+          onClick={() => setMobilePanel(null)}
+          type="button"
+        />
+      ) : null}
+
+      <aside
+        className={`${
+          mobilePanel === "palette" ? "fixed" : "hidden"
+        } bottom-3 left-3 top-[4.25rem] z-30 min-h-0 w-[min(280px,calc(100vw-1.5rem))] overflow-hidden rounded-lg border border-[#dfe4ee] bg-white shadow-xl xl:static xl:col-start-1 xl:row-start-1 xl:block xl:w-auto xl:shadow-none`}
+      >
         <div className="border-b border-[#dfe4ee] px-4 py-3">
-          <div className="flex items-center gap-2 text-sm font-semibold text-[#172033]">
-            <Sparkles size={15} />
-            Nodes
+          <div className="flex items-center justify-between gap-2">
+            <div className="flex items-center gap-2 text-sm font-semibold text-[#172033]">
+              <Sparkles size={15} />
+              Nodes
+            </div>
+            <button
+              aria-label="Close nodes panel"
+              className="inline-flex h-8 w-8 items-center justify-center rounded-lg text-[#667085] hover:bg-[#f8fafc] xl:hidden"
+              onClick={() => setMobilePanel(null)}
+              type="button"
+            >
+              <X size={16} />
+            </button>
           </div>
           <div className="mt-1 text-xs text-[#667085]">Build an optional stable process for the selected Agent.</div>
           <label className="mt-3 flex h-9 items-center gap-2 rounded-lg border border-[#dfe4ee] bg-[#f8fafc] px-3 text-sm">
@@ -186,7 +226,7 @@ export default function WorkflowsPage() {
         </div>
       </aside>
 
-      <main className="min-h-0 overflow-hidden rounded-lg border border-[#dfe4ee] bg-white">
+      <main className="min-h-0 min-w-0 overflow-hidden rounded-lg border border-[#dfe4ee] bg-white xl:col-start-2 xl:row-start-1">
         <div className="flex items-center justify-between border-b border-[#dfe4ee] px-4 py-3">
           <div>
             <div className="text-sm font-semibold text-[#172033]">Agent Workflow Strategy</div>
@@ -246,7 +286,22 @@ export default function WorkflowsPage() {
         </div>
       </main>
 
-      <aside className="min-h-0 overflow-y-auto space-y-4">
+      <aside
+        className={`${
+          mobilePanel === "inspector" ? "fixed" : "hidden"
+        } bottom-3 right-3 top-[4.25rem] z-30 min-h-0 w-[min(400px,calc(100vw-1.5rem))] space-y-4 overflow-y-auto rounded-lg bg-[#f6f7f9] shadow-xl xl:static xl:col-start-3 xl:row-start-1 xl:block xl:w-auto xl:rounded-none xl:bg-transparent xl:shadow-none`}
+      >
+        <div className="sticky top-0 z-10 flex items-center justify-between rounded-lg border border-[#dfe4ee] bg-white px-4 py-2 xl:hidden">
+          <span className="text-sm font-semibold text-[#172033]">Workflow & inspector</span>
+          <button
+            aria-label="Close workflow inspector"
+            className="inline-flex h-8 w-8 items-center justify-center rounded-lg text-[#667085] hover:bg-[#f8fafc]"
+            onClick={() => setMobilePanel(null)}
+            type="button"
+          >
+            <X size={16} />
+          </button>
+        </div>
         <section className="rounded-lg border border-[#dfe4ee] bg-white">
           <div className="border-b border-[#dfe4ee] px-4 py-3">
             <div className="flex items-center gap-2 text-sm font-semibold text-[#172033]">

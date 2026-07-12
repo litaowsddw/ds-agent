@@ -43,16 +43,25 @@ function StatusPill({ status }: { status: "checking" | "online" | "offline" }) {
   return <span className={`rounded-full px-2.5 py-1 text-xs font-medium ${cls}`}>{text}</span>;
 }
 
-export default function Sidebar() {
+export default function Sidebar({
+  mobile = false,
+  onNavigate,
+}: {
+  mobile?: boolean;
+  onNavigate?: () => void;
+}) {
   const pathname = usePathname();
   const apiStatus = useWorkspaceStore((s) => s.apiStatus);
 
   return (
-    <aside className="flex h-screen w-[260px] shrink-0 flex-col border-r border-[#dfe4ee] bg-white">
+    <aside
+      className={`${mobile ? "flex h-full w-full" : "hidden h-screen w-[260px] lg:flex"} shrink-0 flex-col border-r border-[#dfe4ee] bg-white`}
+    >
       {/* Logo */}
       <Link
         className="flex items-center gap-3 border-b border-[#dfe4ee] px-5 py-4 transition hover:bg-[#f8fafc]"
         href="/"
+        onClick={onNavigate}
       >
         <div className="grid h-10 w-10 place-items-center rounded-lg bg-[#2f6feb] text-white">
           <Network size={19} />
@@ -84,6 +93,7 @@ export default function Sidebar() {
             <Link
               key={item.key}
               href={item.href}
+              onClick={onNavigate}
               className={`flex items-center gap-3 rounded-md px-3 py-2 text-sm transition ${
                 active
                   ? "bg-[#eef4ff] font-medium text-[#2f6feb]"
