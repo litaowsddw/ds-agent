@@ -45,9 +45,11 @@ function StatusPill({ status }: { status: "checking" | "online" | "offline" }) {
 
 export default function Sidebar({
   mobile = false,
+  inactive = false,
   onNavigate,
 }: {
   mobile?: boolean;
+  inactive?: boolean;
   onNavigate?: () => void;
 }) {
   const pathname = usePathname();
@@ -62,6 +64,7 @@ export default function Sidebar({
         className="flex items-center gap-3 border-b border-[#dfe4ee] px-5 py-4 transition hover:bg-[#f8fafc]"
         href="/"
         onClick={onNavigate}
+        tabIndex={inactive ? -1 : undefined}
       >
         <div className="grid h-10 w-10 place-items-center rounded-lg bg-[#2f6feb] text-white">
           <Network size={19} />
@@ -94,6 +97,7 @@ export default function Sidebar({
               key={item.key}
               href={item.href}
               onClick={onNavigate}
+              tabIndex={inactive ? -1 : undefined}
               className={`flex items-center gap-3 rounded-md px-3 py-2 text-sm transition ${
                 active
                   ? "bg-[#eef4ff] font-medium text-[#2f6feb]"
