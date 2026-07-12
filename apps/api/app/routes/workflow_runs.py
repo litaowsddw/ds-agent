@@ -208,12 +208,7 @@ def _to_run_response(run: WorkflowRunModel) -> WorkflowRunResponse:
         celery_task_id="",
         created_by=run.created_by,
         created_at=run.created_at,
-        updated_at=(
-            getattr(run, "updated_at", None)
-            or getattr(run, "finished_at", None)
-            or getattr(run, "started_at", None)
-            or run.created_at
-        ),
+        updated_at=getattr(run, "updated_at", None),
     )
 
 

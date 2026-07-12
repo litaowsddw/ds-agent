@@ -29,6 +29,7 @@ export default function RunsPage() {
   const loadNodeRuns = useWorkflowStore((s) => s.loadNodeRuns);
   const clearRunSelection = useWorkflowStore((s) => s.clearRunSelection);
   const refreshRuns = useWorkflowStore((s) => s.refreshRuns);
+  const refreshWorkflows = useWorkflowStore((s) => s.refreshWorkflows);
 
   const selectedAgent = agents.find((agent) => agent.agent_id === selectedAgentId) ?? null;
   const agentRuns = useMemo(
@@ -42,10 +43,11 @@ export default function RunsPage() {
   );
 
   useEffect(() => {
-    if (workspace) {
+    if (workspace && selectedAgentId) {
       void refreshRuns(workspace.orgId, workspace.userId);
+      void refreshWorkflows(workspace.orgId, workspace.userId, selectedAgentId);
     }
-  }, [workspace, refreshRuns]);
+  }, [workspace, selectedAgentId, refreshRuns, refreshWorkflows]);
 
   useEffect(() => {
     if (!selectedRunId) return;
@@ -66,9 +68,9 @@ export default function RunsPage() {
   return (
     <div className="space-y-6">
       <header className="rounded-lg border border-[#dfe4ee] bg-white px-5 py-4">
-        <div className="text-sm font-semibold text-[#172033]">Agent Runs</div>
+        <div className="text-sm font-semibold text-[#172033]">Agent 运行记录</div>
         <div className="mt-1 text-xs text-[#667085]">
-          {selectedAgent ? selectedAgent.name : "Selected Agent"} · {agentRuns.length} runs
+          {selectedAgent.name} · {agentRuns.length} 次运行
         </div>
       </header>
 

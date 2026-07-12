@@ -1,7 +1,7 @@
 "use client";
 
 import { useMemo, useState } from "react";
-import RunStatusBadge from "@/components/runs/RunStatusBadge";
+import RunStatusBadge, { getRunStatusLabel } from "@/components/runs/RunStatusBadge";
 import type { WorkflowRun } from "@/types/workflow";
 
 interface RunListProps {
@@ -43,16 +43,16 @@ export default function RunList({
   return (
     <div className="space-y-3">
       <label className="block text-xs font-medium text-[#475467]">
-        <span className="sr-only">Filter runs by status</span>
+        <span className="sr-only">按状态筛选运行</span>
         <select
-          aria-label="Filter runs by status"
+          aria-label="按状态筛选运行"
           className="w-full rounded-lg border border-[#d0d5dd] bg-white px-3 py-2 text-sm text-[#344054]"
           onChange={(event) => setStatusFilter(event.target.value)}
           value={statusFilter}
         >
-          <option value="all">All statuses</option>
+          <option value="all">全部状态</option>
           {statuses.map((status) => (
-            <option key={status} value={status}>{status}</option>
+            <option key={status} value={status}>{getRunStatusLabel(status)}</option>
           ))}
         </select>
       </label>
@@ -77,7 +77,7 @@ export default function RunList({
             <div className="flex items-start justify-between gap-3">
               <div className="min-w-0">
                 <div className="truncate font-mono text-xs text-[#172033]">{run.run_id || "—"}</div>
-                <div className="mt-1 truncate text-xs text-[#475467]">Workflow {workflowLabel}</div>
+                <div className="mt-1 truncate text-xs text-[#475467]">工作流 {workflowLabel}</div>
               </div>
               <RunStatusBadge status={run.status} />
             </div>

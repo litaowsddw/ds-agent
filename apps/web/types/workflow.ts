@@ -26,7 +26,7 @@ export interface WorkflowRun {
   output_data: Record<string, unknown>;
   error_message: string;
   created_at: string;
-  updated_at: string;
+  updated_at: string | null;
 }
 
 export interface NodeRun {

@@ -13,7 +13,6 @@ from apps.api.app.routes.workflow_runs import _to_run_response
 
 def test_run_response_includes_iso_timestamps() -> None:
     created_at = datetime(2026, 7, 12, 1, 2, 3, tzinfo=timezone.utc)
-    updated_at = datetime(2026, 7, 12, 1, 2, 4, tzinfo=timezone.utc)
     run = SimpleNamespace(
         run_id="run-timestamps",
         org_id="org-a",
@@ -26,13 +25,12 @@ def test_run_response_includes_iso_timestamps() -> None:
         error_message="",
         created_by="user-a",
         created_at=created_at,
-        updated_at=updated_at,
     )
 
     body = _to_run_response(run).model_dump(mode="json")  # type: ignore[arg-type]
 
     assert body["created_at"] == "2026-07-12T01:02:03Z"
-    assert body["updated_at"] == "2026-07-12T01:02:04Z"
+    assert body["updated_at"] is None
 
 
 def _suffix(label: str) -> str:
@@ -121,7 +119,7 @@ def test_workflow_execution_service_persists_node_runs_for_success() -> None:
         assert run_response.status_code == 200
         run = run_response.json()
         assert run["created_at"]
-        assert run["updated_at"]
+        assert run["updated_at"] is None
         assert run["status"] == "succeeded"
         node_runs_response = client.get(
             f"/workflow-runs/{run['run_id']}/nodes",

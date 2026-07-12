@@ -25,9 +25,9 @@ export default function NodeRunCard({ nodeRun }: { nodeRun: NodeRun }) {
         </div>
       ) : null}
 
-      <div className="text-xs text-[#475467]">Duration: {formatElapsed(nodeRun.elapsed_ms)}</div>
-      <JsonDisclosure label="Input" value={nodeRun.input_data} />
-      <JsonDisclosure label="Output" value={nodeRun.output_data} />
+      <div className="text-xs text-[#475467]">耗时：{formatElapsed(nodeRun.elapsed_ms)}</div>
+      <JsonDisclosure label="输入" value={nodeRun.input_data} />
+      <JsonDisclosure label="输出" value={nodeRun.output_data} />
     </article>
   );
 }

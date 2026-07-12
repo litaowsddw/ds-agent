@@ -33,21 +33,40 @@ const runs: WorkflowRun[] = [
 ];
 
 describe("RunStatusBadge", () => {
-  it("labels known statuses and renders unknown statuses neutrally", () => {
-    const { rerender } = render(<RunStatusBadge status="succeeded" />);
-    expect(screen.getByText("Succeeded")).toHaveAttribute("data-tone", "success");
+  it.each([
+    ["pending", "待处理"],
+    ["running", "运行中"],
+    ["succeeded", "成功"],
+    ["failed", "失败"],
+    ["canceled", "已取消"],
+    ["timeout", "超时"],
+    ["skipped", "已跳过"],
+  ])("renders legal status %s semantically", (status, label) => {
+    render(<RunStatusBadge status={status} />);
 
-    rerender(<RunStatusBadge status="paused-by-provider" />);
+    expect(screen.getByText(label)).not.toHaveAttribute("data-tone", "neutral");
+  });
+
+  it("renders only unknown statuses neutrally", () => {
+    render(<RunStatusBadge status="paused-by-provider" />);
+
     expect(screen.getByText("paused-by-provider")).toHaveAttribute("data-tone", "neutral");
   });
 });
 
 describe("RunList", () => {
   it("filters runs by status and exposes workflow labels", () => {
-    render(<RunList runs={runs} selectedRunId="" onSelect={vi.fn()} />);
+    render(
+      <RunList
+        runs={runs}
+        selectedRunId=""
+        onSelect={vi.fn()}
+        workflowLabels={{ "workflow-orders": "订单处理" }}
+      />
+    );
 
-    expect(screen.getByText("Workflow workflow-orders")).toBeInTheDocument();
-    fireEvent.change(screen.getByLabelText("Filter runs by status"), {
+    expect(screen.getByText("工作流 订单处理")).toBeInTheDocument();
+    fireEvent.change(screen.getByLabelText("按状态筛选运行"), {
       target: { value: "failed" },
     });
 
@@ -62,14 +81,14 @@ describe("RunSummary", () => {
       ...runs[0],
       version_id: "",
       created_at: "",
-      updated_at: "",
+      updated_at: null,
     };
     const { container } = render(<RunSummary run={missingRun} />);
 
     expect(screen.getByText("Payment node failed")).toBeInTheDocument();
     expect(screen.getAllByText("—").length).toBeGreaterThan(0);
     const text = container.textContent ?? "";
-    expect(text.indexOf("Payment node failed")).toBeLessThan(text.indexOf("Output"));
+    expect(text.indexOf("Payment node failed")).toBeLessThan(text.indexOf("输出"));
   });
 });
 
@@ -95,15 +114,15 @@ describe("NodeRunCard", () => {
 
 describe("JsonDisclosure", () => {
   it("uses an accessible details disclosure for raw JSON", () => {
-    render(<JsonDisclosure label="Raw output" value={{ ok: true }} />);
+    render(<JsonDisclosure label="原始输出" value={{ ok: true }} />);
 
-    const disclosure = screen.getByText("Raw output").closest("details");
+    const disclosure = screen.getByText("原始输出").closest("details");
     expect(disclosure).not.toBeNull();
     expect(within(disclosure as HTMLElement).getByText(/"ok": true/)).toBeInTheDocument();
   });
 
   it("uses a dash when raw data is missing", () => {
-    render(<JsonDisclosure label="Raw output" value={undefined} />);
+    render(<JsonDisclosure label="原始输出" value={undefined} />);
 
     expect(screen.getByText("—")).toBeInTheDocument();
   });

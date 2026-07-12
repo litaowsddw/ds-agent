@@ -32,7 +32,7 @@ class WorkflowRunResponse(BaseModel):
     celery_task_id: str | None
     created_by: str
     created_at: datetime
-    updated_at: datetime
+    updated_at: datetime | None
 
 
 class NodeRunResponse(BaseModel):
