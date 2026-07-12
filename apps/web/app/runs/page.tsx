@@ -11,6 +11,7 @@ import { useWorkspaceStore } from "@/stores/workspace";
 import { useWorkflowStore } from "@/stores/workflow";
 import Panel from "@/components/ui/Panel";
 import { EmptyText } from "@/components/ui/DataDisplay";
+import AgentRequired from "@/components/ui/AgentRequired";
 import WorkspaceRequired from "@/components/ui/WorkspaceRequired";
 
 export default function RunsPage() {
@@ -50,12 +51,8 @@ export default function RunsPage() {
     return <WorkspaceRequired />;
   }
 
-  if (!selectedAgentId) {
-    return (
-      <div className="flex h-64 items-center justify-center text-sm text-[#667085]">
-        请先在 Agents 中选择或创建一个 Agent，再查看它的运行记录。
-      </div>
-    );
+  if (!selectedAgent) {
+    return <AgentRequired description="请先选择或创建一个 Agent，再查看它的运行记录。" />;
   }
 
   return (

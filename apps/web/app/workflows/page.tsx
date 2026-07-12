@@ -25,6 +25,7 @@ import { nodeTypes } from "@/components/nodes";
 import { PrimaryButton } from "@/components/ui/Button";
 import { EmptyText, Metric } from "@/components/ui/DataDisplay";
 import { SelectInput, TextArea, TextInput } from "@/components/ui/Form";
+import AgentRequired from "@/components/ui/AgentRequired";
 import WorkspaceRequired from "@/components/ui/WorkspaceRequired";
 import { NODE_PALETTE, type WorkflowPaletteItem } from "@/lib/constants";
 import { useKnowledgeStore } from "@/stores/knowledge";
@@ -131,12 +132,8 @@ export default function WorkflowsPage() {
     return <WorkspaceRequired />;
   }
 
-  if (!selectedAgentId) {
-    return (
-      <div className="flex h-64 items-center justify-center text-sm text-[#667085]">
-        请先在 Agents 中选择或创建一个 Agent，再为它设计 Workflow 策略。
-      </div>
-    );
+  if (!selectedAgent) {
+    return <AgentRequired description="请先选择或创建一个 Agent，再为它设计 Workflow 策略。" />;
   }
 
   return (

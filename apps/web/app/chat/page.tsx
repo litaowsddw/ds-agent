@@ -11,7 +11,7 @@ import WorkspaceRequired from "@/components/ui/WorkspaceRequired";
 
 /** Chat 页面 - 与 Agent 对话 + Skill 自我进化 */
 export default function ChatPage() {
-  const { workspace, agents, selectedAgentId, setSelectedAgentId } = useWorkspaceStore();
+  const { workspace, agents, selectedAgentId } = useWorkspaceStore();
   const workflows = useWorkflowStore((state) => state.workflows);
   const refreshWorkflows = useWorkflowStore((state) => state.refreshWorkflows);
   const [activeTab, setActiveTab] = useState<"chat" | "evolver">("chat");
@@ -34,25 +34,13 @@ export default function ChatPage() {
   return (
     <div className="flex h-full min-h-0 flex-col bg-[#f7f8fa]">
       <div className="border-b border-[#dfe4ee] bg-white px-4 py-3">
-        <div className="flex flex-wrap items-center justify-between gap-3">
+        <div className="flex flex-wrap items-center gap-3">
           <div>
             <div className="text-sm font-semibold text-[#172033]">Agent Runtime</div>
             <div className="mt-1 text-xs text-[#667085]">
               {selectedAgent ? selectedAgent.name : "Select an Agent"} · {workflows.length} workflows
             </div>
           </div>
-          <select
-            className="h-9 min-w-[220px] rounded-lg border border-[#dfe4ee] bg-white px-3 text-sm text-[#172033]"
-            onChange={(event) => setSelectedAgentId(event.target.value)}
-            value={agentId}
-          >
-            <option value="">Select an Agent</option>
-            {agents?.map((agent) => (
-              <option key={agent.agent_id} value={agent.agent_id}>
-                {agent.name}
-              </option>
-            ))}
-          </select>
         </div>
       </div>
 

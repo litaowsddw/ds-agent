@@ -85,7 +85,11 @@ persist((set, get) => ({
     useWorkflowStore.getState().resetWorkspaceData();
     set({ workspace: null, agents: [], selectedAgentId: "" });
   },
-  setAgents: (agents) => set({ agents }),
+  setAgents: (agents) => set((state) => ({
+    agents,
+    selectedAgentId: agents.some((a) => a.agent_id === state.selectedAgentId)
+      ? state.selectedAgentId : agents.length === 1 ? agents[0].agent_id : "",
+  })),
   setSelectedAgentId: (id) => {
     if (get().selectedAgentId !== id) {
       useWorkflowStore.getState().clearRunSelection();
@@ -191,7 +195,7 @@ persist((set, get) => ({
     const agents = await apiRequest<Agent[]>(
       `/agents?org_id=${workspace.orgId}&actor_user_id=${workspace.userId}`
     );
-    set({ agents });
+    get().setAgents(agents);
   },
 
   getSelectedAgent: () => {

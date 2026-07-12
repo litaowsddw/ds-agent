@@ -9,6 +9,7 @@ import Link from "next/link";
 import { useRouter } from "next/navigation";
 import { Loader2, Repeat2 } from "lucide-react";
 import { useWorkspaceStore } from "@/stores/workspace";
+import AgentContextSelect from "./AgentContextSelect";
 
 export default function Header() {
   const router = useRouter();
@@ -34,6 +35,7 @@ export default function Header() {
         )}
       </div>
       <div className="flex items-center gap-3">
+        {workspace && <AgentContextSelect />}
         {busy && (
           <div className="flex items-center gap-2 text-xs text-[#667085]">
             <Loader2 className="animate-spin" size={14} />
