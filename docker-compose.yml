@@ -135,10 +135,12 @@ services:
     build:
       context: .
       dockerfile: apps/web/Dockerfile
+      args:
+        NEXT_PUBLIC_API_BASE_URL: /api
     env_file:
       - .env.example
     environment:
-      NEXT_PUBLIC_API_BASE_URL: http://127.0.0.1:18000
+      NEXT_PUBLIC_API_BASE_URL: /api
     ports:
       - "13000:3000"
     depends_on:
