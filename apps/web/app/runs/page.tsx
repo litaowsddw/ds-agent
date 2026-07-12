@@ -13,6 +13,9 @@ import Panel from "@/components/ui/Panel";
 import { EmptyText } from "@/components/ui/DataDisplay";
 import AgentRequired from "@/components/ui/AgentRequired";
 import WorkspaceRequired from "@/components/ui/WorkspaceRequired";
+import NodeRunCard from "@/components/runs/NodeRunCard";
+import RunList from "@/components/runs/RunList";
+import RunSummary from "@/components/runs/RunSummary";
 
 export default function RunsPage() {
   const workspace = useWorkspaceStore((s) => s.workspace);
@@ -22,6 +25,7 @@ export default function RunsPage() {
   const selectedRunId = useWorkflowStore((s) => s.selectedRunId);
   const nodeRuns = useWorkflowStore((s) => s.nodeRuns);
   const versions = useWorkflowStore((s) => s.versions);
+  const workflows = useWorkflowStore((s) => s.workflows);
   const loadNodeRuns = useWorkflowStore((s) => s.loadNodeRuns);
   const clearRunSelection = useWorkflowStore((s) => s.clearRunSelection);
   const refreshRuns = useWorkflowStore((s) => s.refreshRuns);
@@ -32,6 +36,10 @@ export default function RunsPage() {
     [runs, selectedAgentId]
   );
   const selectedRun = agentRuns.find((r) => r.run_id === selectedRunId) ?? null;
+  const workflowLabels = useMemo(
+    () => Object.fromEntries(workflows.map((workflow) => [workflow.workflow_id, workflow.name])),
+    [workflows]
+  );
 
   useEffect(() => {
     if (workspace) {
@@ -67,37 +75,28 @@ export default function RunsPage() {
       <div className="grid gap-6 xl:grid-cols-[360px_1fr]">
         {/* 运行历史列表 */}
         <Panel title="运行历史" icon={<Activity size={17} />}>
-          <div className="space-y-2">
-            {agentRuns.length === 0 ? (
-              <EmptyText text={`${selectedAgent ? selectedAgent.name : "当前 Agent"} 暂无运行记录。请先发布并运行它的 Workflow。`} />
-            ) : null}
-            {agentRuns.map((run) => (
-              <button
-                key={run.run_id}
-                className={`w-full rounded-lg border p-3 text-left text-sm transition ${
-                  selectedRunId === run.run_id
-                    ? "border-[#2f6feb] bg-[#eef4ff]"
-                    : "border-[#dfe4ee] bg-white hover:border-[#93c5fd]"
-                }`}
-                onClick={() => {
-                  void loadNodeRuns(run.run_id, workspace.userId);
-                }}
-                type="button"
-              >
-                <div className="font-mono text-xs text-[#172033]">{run.run_id}</div>
-                <div className="mt-1 text-xs text-[#667085]">状态：{run.status}</div>
-              </button>
-            ))}
-          </div>
+          {agentRuns.length === 0 ? (
+            <EmptyText text={`${selectedAgent.name} 暂无运行记录。请先发布并运行它的 Workflow。`} />
+          ) : (
+            <RunList
+              onSelect={(run) => {
+                void loadNodeRuns(run.run_id, workspace.userId);
+              }}
+              runs={agentRuns}
+              selectedRunId={selectedRunId}
+              workflowLabels={workflowLabels}
+            />
+          )}
         </Panel>
 
         {/* 运行详情 */}
         <div className="space-y-6">
           <Panel title="运行详情" icon={<CheckCircle2 size={17} />}>
             {selectedRun ? (
-              <pre className="max-h-[320px] overflow-auto rounded-lg bg-[#0f172a] p-3 text-xs leading-5 text-[#dbeafe]">
-                {JSON.stringify(selectedRun.output_data, null, 2)}
-              </pre>
+              <RunSummary
+                run={selectedRun}
+                workflowLabel={workflowLabels[selectedRun.workflow_id]}
+              />
             ) : (
               <EmptyText text="选择当前 Agent 的一次运行后查看输出。" />
             )}
@@ -107,23 +106,7 @@ export default function RunsPage() {
             {nodeRuns.length > 0 ? (
               <div className="grid gap-2 md:grid-cols-2">
                 {nodeRuns.map((nodeRun) => (
-                  <div
-                    key={nodeRun.node_run_id}
-                    className="rounded-lg border border-[#dfe4ee] bg-white p-3 text-sm"
-                  >
-                    <div className="font-medium text-[#172033]">{nodeRun.node_id}</div>
-                    <div className="mt-2 text-xs text-[#667085]">
-                      {nodeRun.node_type} / {nodeRun.status} / {nodeRun.elapsed_ms}ms
-                    </div>
-                    {nodeRun.error_message && (
-                      <div className="mt-2 rounded-lg bg-[#fff1f0] p-2 text-xs leading-5 text-[#b42318]">
-                        {nodeRun.error_message}
-                      </div>
-                    )}
-                    <pre className="mt-2 max-h-[220px] overflow-auto rounded-lg bg-[#0f172a] p-2 text-xs leading-5 text-[#dbeafe]">
-                      {JSON.stringify(nodeRun.output_data, null, 2)}
-                    </pre>
-                  </div>
+                  <NodeRunCard key={nodeRun.node_run_id} nodeRun={nodeRun} />
                 ))}
               </div>
             ) : (

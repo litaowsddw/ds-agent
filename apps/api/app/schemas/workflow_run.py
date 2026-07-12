@@ -1,5 +1,6 @@
 """Workflow Run API Schema。"""
 
+from datetime import datetime
 from typing import Any
 
 from pydantic import BaseModel, Field
@@ -30,6 +31,8 @@ class WorkflowRunResponse(BaseModel):
     error_message: str
     celery_task_id: str | None
     created_by: str
+    created_at: datetime
+    updated_at: datetime
 
 
 class NodeRunResponse(BaseModel):

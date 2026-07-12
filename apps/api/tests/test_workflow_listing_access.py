@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import json
 from dataclasses import dataclass
+from datetime import datetime, timezone
 
 import pytest
 from fastapi import HTTPException
@@ -41,6 +42,8 @@ class _Run:
     output_data: str = json.dumps({"text": "hello"})
     error_message: str = ""
     created_by: str = "user-a"
+    created_at: datetime = datetime(2026, 7, 12, tzinfo=timezone.utc)
+    updated_at: datetime = datetime(2026, 7, 12, 0, 0, 1, tzinfo=timezone.utc)
 
 
 class _MembershipDB:
