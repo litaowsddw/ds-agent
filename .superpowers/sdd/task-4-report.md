@@ -167,3 +167,56 @@ Exit 0.
 - The render-gate test rerenders `ChatPanel` with a new Agent prop while the mocked store still belongs to the old Agent and proves the old message is absent immediately.
 - Trace sequence, HTTP non-OK, empty/detail SSE errors, and controlled Shift+Enter behavior are covered directly.
 - No responsive shell, global Agent selector, Runs, Tool/MCP, API implementation, or deployment files were modified.
+
+## Final review fix: session reset completeness
+
+### Root cause and RED
+
+The request-generation invalidation correctly stopped late stream writes, but the synchronous state resets were incomplete: `clearSession` did not reset `isGenerating`, `loadLatestSession` did not clear `intent/subtaskCount`, and the ChatPanel Agent gate still rendered intent directly from the unmatched store state.
+
+```text
+npm test -- --run components/chat/ChatStore.test.ts components/chat/ChatPanel.test.tsx
+```
+
+Exit 1: 2 files failed; 3 tests failed / 5 passed. Evidence showed `isGenerating: true` immediately after clearing, old intent/subtask values after starting the next Agent load, and old intent text remaining in the DOM after an Agent prop rerender.
+
+### GREEN
+
+- `clearSession` now invalidates the previous generation and synchronously resets session, messages, Trace, failed snapshot, intent, subtask count, and `isGenerating`.
+- The delayed-stream regression proves a late token/run-finished sequence cannot repopulate the cleared state.
+- `loadLatestSession` synchronously clears intent and subtask count with the rest of the previous Agent state.
+- ChatPanel derives visible intent/subtask values through the same Agent identity gate as messages and Trace.
+
+```text
+npm test -- --run components/chat/ChatStore.test.ts components/chat/ChatPanel.test.tsx
+```
+
+Exit 0: 2 files passed, 8 tests passed.
+
+### Final verification
+
+```text
+npm test -- --run
+```
+
+Exit 0: 11 test files passed, 49 tests passed.
+
+```text
+npx tsc --noEmit --incremental false
+```
+
+Exit 0 with no diagnostics.
+
+```text
+npm run build
+```
+
+Exit 0: Next.js 15.5.18 compiled successfully and generated 12/12 static pages. `apps/web/.next` was removed afterward.
+
+```text
+git diff --check
+```
+
+Exit 0.
+
+The API regressions were not rerun for this final UI/store-only review fix, as requested. The previously recorded MySQL `localhost:3306` environment limitation remains the only concern.

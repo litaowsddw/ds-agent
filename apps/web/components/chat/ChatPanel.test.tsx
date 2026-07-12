@@ -17,8 +17,8 @@ const { chatState } = vi.hoisted(() => ({
     ],
     traceEvents: [],
     isGenerating: false,
-    intent: "",
-    subtaskCount: 0,
+    intent: "旧意图",
+    subtaskCount: 9,
     failedSendSnapshot: null,
     sendMessage: vi.fn(),
     retryLastMessage: vi.fn(),
@@ -56,6 +56,7 @@ describe("ChatPanel Agent rendering gate", () => {
       />
     );
     expect(screen.getByText("旧 Agent 消息不得闪现")).toBeInTheDocument();
+    expect(screen.getByText("意图：旧意图 · 子任务：9")).toBeInTheDocument();
 
     rerender(
       <ChatPanel
@@ -68,5 +69,6 @@ describe("ChatPanel Agent rendering gate", () => {
     );
 
     expect(screen.queryByText("旧 Agent 消息不得闪现")).not.toBeInTheDocument();
+    expect(screen.queryByText("意图：旧意图 · 子任务：9")).not.toBeInTheDocument();
   });
 });

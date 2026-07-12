@@ -191,6 +191,8 @@ export const useChatStore = create<ChatState>((set, get) => ({
       traceEvents: [],
       failedSendSnapshot: null,
       isGenerating: false,
+      intent: "",
+      subtaskCount: 0,
     });
     try {
       const result = await apiRequest<{ session_id: string | null; messages: Message[] }>(
@@ -227,6 +229,7 @@ export const useChatStore = create<ChatState>((set, get) => ({
       intent: "",
       subtaskCount: 0,
       failedSendSnapshot: null,
+      isGenerating: false,
     });
   },
 

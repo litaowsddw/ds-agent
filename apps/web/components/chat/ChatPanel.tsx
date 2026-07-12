@@ -39,6 +39,8 @@ export default function ChatPanel({
   const visibleTraceEvents = isCurrentAgent ? traceEvents : [];
   const visibleIsGenerating = isCurrentAgent && isGenerating;
   const visibleFailedSnapshot = isCurrentAgent ? failedSendSnapshot : null;
+  const visibleIntent = isCurrentAgent ? intent : "";
+  const visibleSubtaskCount = isCurrentAgent ? subtaskCount : 0;
   const [executionMode, setExecutionMode] = useState<ChatExecutionMode>("autonomous");
   const [workflowId, setWorkflowId] = useState("");
   const messagesEndRef = useRef<HTMLDivElement>(null);
@@ -98,9 +100,9 @@ export default function ChatPanel({
         <div className="flex items-center justify-between border-b border-[#dfe4ee] bg-white px-4 py-3">
           <div>
             <h3 className="text-sm font-medium text-[#172033]">与 Agent 对话</h3>
-            {intent ? (
+            {visibleIntent ? (
               <p className="mt-0.5 text-xs text-[#2f6feb]">
-                意图：{intent} · 子任务：{subtaskCount}
+                意图：{visibleIntent} · 子任务：{visibleSubtaskCount}
               </p>
             ) : null}
           </div>

@@ -110,6 +110,8 @@ describe("chat store retry safety", () => {
     useChatStore.setState({
       agentId: "agent-old",
       sessionId: "session-old",
+      intent: "旧意图",
+      subtaskCount: 4,
       messages: [
         {
           message_id: "old",
@@ -136,9 +138,61 @@ describe("chat store retry safety", () => {
       sessionId: null,
       messages: [],
       traceEvents: [],
+      intent: "",
+      subtaskCount: 0,
     });
     resolveRequest?.({ session_id: "session-new", messages: [] });
     await loading;
+  });
+
+  it("clears a generating session immediately and ignores its late stream completion", async () => {
+    const oldStream = delayedStream();
+    vi.stubGlobal("fetch", vi.fn().mockResolvedValue(oldStream.response));
+    const oldSend = useChatStore.getState().sendMessage("agent-a", "org-a", "旧请求", "user-a");
+    await vi.waitFor(() => expect(oldStream.read).toHaveBeenCalled());
+    useChatStore.setState({
+      sessionId: "session-old",
+      traceEvents: [
+        {
+          id: "trace-old",
+          event: "node_started",
+          status: "running",
+          data: {},
+          created_at: "2026-07-12T01:00:00Z",
+        },
+      ],
+      failedSendSnapshot: {
+        agentId: "agent-a",
+        orgId: "org-a",
+        actorUserId: "user-a",
+        message: "旧请求",
+        options: { executionMode: "autonomous" },
+      },
+    });
+
+    useChatStore.getState().clearSession();
+    expect(useChatStore.getState()).toMatchObject({
+      sessionId: null,
+      messages: [],
+      traceEvents: [],
+      isGenerating: false,
+      failedSendSnapshot: null,
+      intent: "",
+      subtaskCount: 0,
+    });
+
+    oldStream.emit(
+      'event: token\ndata: {"text":"旧 token"}\n\n' +
+        'event: run_finished\ndata: {"session_id":"session-late"}\n\n'
+    );
+    await oldSend;
+    expect(useChatStore.getState()).toMatchObject({
+      sessionId: null,
+      messages: [],
+      traceEvents: [],
+      isGenerating: false,
+      failedSendSnapshot: null,
+    });
   });
 
   it("ignores every late token, error, completion and final write from the previous Agent stream", async () => {
