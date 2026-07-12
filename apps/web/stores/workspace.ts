@@ -195,6 +195,14 @@ persist((set, get) => ({
     const agents = await apiRequest<Agent[]>(
       `/agents?org_id=${workspace.orgId}&actor_user_id=${workspace.userId}`
     );
+    const currentWorkspace = get().workspace;
+    if (
+      !currentWorkspace ||
+      currentWorkspace.orgId !== workspace.orgId ||
+      currentWorkspace.userId !== workspace.userId
+    ) {
+      return;
+    }
     get().setAgents(agents);
   },
 

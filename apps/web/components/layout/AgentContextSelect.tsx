@@ -24,7 +24,7 @@ export default function AgentContextSelect() {
         className="inline-flex h-8 items-center justify-center rounded-lg border border-[#cfd7e6] bg-white px-3 text-xs font-medium text-[#2f6feb] transition hover:border-[#2f6feb]"
         href="/agents"
       >
-        Create Agent
+        创建 Agent
       </Link>
     );
   }
@@ -37,7 +37,7 @@ export default function AgentContextSelect() {
       onChange={(event) => setSelectedAgentId(event.target.value)}
       value={selectedAgentId}
     >
-      <option value="">Select an Agent</option>
+      <option value="">选择 Agent</option>
       {agents.map((agent) => (
         <option key={agent.agent_id} value={agent.agent_id}>
           {agent.name}

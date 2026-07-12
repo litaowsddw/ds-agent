@@ -20,7 +20,7 @@ describe("AgentContextSelect", () => {
   it("links to Agents when no agents exist", () => {
     render(<AgentContextSelect />);
 
-    expect(screen.getByRole("link", { name: /create agent/i })).toHaveAttribute("href", "/agents");
+    expect(screen.getByRole("link", { name: "创建 Agent" })).toHaveAttribute("href", "/agents");
   });
 
   it("shows the current global agent selection", () => {
@@ -32,6 +32,7 @@ describe("AgentContextSelect", () => {
     render(<AgentContextSelect />);
 
     expect(screen.getByRole("combobox", { name: /agent context/i })).toHaveValue(secondAgent.agent_id);
+    expect(screen.getByRole("option", { name: "选择 Agent" })).toBeInTheDocument();
   });
 
   it("updates the global agent selection on change", () => {
