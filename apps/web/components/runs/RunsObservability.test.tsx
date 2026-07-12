@@ -65,7 +65,7 @@ describe("RunList", () => {
       />
     );
 
-    expect(screen.getByText("工作流 订单处理")).toBeInTheDocument();
+    expect(screen.getByText("Workflow：订单处理")).toBeInTheDocument();
     fireEvent.change(screen.getByLabelText("按状态筛选运行"), {
       target: { value: "failed" },
     });
@@ -86,6 +86,7 @@ describe("RunSummary", () => {
     const { container } = render(<RunSummary run={missingRun} />);
 
     expect(screen.getByText("Payment node failed")).toBeInTheDocument();
+    expect(screen.getByText("Workflow")).toBeInTheDocument();
     expect(screen.getAllByText("—").length).toBeGreaterThan(0);
     const text = container.textContent ?? "";
     expect(text.indexOf("Payment node failed")).toBeLessThan(text.indexOf("输出"));

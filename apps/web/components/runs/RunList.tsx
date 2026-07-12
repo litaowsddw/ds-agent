@@ -77,7 +77,7 @@ export default function RunList({
             <div className="flex items-start justify-between gap-3">
               <div className="min-w-0">
                 <div className="truncate font-mono text-xs text-[#172033]">{run.run_id || "—"}</div>
-                <div className="mt-1 truncate text-xs text-[#475467]">工作流 {workflowLabel}</div>
+                <div className="mt-1 truncate text-xs text-[#475467]">Workflow：{workflowLabel}</div>
               </div>
               <RunStatusBadge status={run.status} />
             </div>

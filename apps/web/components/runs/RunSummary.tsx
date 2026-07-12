@@ -29,7 +29,7 @@ export default function RunSummary({ run, workflowLabel }: RunSummaryProps) {
 
       <div className="grid gap-3 rounded-lg border border-[#dfe4ee] bg-white p-4 sm:grid-cols-2 lg:grid-cols-3">
         <SummaryField label="状态"><RunStatusBadge status={run.status} /></SummaryField>
-        <SummaryField label="工作流">{displayValue(workflowLabel || run.workflow_id)}</SummaryField>
+        <SummaryField label="Workflow">{displayValue(workflowLabel || run.workflow_id)}</SummaryField>
         <SummaryField label="版本">{displayValue(run.version_id)}</SummaryField>
         <SummaryField label="运行 ID">{displayValue(run.run_id)}</SummaryField>
         <SummaryField label="创建时间">{displayTime(run.created_at)}</SummaryField>
