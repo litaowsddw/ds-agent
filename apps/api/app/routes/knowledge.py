@@ -122,7 +122,13 @@ async def upload_document(
         )
 
         # 切分和索引
-        await _index_document(session, doc, request.chunk_size, request.chunk_overlap)
+        await _index_document(
+            session,
+            doc,
+            kb,
+            request.chunk_size,
+            request.chunk_overlap,
+        )
         await session.commit()
     except ValueError as exc:
         await session.rollback()
@@ -160,7 +166,7 @@ async def upload_document_file(
             chunk_overlap=chunk_overlap,
         )
 
-        await _index_document(session, doc, chunk_size, chunk_overlap)
+        await _index_document(session, doc, kb, chunk_size, chunk_overlap)
         await session.commit()
     except ValueError as exc:
         await session.rollback()
@@ -230,6 +236,7 @@ async def search_knowledge_base(
 async def _index_document(
     session: AsyncSession,
     doc: DocumentModel,
+    kb: KnowledgeBaseModel,
     chunk_size: int,
     chunk_overlap: int,
 ) -> None:
@@ -262,8 +269,8 @@ async def _index_document(
             EmbeddedChunk(
                 chunk_id=chunk.chunk_id,
                 document_id=chunk.document_id,
-                kb_id="",  # 从 document 获取
-                org_id="",  # 从 document 获取
+                kb_id=kb.kb_id,
+                org_id=kb.org_id,
                 content=chunk.content,
                 sequence=chunk.sequence,
                 estimated_tokens=chunk.estimated_tokens,
@@ -274,6 +281,8 @@ async def _index_document(
     # 索引到 Milvus
     index.delete_document(document_id=doc.document_id)
     index.upsert_chunks(embedded_chunks)
+    for chunk in embedded_chunks:
+        await chunk_db.mark_vector_indexed(session, chunk.chunk_id)
 
     # 更新文档状态
     await document_db.update_status(session, doc.document_id, "indexed")
