@@ -1,9 +1,6 @@
 """Contract tests for normalized Gateway usage recording."""
 
 import asyncio
-import sys
-from dataclasses import dataclass
-from types import ModuleType
 
 import pytest
 
@@ -13,53 +10,8 @@ class _AllowingLimiter:
         return None
 
 
-@dataclass(frozen=True)
-class _UsageEventInput:
-    gateway_call_id: str
-    org_id: str
-    source: str
-    api_name: str
-    provider_key: str
-    model: str
-    dispatch_status: str
-    usage_status: str
-    actor_user_id: str | None = None
-    agent_id: str | None = None
-    session_id: str | None = None
-    workflow_id: str | None = None
-    workflow_version_id: str | None = None
-    workflow_run_id: str | None = None
-    workflow_node_id: str | None = None
-    dispatched_at: object | None = None
-    completed_at: object | None = None
-    input_tokens: int | None = None
-    output_tokens: int | None = None
-    total_tokens: int | None = None
-    reasoning_tokens: int | None = None
-    cache_usage_status: str = "unknown"
-    cache_read_input_tokens: int | None = None
-    cache_write_input_tokens: int | None = None
-    prefix_cache_status: str | None = None
-    prefix_length_bucket: str | None = None
-    prefix_diagnostic_key_id: str | None = None
-    estimated_cost_status: str | None = None
-    currency: str | None = None
-    estimated_input_cost: object | None = None
-    estimated_output_cost: object | None = None
-    estimated_cache_read_cost: object | None = None
-    estimated_cache_write_cost: object | None = None
-    estimated_total_cost: object | None = None
-    error_category: str | None = None
-    error_code: str | None = None
-    error_http_status: int | None = None
-    error_retryable: bool | None = None
-
-
-_metering_db_module = ModuleType("apps.api.app.services.db.metering_db")
-_metering_db_module.UsageEventInput = _UsageEventInput
-sys.modules.setdefault("apps.api.app.services.db.metering_db", _metering_db_module)
-
 from apps.api.app.gateway.rate_limiter import RateLimitExceeded  # noqa: E402
+from apps.api.app.services.db.metering_db import UsageEventInput  # noqa: E402
 from apps.api.app.gateway.llm import (  # noqa: E402
     GatewayProviderError,
     LLMCallRequest,
@@ -137,6 +89,10 @@ def _request() -> LLMCallRequest:
         prompt="must never be persisted",
         metadata={"org_id": "org-1", "source": "chat", "api_name": "chat.completions"},
     )
+
+
+def test_gateway_usage_recorder_imports_real_metering_module() -> None:
+    assert UsageEventInput.__module__ == "apps.api.app.services.db.metering_db"
 
 
 def test_gateway_records_provider_cache_read_without_inventing_cache_miss() -> None:
