@@ -91,6 +91,27 @@ describe("RunSummary", () => {
     const text = container.textContent ?? "";
     expect(text.indexOf("Payment node failed")).toBeLessThan(text.indexOf("输出"));
   });
+
+  it("keeps provider cache-read tokens separate from platform cache metrics", () => {
+    render(
+      <RunSummary
+        run={runs[1]}
+        usage={{
+          callCount: 1,
+          unknownUsageCalls: 0,
+          inputTokens: 20,
+          outputTokens: 4,
+          totalTokens: 24,
+          providerCacheReadTokens: 10,
+        }}
+      />
+    );
+
+    expect(screen.getByText("Provider 缓存命中 Token")).toBeInTheDocument();
+    expect(screen.getByText("平台缓存命中率")).toBeInTheDocument();
+    expect(screen.getByText("10 Token")).toBeInTheDocument();
+    expect(screen.getByText("不支持")).toBeInTheDocument();
+  });
 });
 
 describe("NodeRunCard", () => {

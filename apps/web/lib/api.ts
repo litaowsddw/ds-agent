@@ -199,4 +199,117 @@ export async function checkHealth(): Promise<{ status: string }> {
   return apiRequest<{ status: string }>("/health");
 }
 
+export type UsageGroupBy = "api" | "provider" | "model" | "agent" | "workflow" | "source";
+export type UsageGranularity = "hour" | "day";
+
+/** Filters accepted by the organization-scoped metering endpoints. */
+export interface UsageQueryFilters {
+  from?: string;
+  to?: string;
+  source?: string;
+  api_name?: string;
+  provider_key?: string;
+  model?: string;
+  agent_id?: string;
+  workflow_id?: string;
+  group_by?: UsageGroupBy;
+  granularity?: UsageGranularity;
+  offset?: number;
+  limit?: number;
+}
+
+export interface UsageAggregate {
+  bucket_start?: string | null;
+  api_name?: string | null;
+  provider_key?: string | null;
+  model?: string | null;
+  agent_id?: string | null;
+  workflow_id?: string | null;
+  source?: string | null;
+  call_count: number;
+  unknown_usage_calls: number;
+  input_tokens?: number | null;
+  output_tokens?: number | null;
+  total_tokens?: number | null;
+  reasoning_tokens?: number | null;
+  cache_read_input_tokens?: number | null;
+  cache_write_input_tokens?: number | null;
+  /** Reserved for future priced responses; omitted means no estimate is available. */
+  estimated_total_cost?: number | null;
+  currency?: string | null;
+}
+
+export interface UsageSummaryResponse {
+  org_id: string;
+  group_by: UsageGroupBy;
+  granularity: UsageGranularity;
+  created_at_from: string;
+  created_at_to: string;
+  groups: UsageAggregate[];
+}
+
+export interface UsageEvent {
+  event_id: string;
+  gateway_call_id: string;
+  created_at: string;
+  source: string;
+  api_name: string;
+  provider_key: string;
+  model: string;
+  agent_id?: string | null;
+  workflow_id?: string | null;
+  workflow_run_id?: string | null;
+  dispatch_status: string;
+  usage_status: string;
+  cache_usage_status: string;
+  prefix_cache_status?: string | null;
+  input_tokens?: number | null;
+  output_tokens?: number | null;
+  total_tokens?: number | null;
+  cache_read_input_tokens?: number | null;
+  latency_ms?: number | null;
+}
+
+export interface UsageEventsResponse {
+  org_id: string;
+  created_at_from: string;
+  created_at_to: string;
+  events: UsageEvent[];
+  offset: number;
+  limit: number;
+}
+
+function usageQuery(filters: UsageQueryFilters): string {
+  const params = new URLSearchParams();
+  const entries: Array<[string, string | number | undefined]> = [
+    ["from", filters.from],
+    ["to", filters.to],
+    ["source", filters.source],
+    ["api", filters.api_name],
+    ["provider", filters.provider_key],
+    ["model", filters.model],
+    ["agent", filters.agent_id],
+    ["workflow", filters.workflow_id],
+    ["group_by", filters.group_by],
+    ["granularity", filters.granularity],
+    ["offset", filters.offset],
+    ["limit", filters.limit],
+  ];
+  for (const [key, value] of entries) {
+    if (value !== undefined && value !== "") params.set(key, String(value));
+  }
+  const query = params.toString();
+  return query ? `?${query}` : "";
+}
+
+/** Read redacted, tenant-authorized aggregate provider usage. */
+export function getUsageSummary(filters: UsageQueryFilters = {}): Promise<UsageSummaryResponse> {
+  return apiRequest<UsageSummaryResponse>(`/metering/usage/summary${usageQuery(filters)}`);
+}
+
+/** Read redacted usage-event dimensions only; no prompts or credentials are returned. */
+export function getUsageEvents(filters: UsageQueryFilters = {}): Promise<UsageEventsResponse> {
+  return apiRequest<UsageEventsResponse>(`/metering/usage/events${usageQuery(filters)}`);
+}
+
 export { API_BASE_URL };

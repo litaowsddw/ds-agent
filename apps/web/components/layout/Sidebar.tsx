@@ -14,6 +14,7 @@ import {
   Database,
   House,
   KeyRound,
+  LineChart,
   MessageSquare,
   Network,
   PlugZap,
@@ -29,6 +30,7 @@ const navItems = [
   { key: "tools", label: "Tools", icon: PlugZap, href: "/tools" },
   { key: "workflow", label: "Workflow", icon: Workflow, href: "/workflows" },
   { key: "runs", label: "Runs", icon: Activity, href: "/runs" },
+  { key: "insights", label: "洞察", icon: LineChart, href: "/insights" },
   { key: "runtime", label: "Runtime", icon: Brain, href: "/runtime" },
   { key: "chat", label: "Chat", icon: MessageSquare, href: "/chat" },
 ] as const;
