@@ -13,6 +13,7 @@ from sqlalchemy import (
     Numeric,
     String,
     UniqueConstraint,
+    event,
 )
 from sqlalchemy.orm import Mapped, mapped_column
 
@@ -99,6 +100,15 @@ class LLMUsageEventModel(Base):
     created_at: Mapped[datetime] = mapped_column(
         DateTime(timezone=True), nullable=False, default=_utc_now
     )
+
+
+class ImmutableUsageEventError(ValueError):
+    """Raised when code attempts to alter a persisted usage fact."""
+
+
+@event.listens_for(LLMUsageEventModel, "before_update")
+def _reject_usage_event_update(*_args: object, **_kwargs: object) -> None:
+    raise ImmutableUsageEventError("LLM usage events are immutable")
 
 
 class ModelPriceModel(Base):

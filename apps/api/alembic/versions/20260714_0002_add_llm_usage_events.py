@@ -79,6 +79,15 @@ def upgrade() -> None:
         "llm_usage_events",
         ["org_id", "agent_id", "created_at"],
     )
+    op.execute(
+        """
+        CREATE TRIGGER llm_usage_events_no_update
+        BEFORE UPDATE ON llm_usage_events
+        FOR EACH ROW
+        SIGNAL SQLSTATE '45000'
+        SET MESSAGE_TEXT = 'llm_usage_events are immutable'
+        """
+    )
     op.create_table(
         "model_prices",
         sa.Column("price_id", sa.String(length=64), nullable=False),
@@ -124,6 +133,7 @@ def upgrade() -> None:
 def downgrade() -> None:
     op.drop_index("ix_model_prices_org_provider_model_effective_at", table_name="model_prices")
     op.drop_table("model_prices")
+    op.execute("DROP TRIGGER IF EXISTS llm_usage_events_no_update")
     op.drop_index("ix_llm_usage_events_org_agent_created_at", table_name="llm_usage_events")
     op.drop_index(
         "ix_llm_usage_events_org_provider_model_created_at", table_name="llm_usage_events"

@@ -6,6 +6,7 @@ from contextlib import asynccontextmanager
 from datetime import datetime, timezone
 from typing import AsyncIterator
 
+import pytest
 from sqlalchemy.ext import asyncio as sqlalchemy_asyncio
 from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker, create_async_engine
 
@@ -139,14 +140,12 @@ def test_aggregate_usage_groups_only_known_token_values() -> None:
     asyncio.run(case())
 
 
-def test_aggregate_usage_filters_created_time_and_supported_dimensions() -> None:
+def test_aggregate_usage_filters_and_supported_dimensions() -> None:
     async def case() -> None:
         async with session_scope() as session:
-            first = await metering_db.record_event(
+            await metering_db.record_event(
                 session, reported_event("org_1", "llm_call_1", 12, 8)
             )
-            first.created_at = datetime(2026, 7, 13, tzinfo=timezone.utc)
-            await session.flush()
             await metering_db.record_event(
                 session, reported_event("org_1", "llm_call_2", 20, 10)
             )
@@ -155,14 +154,56 @@ def test_aggregate_usage_filters_created_time_and_supported_dimensions() -> None
                 session,
                 UsageFilters(
                     org_id="org_1",
-                    created_at_from=datetime(2026, 7, 14, tzinfo=timezone.utc),
+                    provider_key="openai",
                 ),
                 "provider_key",
             )
 
             assert len(rows) == 1
             assert rows[0].provider_key == "openai"
-            assert rows[0].input_tokens == 20
-            assert rows[0].call_count == 1
+            assert rows[0].input_tokens == 32
+            assert rows[0].call_count == 2
+
+    asyncio.run(case())
+
+
+def test_usage_event_rejects_updates_across_sessions() -> None:
+    async def case() -> None:
+        engine = create_async_engine("sqlite+aiosqlite:///:memory:")
+        async with engine.begin() as connection:
+            await connection.run_sync(
+                Base.metadata.create_all,
+                tables=[LLMUsageEventModel.__table__, ModelPriceModel.__table__],
+            )
+        factory = async_sessionmaker(engine, expire_on_commit=False)
+        try:
+            async with factory() as write_session:
+                persisted = await metering_db.record_event(
+                    write_session, reported_event("org_1", "llm_call_immutable", 12, 8)
+                )
+                event_id = persisted.event_id
+                original_created_at = persisted.created_at.replace(tzinfo=None)
+                await write_session.commit()
+
+            for field, value in (
+                ("input_tokens", 99),
+                ("created_at", datetime(2026, 7, 1, tzinfo=timezone.utc)),
+            ):
+                async with factory() as update_session:
+                    persisted = await update_session.get(LLMUsageEventModel, event_id)
+                    assert persisted is not None
+                    setattr(persisted, field, value)
+
+                    with pytest.raises(ValueError, match="immutable"):
+                        await update_session.flush()
+                    await update_session.rollback()
+
+                async with factory() as verify_session:
+                    reloaded = await verify_session.get(LLMUsageEventModel, event_id)
+                    assert reloaded is not None
+                    assert reloaded.input_tokens == 12
+                    assert reloaded.created_at == original_created_at
+        finally:
+            await engine.dispose()
 
     asyncio.run(case())
