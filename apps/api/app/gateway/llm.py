@@ -280,11 +280,30 @@ class LLMGateway:
         """Stream an LLM response through the configured provider."""
 
         usage_context = await self._record_started(request)
+        terminal_recorded = False
+
+        async def record_terminal_once(
+            *,
+            dispatch_status: str,
+            raw_usage: dict[str, object] | None = None,
+            error_category: str | None = None,
+        ) -> None:
+            nonlocal terminal_recorded
+            if terminal_recorded:
+                return
+            terminal_recorded = True
+            await self._record_terminal(
+                usage_context,
+                dispatch_status=dispatch_status,
+                raw_usage=raw_usage,
+                error_category=error_category,
+            )
+
         provider = self._resolve_provider(request)
         if provider is None:
             error_message = f"Unregistered LLM provider: {request.provider}"
-            await self._record_terminal(
-                usage_context, dispatch_status="failed", error_category="provider_not_found"
+            await record_terminal_once(
+                dispatch_status="failed", error_category="provider_not_found"
             )
             self._append_log(
                 request=request,
@@ -316,8 +335,8 @@ class LLMGateway:
                 usage = final_usage or {}
         except RateLimitExceeded:
             error_message = "RateLimitExceeded: LLM call rejected by rate limiter"
-            await self._record_terminal(
-                usage_context, dispatch_status="rate_limited", error_category="rate_limit"
+            await record_terminal_once(
+                dispatch_status="rate_limited", error_category="rate_limit"
             )
             self._append_log(
                 request=request,
@@ -329,10 +348,8 @@ class LLMGateway:
             raise
         except Exception as exc:
             error_message = self._normalize_error(exc)
-            await self._record_terminal(
-                usage_context,
-                dispatch_status="failed",
-                error_category=exc.__class__.__name__,
+            await record_terminal_once(
+                dispatch_status="failed", error_category=exc.__class__.__name__
             )
             self._append_log(
                 request=request,
@@ -343,16 +360,27 @@ class LLMGateway:
             )
             raise GatewayProviderError(error_message) from exc
 
-        await self._record_terminal(
-            usage_context, dispatch_status="succeeded", raw_usage=usage
-        )
-        self._append_log(
-            request=request,
-            status="succeeded",
-            usage=usage,
-            error_message="",
-            call_id=usage_context.gateway_call_id,
-        )
+        else:
+            await record_terminal_once(dispatch_status="succeeded", raw_usage=usage)
+            self._append_log(
+                request=request,
+                status="succeeded",
+                usage=usage,
+                error_message="",
+                call_id=usage_context.gateway_call_id,
+            )
+        finally:
+            if not terminal_recorded:
+                await record_terminal_once(
+                    dispatch_status="cancelled", error_category="cancelled"
+                )
+                self._append_log(
+                    request=request,
+                    status="cancelled",
+                    usage={},
+                    error_message="stream cancelled before provider completion",
+                    call_id=usage_context.gateway_call_id,
+                )
 
     async def generate_from_workflow_node(
         self,

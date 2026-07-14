@@ -122,6 +122,12 @@ class StreamProvider:
         yield "b"
 
 
+class FailingStreamProvider:
+    def stream_generate(self, _request: LLMCallRequest):
+        yield "a"
+        raise RuntimeError("stream provider unavailable")
+
+
 class FinalUsageStreamProvider:
     def stream_generate(self, _request: LLMCallRequest):
         yield LLMStreamChunk(text="a")
@@ -208,6 +214,49 @@ def test_gateway_marks_stream_without_final_usage_as_unavailable() -> None:
     assert event.usage_status == "unavailable"
     assert event.input_tokens is None
     assert event.output_tokens is None
+
+
+def test_gateway_records_cancelled_terminal_event_when_stream_is_closed_early() -> None:
+    recorder = RecordingUsageRecorder()
+    gateway = LLMGateway(
+        providers={"mock": StreamProvider()},
+        limiter=_AllowingLimiter(),
+        usage_recorder=recorder,
+    )
+
+    async def consume_one_then_close() -> str:
+        stream = gateway.stream_generate(_request())
+        first_chunk = await anext(stream)
+        await stream.aclose()
+        return first_chunk
+
+    assert asyncio.run(consume_one_then_close()) == "a"
+    assert len(recorder.started) == 1
+    assert len(recorder.events) == 1
+    event = recorder.events[0]
+    assert event.dispatch_status == "cancelled"
+    assert event.usage_status == "unavailable"
+    assert event.input_tokens is None
+    assert event.output_tokens is None
+
+
+def test_gateway_records_one_failed_terminal_event_for_stream_exception() -> None:
+    recorder = RecordingUsageRecorder()
+    gateway = LLMGateway(
+        providers={"mock": FailingStreamProvider()},
+        limiter=_AllowingLimiter(),
+        usage_recorder=recorder,
+    )
+
+    async def consume() -> list[str]:
+        return [chunk async for chunk in gateway.stream_generate(_request())]
+
+    with pytest.raises(GatewayProviderError):
+        asyncio.run(consume())
+
+    assert len(recorder.events) == 1
+    assert recorder.events[0].dispatch_status == "failed"
+    assert recorder.events[0].usage_status == "unavailable"
 
 
 def test_gateway_records_only_final_stream_usage_with_nested_cache_tokens() -> None:
