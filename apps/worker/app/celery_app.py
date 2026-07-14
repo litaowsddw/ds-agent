@@ -15,14 +15,21 @@ except ModuleNotFoundError:
 class LocalTask:
     """本地 Celery 缺失时的任务包装器。"""
 
-    def __init__(self, func):
+    def __init__(self, func, *, name: str, bind: bool = False):
         # func 是被装饰的原始任务函数。
         self.func = func
-        self.run = func
+        self.name = name
+        self.bind = bind
+
+    def run(self, *args, **kwargs):
+        """Execute the task using the same bound-task convention as Celery."""
+        if self.bind:
+            return self.func(self, *args, **kwargs)
+        return self.func(*args, **kwargs)
 
     def delay(self, *args, **kwargs):
         """模拟 Celery delay，立即执行函数。"""
-        result = self.func(*args, **kwargs)
+        result = self.run(*args, **kwargs)
 
         class LocalResult:
             """本地同步执行结果。"""
@@ -42,14 +49,10 @@ class LocalCelery:
     def __init__(self) -> None:
         self.conf = type("LocalCeleryConfig", (), {})()
 
-    def task(self, name: str):
+    def task(self, name: str | None = None, bind: bool = False, **_options):
         """模拟 Celery task 装饰器。"""
-        task_name = name
-
         def decorator(func):
-            local_task = LocalTask(func)
-            local_task.name = task_name
-            return local_task
+            return LocalTask(func, name=name or func.__name__, bind=bind)
 
         return decorator
 
