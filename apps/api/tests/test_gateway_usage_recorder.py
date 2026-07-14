@@ -1,9 +1,4 @@
-"""Contract tests for normalized Gateway usage recording.
-
-The production Redis client has an unrelated import-time annotation issue.  These
-tests replace only the rate-limiter module so the Gateway contract can be
-exercised without changing that unrelated configuration.
-"""
+"""Contract tests for normalized Gateway usage recording."""
 
 import asyncio
 import sys
@@ -16,17 +11,6 @@ import pytest
 class _AllowingLimiter:
     async def require(self, **_kwargs: object) -> None:
         return None
-
-
-class _RateLimitExceeded(RuntimeError):
-    pass
-
-
-_rate_limiter_module = ModuleType("apps.api.app.gateway.rate_limiter")
-_rate_limiter_module.HybridRateLimiter = _AllowingLimiter
-_rate_limiter_module.RateLimitExceeded = _RateLimitExceeded
-_rate_limiter_module.rate_limiter = _AllowingLimiter()
-sys.modules.setdefault("apps.api.app.gateway.rate_limiter", _rate_limiter_module)
 
 
 @dataclass(frozen=True)
@@ -75,6 +59,7 @@ _metering_db_module = ModuleType("apps.api.app.services.db.metering_db")
 _metering_db_module.UsageEventInput = _UsageEventInput
 sys.modules.setdefault("apps.api.app.services.db.metering_db", _metering_db_module)
 
+from apps.api.app.gateway.rate_limiter import RateLimitExceeded  # noqa: E402
 from apps.api.app.gateway.llm import (  # noqa: E402
     GatewayProviderError,
     LLMCallRequest,
@@ -142,7 +127,7 @@ class FinalUsageStreamProvider:
 
 class RejectingLimiter:
     async def require(self, **_kwargs: object) -> None:
-        raise _RateLimitExceeded("limited")
+        raise RateLimitExceeded("limited")
 
 
 def _request() -> LLMCallRequest:
@@ -319,7 +304,7 @@ def test_gateway_records_one_terminal_event_for_all_error_paths(
         usage_recorder=recorder,
     )
 
-    with pytest.raises((GatewayProviderError, _RateLimitExceeded)):
+    with pytest.raises((GatewayProviderError, RateLimitExceeded)):
         asyncio.run(gateway.generate(_request()))
 
     assert len(recorder.started) == 1

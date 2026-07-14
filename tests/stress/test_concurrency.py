@@ -193,7 +193,10 @@ def test_stress_cache_hit_under_load() -> None:
     with ThreadPoolExecutor(max_workers=10) as executor:
         for i in range(200):
             futures.append(executor.submit(
-                cache.put, f"key_{i}", {"data": f"value_{i}"}
+                cache.put,
+                "stress",
+                {"key": f"key_{i}"},
+                {"data": f"value_{i}"},
             ))
         for future in as_completed(futures):
             future.result()
@@ -203,11 +206,11 @@ def test_stress_cache_hit_under_load() -> None:
     assert stats["size"] <= 100
 
     # 写入固定 key 并反复命中
-    cache.put("hot_key", {"data": "hot_value"})
+    cache.put("stress", {"key": "hot_key"}, {"data": "hot_value"})
     hits = 0
     for _ in range(100):
-        result = cache.get("hot_key")
-        if result is not None and result["data"] == "hot_value":
+        result = cache.get("stress", {"key": "hot_key"})
+        if result is not None and result.value["data"] == "hot_value":
             hits += 1
 
     assert hits == 100
