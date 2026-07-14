@@ -610,9 +610,13 @@ async def _chat_stream_events(request: ChatRequest, db: AsyncSession) -> AsyncIt
                     "session_id": session_id,
                 },
             )
-            async for chunk in gateway.stream_generate(llm_request):
-                response_parts.append(chunk)
-                yield await emit("token", text=chunk, session_id=session_id)
+            llm_stream = gateway.stream_generate(llm_request)
+            try:
+                async for chunk in llm_stream:
+                    response_parts.append(chunk)
+                    yield await emit("token", text=chunk, session_id=session_id)
+            finally:
+                await llm_stream.aclose()
             response_text = "".join(response_parts)
             yield await emit(
                 "node_finished",

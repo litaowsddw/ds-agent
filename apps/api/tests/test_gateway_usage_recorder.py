@@ -240,6 +240,29 @@ def test_gateway_records_cancelled_terminal_event_when_stream_is_closed_early() 
     assert event.output_tokens is None
 
 
+def test_explicit_chat_stream_boundary_closes_normal_gateway_stream_once() -> None:
+    recorder = RecordingUsageRecorder()
+    gateway = LLMGateway(
+        providers={"mock": StreamProvider()},
+        limiter=_AllowingLimiter(),
+        usage_recorder=recorder,
+    )
+
+    async def consume_through_chat_boundary() -> list[str]:
+        llm_stream = gateway.stream_generate(_request())
+        chunks: list[str] = []
+        try:
+            async for chunk in llm_stream:
+                chunks.append(chunk)
+        finally:
+            await llm_stream.aclose()
+        return chunks
+
+    assert asyncio.run(consume_through_chat_boundary()) == ["a", "b"]
+    assert len(recorder.events) == 1
+    assert recorder.events[0].dispatch_status == "succeeded"
+
+
 def test_gateway_records_one_failed_terminal_event_for_stream_exception() -> None:
     recorder = RecordingUsageRecorder()
     gateway = LLMGateway(
