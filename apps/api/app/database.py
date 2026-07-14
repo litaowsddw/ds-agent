@@ -5,9 +5,11 @@
 """
 
 import os
-from sqlalchemy.ext.asyncio import AsyncSession, create_async_engine, async_sessionmaker
-from sqlalchemy import create_engine as sync_create_engine, inspect, text
-from sqlalchemy.orm import DeclarativeBase, sessionmaker
+
+from sqlalchemy import create_engine as sync_create_engine
+from sqlalchemy import inspect, text
+from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker, create_async_engine
+from sqlalchemy.orm import DeclarativeBase
 
 # 数据库连接配置 - 从环境变量读取
 DATABASE_URL = os.getenv(
@@ -15,8 +17,14 @@ DATABASE_URL = os.getenv(
     "mysql+aiomysql://agentflow:agentflow@localhost:3306/agentflow?charset=utf8mb4",
 )
 
+IS_SQLITE = DATABASE_URL.startswith("sqlite")
+
 # 同步数据库 URL（供 Worker 使用）
-SYNC_DATABASE_URL = DATABASE_URL.replace("+aiomysql", "+pymysql")
+SYNC_DATABASE_URL = (
+    DATABASE_URL.replace("+aiomysql", "+pymysql")
+    if not IS_SQLITE
+    else DATABASE_URL.replace("+aiosqlite", "")
+)
 
 
 class Base(DeclarativeBase):
@@ -26,14 +34,16 @@ class Base(DeclarativeBase):
 
 # ── 异步引擎（API 服务使用）──
 
-async_engine = create_async_engine(
-    DATABASE_URL,
-    echo=False,
-    pool_size=10,
-    max_overflow=20,
-    pool_pre_ping=True,
-    pool_recycle=3600,
-)
+_async_engine_options = {"echo": False}
+if not IS_SQLITE:
+    _async_engine_options.update(
+        pool_size=10,
+        max_overflow=20,
+        pool_pre_ping=True,
+        pool_recycle=3600,
+    )
+
+async_engine = create_async_engine(DATABASE_URL, **_async_engine_options)
 
 async_session_factory = async_sessionmaker(
     async_engine,
@@ -51,14 +61,15 @@ async def get_db_session() -> AsyncSession:
 # ── 同步引擎（Worker 进程使用）──
 
 try:
-    engine = sync_create_engine(
-        SYNC_DATABASE_URL,
-        echo=False,
-        pool_size=5,
-        max_overflow=10,
-        pool_pre_ping=True,
-        pool_recycle=3600,
-    )
+    _sync_engine_options = {"echo": False}
+    if not IS_SQLITE:
+        _sync_engine_options.update(
+            pool_size=5,
+            max_overflow=10,
+            pool_pre_ping=True,
+            pool_recycle=3600,
+        )
+    engine = sync_create_engine(SYNC_DATABASE_URL, **_sync_engine_options)
 except Exception:
     # pymysql 未安装时降级
     engine = None
