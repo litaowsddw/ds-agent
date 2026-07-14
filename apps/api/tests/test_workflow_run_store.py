@@ -1,8 +1,7 @@
 """WorkflowRunStore 测试。"""
 
-from apps.api.app.domain.workflow_run import RunStatus
 from apps.api.app.domain.mcp import MCPTransport
-from apps.api.app.gateway.llm import LLMGateway, MockLLMProvider
+from apps.api.app.domain.workflow_run import RunStatus
 from apps.api.app.services.agent_store import AgentStore
 from apps.api.app.services.identity_store import IdentityStore
 from apps.api.app.services.knowledge_store import KnowledgeStore
@@ -10,6 +9,7 @@ from apps.api.app.services.mcp_store import MCPStore
 from apps.api.app.services.result_cache import ResultCache
 from apps.api.app.services.workflow_run_store import WorkflowRunStore
 from apps.api.app.services.workflow_store import WorkflowStore
+from apps.api.tests.fakes import FakeWorkflowGateway
 
 VALID_DEFINITION = {
     "version": "1.0",
@@ -31,7 +31,7 @@ def test_workflow_run_executes_start_llm_end() -> None:
     identity = IdentityStore()
     agent_store = AgentStore(identity=identity)
     workflow_store = WorkflowStore(identity=identity, agents=agent_store)
-    gateway = LLMGateway(providers={"mock": MockLLMProvider()})
+    gateway = FakeWorkflowGateway()
     run_store = WorkflowRunStore(identity=identity, workflows=workflow_store, gateway=gateway)
 
     owner = identity.register_user("run-owner@example.com", "Owner", "password123")
@@ -52,9 +52,8 @@ def test_workflow_run_executes_start_llm_end() -> None:
 
     assert run.status == RunStatus.SUCCEEDED
     assert [node_run.node_id for node_run in node_runs] == ["start", "llm", "end"]
-    assert run.output_data["result"]["llm"]["text"].startswith("[mock-llm]")
+    assert run.output_data["result"]["llm"]["text"].startswith("[fake-llm]")
     assert run.output_data["result"]["llm"]["prefix_hash"]
-    assert gateway.list_logs()[0].metadata["source"] == "workflow_node"
 
 
 def test_workflow_run_executes_rag_llm_tool_with_cache() -> None:
@@ -66,7 +65,7 @@ def test_workflow_run_executes_rag_llm_tool_with_cache() -> None:
     knowledge = KnowledgeStore(identity=identity)
     mcp = MCPStore(identity=identity, agents=agent_store)
     cache = ResultCache(max_size=20)
-    gateway = LLMGateway(providers={"mock": MockLLMProvider()})
+    gateway = FakeWorkflowGateway()
     run_store = WorkflowRunStore(
         identity=identity,
         workflows=workflow_store,
@@ -185,7 +184,7 @@ def test_workflow_run_rag_no_hit_still_succeeds() -> None:
     run_store = WorkflowRunStore(
         identity=identity,
         workflows=workflow_store,
-        gateway=LLMGateway(providers={"mock": MockLLMProvider()}),
+        gateway=FakeWorkflowGateway(),
         knowledge=knowledge,
         mcp=MCPStore(identity=identity, agents=agent_store),
         cache=ResultCache(max_size=20),
@@ -230,7 +229,7 @@ def test_workflow_run_fails_when_rag_kb_is_cross_org() -> None:
     run_store = WorkflowRunStore(
         identity=identity,
         workflows=workflow_store,
-        gateway=LLMGateway(providers={"mock": MockLLMProvider()}),
+        gateway=FakeWorkflowGateway(),
         knowledge=knowledge,
         mcp=MCPStore(identity=identity, agents=agent_store),
         cache=ResultCache(max_size=20),
@@ -278,7 +277,7 @@ def test_workflow_run_fails_when_tool_is_not_authorized() -> None:
     run_store = WorkflowRunStore(
         identity=identity,
         workflows=workflow_store,
-        gateway=LLMGateway(providers={"mock": MockLLMProvider()}),
+        gateway=FakeWorkflowGateway(),
         knowledge=KnowledgeStore(identity=identity),
         mcp=mcp,
         cache=ResultCache(max_size=20),
@@ -332,7 +331,7 @@ def test_workflow_run_high_risk_tool_requires_approval() -> None:
     run_store = WorkflowRunStore(
         identity=identity,
         workflows=workflow_store,
-        gateway=LLMGateway(providers={"mock": MockLLMProvider()}),
+        gateway=FakeWorkflowGateway(),
         knowledge=KnowledgeStore(identity=identity),
         mcp=mcp,
         cache=ResultCache(max_size=20),

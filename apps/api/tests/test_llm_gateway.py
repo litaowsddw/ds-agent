@@ -6,16 +6,17 @@ from apps.api.app.gateway.llm import (
     GatewayProviderError,
     LLMCallRequest,
     LLMGateway,
-    MockLLMProvider,
 )
+from apps.api.tests.fakes import FakeLLMProvider
 
 
-def test_llm_gateway_records_success_log() -> None:
+@pytest.mark.asyncio
+async def test_llm_gateway_records_success_log() -> None:
     """Gateway 成功调用后应该记录日志。"""
 
-    gateway = LLMGateway(providers={"mock": MockLLMProvider()})
+    gateway = LLMGateway(providers={"mock": FakeLLMProvider()})
 
-    response = gateway.generate(
+    response = await gateway.generate(
         LLMCallRequest(
             provider="mock",
             model="mock-model",
@@ -26,18 +27,19 @@ def test_llm_gateway_records_success_log() -> None:
 
     logs = gateway.list_logs()
 
-    assert response.text.startswith("[mock-llm]")
+    assert response.text.startswith("[fake-llm]")
     assert len(logs) == 1
     assert logs[0].status == "succeeded"
     assert logs[0].usage["prompt_tokens"] >= 1
 
 
-def test_workflow_prompt_compiler_records_stable_prefix_hash() -> None:
+@pytest.mark.asyncio
+async def test_workflow_prompt_compiler_records_stable_prefix_hash() -> None:
     """Workflow LLM 节点应记录稳定 prefix hash。"""
 
-    gateway = LLMGateway(providers={"mock": MockLLMProvider()})
+    gateway = LLMGateway(providers={"mock": FakeLLMProvider()})
 
-    first_output = gateway.generate_from_workflow_node(
+    first_output = await gateway.generate_from_workflow_node(
         config={
             "provider": "mock",
             "model": "mock-model",
@@ -46,7 +48,7 @@ def test_workflow_prompt_compiler_records_stable_prefix_hash() -> None:
         },
         node_input={"workflow_input": {"text": "A"}, "upstream": {}},
     )
-    second_output = gateway.generate_from_workflow_node(
+    second_output = await gateway.generate_from_workflow_node(
         config={
             "provider": "mock",
             "model": "mock-model",
@@ -63,13 +65,14 @@ def test_workflow_prompt_compiler_records_stable_prefix_hash() -> None:
     assert logs[0].prefix_hash == logs[1].prefix_hash
 
 
-def test_llm_gateway_normalizes_missing_provider_error() -> None:
+@pytest.mark.asyncio
+async def test_llm_gateway_normalizes_missing_provider_error() -> None:
     """未注册 Provider 应返回标准化 Gateway 错误并记录失败日志。"""
 
     gateway = LLMGateway(providers={})
 
     with pytest.raises(GatewayProviderError):
-        gateway.generate(
+        await gateway.generate(
             LLMCallRequest(
                 provider="missing",
                 model="unknown",
