@@ -18,6 +18,13 @@ from apps.api.app.gateway.rate_limiter import (
     RateLimitExceeded,
     rate_limiter,
 )
+from apps.api.app.services.db.metering_db import UsageEventInput
+from apps.api.app.services.metering import (
+    UsageRecorder,
+    UsageTerminalOutcome,
+    normalize_usage,
+    unavailable_usage,
+)
 from packages.runtime.prompt_compiler import PromptContextCompiler
 
 
@@ -45,7 +52,7 @@ class LLMCallResponse:
     text: str
     provider: str
     model: str
-    usage: dict[str, int] = field(default_factory=dict)
+    usage: dict[str, object] = field(default_factory=dict)
     raw: dict[str, Any] = field(default_factory=dict)
 
 
@@ -58,7 +65,7 @@ class LLMCallLog:
     prompt_preview: str
     prefix_hash: str
     status: str
-    usage: dict[str, int]
+    usage: dict[str, object]
     error_message: str = ""
     metadata: dict[str, Any] = field(default_factory=dict)
     created_at: datetime = field(default_factory=utc_now)
@@ -66,6 +73,14 @@ class LLMCallLog:
 
 class GatewayProviderError(RuntimeError):
     """Provider 调用错误。"""
+
+
+@dataclass(frozen=True, slots=True)
+class LLMStreamChunk:
+    """A provider stream item containing text or the final provider usage."""
+
+    text: str = ""
+    usage: dict[str, object] | None = None
 
 
 class OpenAICompatibleProvider:
@@ -143,7 +158,10 @@ class OpenAICompatibleProvider:
                         continue
                     delta = self._extract_stream_delta(body)
                     if delta:
-                        yield delta
+                        yield LLMStreamChunk(text=delta)
+                    usage = self._extract_usage(body)
+                    if usage:
+                        yield LLMStreamChunk(usage=usage)
         except HTTPError as exc:
             detail = exc.read().decode("utf-8", errors="ignore")
             raise GatewayProviderError(f"Model provider HTTP {exc.code}: {detail[:300]}") from exc
@@ -158,6 +176,7 @@ class OpenAICompatibleProvider:
         }
         if stream:
             payload["stream"] = True
+            payload["stream_options"] = {"include_usage": True}
         return payload
 
     def _extract_text(self, body: dict[str, Any]) -> str:
@@ -174,16 +193,9 @@ class OpenAICompatibleProvider:
         delta = choices[0].get("delta", {})
         return str(delta.get("content", "") or "")
 
-    def _extract_usage(self, body: dict[str, Any]) -> dict[str, int]:
+    def _extract_usage(self, body: dict[str, Any]) -> dict[str, object]:
         usage = body.get("usage", {})
-        prompt_tokens = int(usage.get("prompt_tokens", 0) or 0)
-        completion_tokens = int(usage.get("completion_tokens", 0) or 0)
-        return {
-            "prompt_tokens": prompt_tokens,
-            "completion_tokens": completion_tokens,
-            "cache_hit_tokens": int(usage.get("prompt_cache_hit_tokens", 0) or 0),
-            "cache_miss_tokens": int(usage.get("prompt_cache_miss_tokens", prompt_tokens) or 0),
-        }
+        return dict(usage) if isinstance(usage, dict) else {}
 
 
 class LLMGateway:
@@ -193,19 +205,31 @@ class LLMGateway:
         self,
         providers: dict[str, LLMProvider] | None = None,
         limiter: HybridRateLimiter | None = None,
+        usage_recorder: UsageRecorder | None = None,
     ) -> None:
         self.providers = providers or {}
         self.call_logs: list[LLMCallLog] = []
         self.prompt_compiler = PromptContextCompiler()
         self.limiter = limiter or rate_limiter
+        self.usage_recorder = usage_recorder
 
     async def generate(self, request: LLMCallRequest) -> LLMCallResponse:
         """执行一次 LLM 调用并记录日志（异步版本，支持 Redis 限流）。"""
 
+        usage_context = await self._record_started(request)
         provider = self._resolve_provider(request)
         if provider is None:
             error_message = f"未注册 LLM Provider：{request.provider}"
-            self._append_log(request=request, status="failed", usage={}, error_message=error_message)
+            await self._record_terminal(
+                usage_context, dispatch_status="failed", error_category="provider_not_found"
+            )
+            self._append_log(
+                request=request,
+                status="failed",
+                usage={},
+                error_message=error_message,
+                call_id=usage_context.gateway_call_id,
+            )
             raise GatewayProviderError(error_message)
 
         try:
@@ -213,25 +237,62 @@ class LLMGateway:
             response = provider.generate(request)
         except RateLimitExceeded:
             error_message = "RateLimitExceeded: 限流超限，LLM 调用已被拒绝"
-            self._append_log(request=request, status="failed", usage={}, error_message=error_message)
+            await self._record_terminal(
+                usage_context, dispatch_status="rate_limited", error_category="rate_limit"
+            )
+            self._append_log(
+                request=request,
+                status="failed",
+                usage={},
+                error_message=error_message,
+                call_id=usage_context.gateway_call_id,
+            )
             raise
         except Exception as exc:
             error_message = self._normalize_error(exc)
-            self._append_log(request=request, status="failed", usage={}, error_message=error_message)
+            await self._record_terminal(
+                usage_context,
+                dispatch_status="failed",
+                error_category=exc.__class__.__name__,
+            )
+            self._append_log(
+                request=request,
+                status="failed",
+                usage={},
+                error_message=error_message,
+                call_id=usage_context.gateway_call_id,
+            )
             raise GatewayProviderError(error_message) from exc
 
+        await self._record_terminal(
+            usage_context, dispatch_status="succeeded", raw_usage=response.usage
+        )
         self._append_log(
-            request=request, status="succeeded", usage=response.usage, error_message=""
+            request=request,
+            status="succeeded",
+            usage=response.usage,
+            error_message="",
+            call_id=usage_context.gateway_call_id,
         )
         return response
 
     async def stream_generate(self, request: LLMCallRequest) -> AsyncIterator[str]:
         """Stream an LLM response through the configured provider."""
 
+        usage_context = await self._record_started(request)
         provider = self._resolve_provider(request)
         if provider is None:
             error_message = f"Unregistered LLM provider: {request.provider}"
-            self._append_log(request=request, status="failed", usage={}, error_message=error_message)
+            await self._record_terminal(
+                usage_context, dispatch_status="failed", error_category="provider_not_found"
+            )
+            self._append_log(
+                request=request,
+                status="failed",
+                usage={},
+                error_message=error_message,
+                call_id=usage_context.gateway_call_id,
+            )
             raise GatewayProviderError(error_message)
 
         try:
@@ -243,24 +304,55 @@ class LLMGateway:
                     yield response.text[index : index + 24]
                 usage = response.usage
             else:
-                completion_chars = 0
+                final_usage: dict[str, object] | None = None
                 for chunk in streamer(request):
-                    completion_chars += len(chunk)
-                    yield chunk
-                usage = {
-                    "prompt_tokens": 0,
-                    "completion_tokens": max(1, completion_chars // 4) if completion_chars else 0,
-                }
+                    if isinstance(chunk, LLMStreamChunk):
+                        if chunk.usage is not None:
+                            final_usage = chunk.usage
+                        if chunk.text:
+                            yield chunk.text
+                    else:
+                        yield str(chunk)
+                usage = final_usage or {}
         except RateLimitExceeded:
             error_message = "RateLimitExceeded: LLM call rejected by rate limiter"
-            self._append_log(request=request, status="failed", usage={}, error_message=error_message)
+            await self._record_terminal(
+                usage_context, dispatch_status="rate_limited", error_category="rate_limit"
+            )
+            self._append_log(
+                request=request,
+                status="failed",
+                usage={},
+                error_message=error_message,
+                call_id=usage_context.gateway_call_id,
+            )
             raise
         except Exception as exc:
             error_message = self._normalize_error(exc)
-            self._append_log(request=request, status="failed", usage={}, error_message=error_message)
+            await self._record_terminal(
+                usage_context,
+                dispatch_status="failed",
+                error_category=exc.__class__.__name__,
+            )
+            self._append_log(
+                request=request,
+                status="failed",
+                usage={},
+                error_message=error_message,
+                call_id=usage_context.gateway_call_id,
+            )
             raise GatewayProviderError(error_message) from exc
 
-        self._append_log(request=request, status="succeeded", usage=usage, error_message="")
+        await self._record_terminal(
+            usage_context, dispatch_status="succeeded", raw_usage=usage
+        )
+        self._append_log(
+            request=request,
+            status="succeeded",
+            usage=usage,
+            error_message="",
+            call_id=usage_context.gateway_call_id,
+        )
 
     async def generate_from_workflow_node(
         self,
@@ -345,8 +437,9 @@ class LLMGateway:
         self,
         request: LLMCallRequest,
         status: str,
-        usage: dict[str, int],
+        usage: dict[str, object],
         error_message: str,
+        call_id: str | None = None,
     ) -> None:
         """追加调用日志。"""
         prompt_preview = request.prompt[:160]
@@ -357,7 +450,7 @@ class LLMGateway:
         }
         self.call_logs.append(
             LLMCallLog(
-                call_id=new_id("llm"),
+                call_id=call_id or new_id("llm"),
                 provider=request.provider,
                 model=request.model,
                 prompt_preview=prompt_preview,
@@ -372,6 +465,59 @@ class LLMGateway:
     def _normalize_error(self, exc: Exception) -> str:
         """标准化 Provider 错误。"""
         return f"{exc.__class__.__name__}: {exc}"
+
+    async def _record_started(self, request: LLMCallRequest) -> UsageEventInput:
+        """Create a safe attempt context without prompt text or request secrets."""
+
+        metadata = request.metadata
+        context = UsageEventInput(
+            gateway_call_id=new_id("llm"),
+            org_id=str(metadata.get("org_id") or ""),
+            source=str(metadata.get("source") or "gateway"),
+            api_name=str(metadata.get("api_name") or "llm.generate"),
+            provider_key=request.provider,
+            model=request.model,
+            dispatch_status="started",
+            usage_status="unavailable",
+            actor_user_id=_optional_metadata_value(metadata, "actor_user_id"),
+            agent_id=_optional_metadata_value(metadata, "agent_id"),
+            session_id=_optional_metadata_value(metadata, "session_id"),
+            workflow_id=_optional_metadata_value(metadata, "workflow_id"),
+            workflow_version_id=_optional_metadata_value(metadata, "workflow_version_id"),
+            workflow_run_id=_optional_metadata_value(metadata, "workflow_run_id"),
+            workflow_node_id=_optional_metadata_value(metadata, "workflow_node_id"),
+            dispatched_at=utc_now(),
+            prefix_cache_status=("eligible" if request.prefix_hash else "not_applicable"),
+        )
+        if self.usage_recorder is not None:
+            await self.usage_recorder.record_started(context)
+        return context
+
+    async def _record_terminal(
+        self,
+        context: UsageEventInput,
+        *,
+        dispatch_status: str,
+        raw_usage: dict[str, object] | None = None,
+        error_category: str | None = None,
+    ) -> None:
+        if self.usage_recorder is None:
+            return
+        usage = normalize_usage(raw_usage) if raw_usage else unavailable_usage()
+        await self.usage_recorder.record_terminal(
+            context.gateway_call_id,
+            UsageTerminalOutcome(
+                dispatch_status=dispatch_status,
+                usage=usage,
+                completed_at=utc_now(),
+                error_category=error_category,
+            ),
+        )
+
+
+def _optional_metadata_value(metadata: dict[str, Any], key: str) -> str | None:
+    value = metadata.get(key)
+    return str(value) if value not in (None, "") else None
 
 
 # llm_gateway 是 API 进程默认 LLM Gateway。
