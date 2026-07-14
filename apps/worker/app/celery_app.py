@@ -38,9 +38,9 @@ class LocalTask:
 
         return LocalResult()
 
-    def apply_async(self, *args, **kwargs):
+    def apply_async(self, args=None, kwargs=None, **_options):
         """模拟 apply_async，与 delay 行为一致。"""
-        return self.delay(*args, **kwargs)
+        return self.delay(*(args or ()), **(kwargs or {}))
 
 
 class LocalCelery:
