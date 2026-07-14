@@ -56,20 +56,12 @@ class MeteringQuery:
         offset: Annotated[int, Query(ge=0)] = 0,
         limit: Annotated[int, Query(ge=1, le=200)] = 50,
     ) -> None:
-        if workflow_run_id:
-            # A run is already a tenant-authorized, precise execution boundary.  Do not
-            # silently omit its older events with the general dashboard time window.
-            start = _as_utc(created_at_from) if created_at_from else None
-            end = _as_utc(created_at_to) if created_at_to else None
-            if start is not None and end is not None and end <= start:
-                raise HTTPException(status_code=422, detail="'to' must be after 'from'")
-        else:
-            end = _as_utc(created_at_to) if created_at_to else datetime.now(UTC)
-            start = _as_utc(created_at_from) if created_at_from else end - _DEFAULT_WINDOW
-            if end <= start:
-                raise HTTPException(status_code=422, detail="'to' must be after 'from'")
-            if end - start > _MAX_WINDOW:
-                raise HTTPException(status_code=422, detail="usage query range exceeds 31 days")
+        end = _as_utc(created_at_to) if created_at_to else datetime.now(UTC)
+        start = _as_utc(created_at_from) if created_at_from else end - _DEFAULT_WINDOW
+        if end <= start:
+            raise HTTPException(status_code=422, detail="'to' must be after 'from'")
+        if end - start > _MAX_WINDOW:
+            raise HTTPException(status_code=422, detail="usage query range exceeds 31 days")
         self.requested_org_id = org_id
         self.created_at_from = start
         self.created_at_to = end
@@ -77,6 +69,7 @@ class MeteringQuery:
         self.granularity = granularity
         self.offset = offset
         self.limit = limit
+        self.workflow_run_id = workflow_run_id
         self._filter_values = dict(
             created_at_from=start,
             created_at_to=end,
@@ -92,6 +85,14 @@ class MeteringQuery:
     def filters_for_org(self, org_id: str) -> UsageFilters:
         """Construct filters only after the tenant is server-authenticated."""
         return UsageFilters(org_id=org_id, **self._filter_values)
+
+    def event_filters_for_org(self, org_id: str) -> UsageFilters:
+        """A precise run query is bounded by run ID and response pagination, not age."""
+        values = dict(self._filter_values)
+        if self.workflow_run_id:
+            values["created_at_from"] = None
+            values["created_at_to"] = None
+        return UsageFilters(org_id=org_id, **values)
 
 
 async def _authorize_billing_access(
@@ -177,7 +178,7 @@ async def usage_events(
     """Return a paginated, explicit allow-list of safe event fields."""
     org_id = await _authorize_billing_access(query, auth, session)
     events = await metering_db.list_usage_events(
-        session, query.filters_for_org(org_id), offset=query.offset, limit=query.limit + 1
+        session, query.event_filters_for_org(org_id), offset=query.offset, limit=query.limit + 1
     )
     has_more = len(events) > query.limit
     events = events[: query.limit]

@@ -294,6 +294,8 @@ def test_usage_events_redact_prompt_and_other_organization_data(
     assert response.status_code == 200
     assert response.json()["events"][0]["event_id"] == "evt_1"
     assert "prompt_preview" not in response.text
+    assert "a prompt that must never be returned" not in response.text
+    assert "must-not-leak" not in response.text
 
 
 def test_usage_events_accepts_a_specific_workflow_run_filter(
@@ -317,8 +319,38 @@ def test_usage_events_accepts_a_specific_workflow_run_filter(
 
     assert response.status_code == 200
     assert response.json()["has_more"] is False
-    assert "a prompt that must never be returned" not in response.text
-    assert "must-not-leak" not in response.text
+
+
+def test_workflow_run_keeps_bounded_time_contract_for_summary_and_prefix(
+    usage_client: TestClient, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    from app.services.db.metering_db import metering_db
+
+    async def _aggregate(_session: object, filters: object, _group_by: str, _granularity: str):
+        assert getattr(filters, "workflow_run_id") == "run_1"
+        assert getattr(filters, "created_at_from") is not None
+        assert getattr(filters, "created_at_to") is not None
+        return []
+
+    async def _prefix(_session: object, filters: object, _granularity: str):
+        assert getattr(filters, "workflow_run_id") == "run_1"
+        assert getattr(filters, "created_at_from") is not None
+        assert getattr(filters, "created_at_to") is not None
+        return []
+
+    monkeypatch.setattr(metering_db, "aggregate_usage", _aggregate)
+    monkeypatch.setattr(metering_db, "aggregate_prefix_usage", _prefix)
+    headers = {"X-API-Key": "metering-admin-key"}
+
+    summary = usage_client.get("/metering/usage/summary?workflow_run=run_1", headers=headers)
+    prefix = usage_client.get("/metering/usage/by-prefix?workflow_run=run_1", headers=headers)
+
+    assert summary.status_code == 200
+    assert summary.json()["created_at_from"]
+    assert summary.json()["created_at_to"]
+    assert prefix.status_code == 200
+    assert prefix.json()["created_at_from"]
+    assert prefix.json()["created_at_to"]
 
 
 def test_usage_by_prefix_returns_only_bucketed_cache_diagnostics(

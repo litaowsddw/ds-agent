@@ -273,8 +273,8 @@ export interface UsageEvent {
 
 export interface UsageEventsResponse {
   org_id: string;
-  created_at_from?: string | null;
-  created_at_to?: string | null;
+  created_at_from: string;
+  created_at_to: string;
   events: UsageEvent[];
   offset: number;
   limit: number;
