@@ -8,6 +8,8 @@ from pathlib import Path
 
 import pytest
 
+from tests.api_test_harness import cleanup_sqlite_test_database
+
 # This runs before pytest imports test modules, so every FastAPI route sees the
 # same isolated database configuration regardless of whether it lives under
 # tests/ or apps/api/tests/.
@@ -36,3 +38,14 @@ async def reset_api_database() -> None:
 
     async with async_engine.begin() as connection:
         await connection.run_sync(Base.metadata.drop_all)
+
+
+@pytest.fixture(scope="session", autouse=True)
+def cleanup_api_database_after_test_session() -> None:
+    """Release the shared test engine and remove its process-local SQLite file."""
+
+    yield
+
+    from app.database import async_engine
+
+    asyncio.run(cleanup_sqlite_test_database(async_engine, _TEST_DATABASE_PATH))
