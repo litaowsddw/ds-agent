@@ -32,6 +32,7 @@ from app.models.workflow import (
     DocumentModel,
     ChunkModel,
 )
+from app.models.metering import LLMUsageEventModel, ModelPriceModel
 
 __all__ = [
     "UserModel",
@@ -59,4 +60,6 @@ __all__ = [
     "KnowledgeBaseModel",
     "DocumentModel",
     "ChunkModel",
+    "LLMUsageEventModel",
+    "ModelPriceModel",
 ]
