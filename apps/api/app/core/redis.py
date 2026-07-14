@@ -4,6 +4,8 @@
 使用 redis[hiredis] 实现高性能异步访问。
 """
 
+from __future__ import annotations
+
 import os
 import json
 from typing import Any
