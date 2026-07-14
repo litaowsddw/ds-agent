@@ -59,9 +59,9 @@ export default function RunSummary({ run, workflowLabel, usage: suppliedUsage }:
   useEffect(() => {
     if (suppliedUsage) return;
     let active = true;
-    void getUsageEvents({ workflow_id: run.workflow_id, limit: 200 })
+    void getUsageEvents({ workflow_run_id: run.run_id, limit: 200 })
       .then((response) => {
-        if (active) setLoadedEvents(response.events.filter((event) => event.workflow_run_id === run.run_id));
+        if (active) setLoadedEvents(response.events);
       })
       .catch(() => {
         if (active) setLoadedEvents([]);
@@ -69,7 +69,7 @@ export default function RunSummary({ run, workflowLabel, usage: suppliedUsage }:
     return () => {
       active = false;
     };
-  }, [run.run_id, run.workflow_id, suppliedUsage]);
+  }, [run.run_id, suppliedUsage]);
 
   return (
     <div className="space-y-4">

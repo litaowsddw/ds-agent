@@ -294,6 +294,26 @@ def test_usage_events_redact_prompt_and_other_organization_data(
     assert response.status_code == 200
     assert response.json()["events"][0]["event_id"] == "evt_1"
     assert "prompt_preview" not in response.text
+
+
+def test_usage_events_accepts_a_specific_workflow_run_filter(
+    usage_client: TestClient, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    from app.services.db.metering_db import metering_db
+
+    async def _list_events(_session: object, filters: object, *, offset: int, limit: int):
+        assert getattr(filters, "workflow_run_id") == "run_1"
+        assert offset == 0
+        assert limit == 50
+        return []
+
+    monkeypatch.setattr(metering_db, "list_usage_events", _list_events)
+    response = usage_client.get(
+        "/metering/usage/events?workflow_run=run_1",
+        headers={"X-API-Key": "metering-admin-key"},
+    )
+
+    assert response.status_code == 200
     assert "a prompt that must never be returned" not in response.text
     assert "must-not-leak" not in response.text
 

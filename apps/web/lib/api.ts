@@ -212,6 +212,7 @@ export interface UsageQueryFilters {
   model?: string;
   agent_id?: string;
   workflow_id?: string;
+  workflow_run_id?: string;
   group_by?: UsageGroupBy;
   granularity?: UsageGranularity;
   offset?: number;
@@ -290,6 +291,7 @@ function usageQuery(filters: UsageQueryFilters): string {
     ["model", filters.model],
     ["agent", filters.agent_id],
     ["workflow", filters.workflow_id],
+    ["workflow_run", filters.workflow_run_id],
     ["group_by", filters.group_by],
     ["granularity", filters.granularity],
     ["offset", filters.offset],

@@ -50,6 +50,7 @@ class MeteringQuery:
         model: Annotated[str | None, Query()] = None,
         agent_id: Annotated[str | None, Query(alias="agent")] = None,
         workflow_id: Annotated[str | None, Query(alias="workflow")] = None,
+        workflow_run_id: Annotated[str | None, Query(alias="workflow_run")] = None,
         group_by: UsageGroupBy = "model",
         granularity: UsageGranularity = "day",
         offset: Annotated[int, Query(ge=0)] = 0,
@@ -77,6 +78,7 @@ class MeteringQuery:
             model=model,
             agent_id=agent_id,
             workflow_id=workflow_id,
+            workflow_run_id=workflow_run_id,
         )
 
     def filters_for_org(self, org_id: str) -> UsageFilters:

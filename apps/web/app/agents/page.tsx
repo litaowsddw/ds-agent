@@ -3,6 +3,7 @@
 "use client";
 
 import { useEffect, useState } from "react";
+import Link from "next/link";
 import { Bot, FileText, Network, Save, Settings } from "lucide-react";
 import { showToast } from "@/components/layout/AppLayout";
 import { PrimaryButton } from "@/components/ui/Button";
@@ -253,6 +254,12 @@ export default function AgentsPage() {
                   }
                 }}
               />
+              <Link
+                className="inline-flex text-sm font-medium text-[#2f6feb] hover:underline"
+                href={`/insights?agent_id=${encodeURIComponent(selectedAgent.agent_id)}`}
+              >
+                查看此 Agent 的用量洞察
+              </Link>
             </div>
           ) : (
             <EmptyText text="请选择一个 Agent 后修改参数" />
