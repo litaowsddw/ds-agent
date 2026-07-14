@@ -106,6 +106,67 @@ class MeteringDBService:
         "workflow_run_id": LLMUsageEventModel.workflow_run_id,
     }
 
+    async def list_usage_events(
+        self,
+        session: AsyncSession,
+        filters: UsageFilters,
+        *,
+        offset: int,
+        limit: int,
+    ) -> list[LLMUsageEventModel]:
+        """List only events already bounded to the caller's organization."""
+        statement = (
+            select(LLMUsageEventModel)
+            .where(LLMUsageEventModel.org_id == filters.org_id)
+            .order_by(LLMUsageEventModel.created_at.desc(), LLMUsageEventModel.event_id.desc())
+            .offset(offset)
+            .limit(limit)
+        )
+        statement = self._apply_filters(statement, filters)
+        result = await session.execute(statement)
+        return list(result.scalars().all())
+
+    async def aggregate_prefix_usage(
+        self, session: AsyncSession, filters: UsageFilters
+    ) -> list[dict[str, int | str | None]]:
+        """Aggregate bucketed prefix facts without selecting a prefix/hash value."""
+        unknown_usage = case(
+            (
+                or_(
+                    LLMUsageEventModel.input_tokens.is_(None),
+                    LLMUsageEventModel.output_tokens.is_(None),
+                ),
+                1,
+            ),
+            else_=0,
+        )
+        statement = (
+            select(
+                LLMUsageEventModel.prefix_cache_status,
+                LLMUsageEventModel.prefix_length_bucket,
+                func.count(LLMUsageEventModel.event_id).label("call_count"),
+                func.sum(unknown_usage).label("unknown_usage_calls"),
+                func.sum(LLMUsageEventModel.input_tokens).label("input_tokens"),
+                func.sum(LLMUsageEventModel.output_tokens).label("output_tokens"),
+                func.sum(LLMUsageEventModel.total_tokens).label("total_tokens"),
+                func.sum(LLMUsageEventModel.cache_read_input_tokens).label(
+                    "cache_read_input_tokens"
+                ),
+            )
+            .where(LLMUsageEventModel.org_id == filters.org_id)
+            .group_by(
+                LLMUsageEventModel.prefix_cache_status,
+                LLMUsageEventModel.prefix_length_bucket,
+            )
+            .order_by(
+                LLMUsageEventModel.prefix_cache_status,
+                LLMUsageEventModel.prefix_length_bucket,
+            )
+        )
+        statement = self._apply_filters(statement, filters)
+        result = await session.execute(statement)
+        return [dict(row) for row in result.mappings()]
+
     async def record_event(
         self, session: AsyncSession, event: UsageEventInput
     ) -> LLMUsageEventModel:

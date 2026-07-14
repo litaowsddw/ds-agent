@@ -98,6 +98,7 @@ ROLE_PERMISSIONS: dict[OrganizationRole, set[Permission]] = {
         # 组织
         Permission.ORGANIZATION_READ,
         Permission.ORGANIZATION_MANAGE,
+        Permission.ORGANIZATION_BILLING,
         # 群组
         Permission.TEAM_CREATE,
         Permission.TEAM_READ,

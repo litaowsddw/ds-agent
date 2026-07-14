@@ -37,6 +37,7 @@ from apps.api.app.routes.chat import router as chat_router
 from apps.api.app.routes.evolver import router as evolver_router
 from apps.api.app.routes.rbac import router as rbac_router
 from apps.api.app.routes.metrics import router as metrics_router
+from apps.api.app.routes.metering import router as metering_router
 
 
 @asynccontextmanager
@@ -146,6 +147,7 @@ def create_app() -> FastAPI:
     app.include_router(rbac_router, prefix="/rbac", tags=["rbac"])
     # Prometheus 指标
     app.include_router(metrics_router, prefix="/metrics", tags=["metrics"])
+    app.include_router(metering_router, prefix="/metering", tags=["metering"])
 
     return app
 
