@@ -24,6 +24,7 @@ from app.services.db.workflow_db import (
     workflow_run_db,
     workflow_version_db,
 )
+from app.services.metering import SessionUsageRecorder
 from packages.workflow.executor import ExecutedNode, WorkflowExecutor
 
 
@@ -77,6 +78,7 @@ class WorkflowExecutionService:
                 node_input=node_input,
                 actor_user_id=actor_user_id,
                 org_id=run.org_id,
+                run=run,
             ),
             rag_search=lambda config, node_input: self._execute_rag_node(
                 session=session,
@@ -114,6 +116,7 @@ class WorkflowExecutionService:
         node_input: dict[str, Any],
         actor_user_id: str,
         org_id: str,
+        run: WorkflowRunModel,
     ) -> dict[str, Any]:
         provider_key = str(config.get("provider") or "")
         if not provider_key:
@@ -130,8 +133,18 @@ class WorkflowExecutionService:
                 )
             },
             limiter=llm_gateway.limiter,
+            usage_recorder=SessionUsageRecorder(session),
         )
-        enriched_config = {**config, "_org_id": org_id, "_actor_user_id": actor_user_id}
+        enriched_config = {
+            **config,
+            "_org_id": org_id,
+            "_actor_user_id": actor_user_id,
+            "_agent_id": run.agent_id,
+            "_workflow_id": run.workflow_id,
+            "_workflow_version_id": run.version_id,
+            "_workflow_run_id": run.run_id,
+            "_workflow_node_id": str(config.get("id") or ""),
+        }
         try:
             return await gateway.generate_from_workflow_node(enriched_config, node_input)
         finally:

@@ -1,23 +1,23 @@
-"""Gateway API Schema。"""
+"""Gateway API schemas."""
 
 from typing import Any
 
-from pydantic import BaseModel, Field
+from pydantic import BaseModel, ConfigDict, Field
 
 
 class LLMGenerateRequest(BaseModel):
-    """LLM 生成请求。"""
+    """Client-controlled LLM generation parameters only."""
 
-    actor_user_id: str = Field(default="", description="操作用户 ID")
-    org_id: str = Field(default="", description="组织 ID")
-    provider: str = Field(default="", description="LLM Provider 名称")
-    model: str = Field(default="", description="模型名称")
-    prompt: str = Field(min_length=1, description="提示词")
-    parameters: dict[str, Any] = Field(default_factory=dict, description="模型参数")
+    model_config = ConfigDict(extra="forbid")
+
+    provider: str = Field(default="", description="LLM provider key")
+    model: str = Field(default="", description="Model name")
+    prompt: str = Field(min_length=1, description="Prompt")
+    parameters: dict[str, Any] = Field(default_factory=dict, description="Model parameters")
 
 
 class LLMGenerateResponse(BaseModel):
-    """LLM 生成响应。"""
+    """Gateway generation response."""
 
     text: str
     provider: str
@@ -26,7 +26,7 @@ class LLMGenerateResponse(BaseModel):
 
 
 class LLMCallLogResponse(BaseModel):
-    """LLM 调用日志响应。"""
+    """Gateway diagnostic log response."""
 
     call_id: str
     provider: str

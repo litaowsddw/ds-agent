@@ -4,7 +4,7 @@ Supervisor、Skill Evolver 等运行时组件通过此适配器调用 LLM Gatewa
 无需直接依赖 Gateway 的具体实现。
 """
 
-from typing import Any, Protocol
+from typing import Any, Mapping, Protocol
 
 from apps.api.app.gateway.llm import LLMCallRequest, LLMGateway, llm_gateway
 
@@ -24,6 +24,7 @@ class LLMCallerAdapter:
         model: str = "",
         org_id: str = "",
         actor_user_id: str = "",
+        metadata: Mapping[str, object] | None = None,
     ) -> None:
         self.gateway = gateway or llm_gateway
         if not provider or not model:
@@ -32,6 +33,7 @@ class LLMCallerAdapter:
         self.model = model
         self.org_id = org_id
         self.actor_user_id = actor_user_id
+        self.metadata = dict(metadata or {})
 
     async def call(
         self,
@@ -58,6 +60,7 @@ class LLMCallerAdapter:
                 "source": "runtime_llm_caller",
                 "org_id": self.org_id,
                 "actor_user_id": self.actor_user_id,
+                **self.metadata,
             },
         )
         response = await self.gateway.generate(request)

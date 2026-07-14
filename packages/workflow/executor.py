@@ -268,7 +268,12 @@ class WorkflowExecutor:
             input_data=dict(state.get("workflow_input", {})),
             context_by_node=context_by_node,
         )
-        executed_node = await self._execute_node_async(node_id, node_type, config, node_input)
+        # The node ID is owned by the validated workflow definition, not by
+        # caller-controlled node output or tool configuration.
+        callback_config = {**config, "id": node_id}
+        executed_node = await self._execute_node_async(
+            node_id, node_type, callback_config, node_input
+        )
         return self._merge_node_result(node_id, context_by_node, node_runs, executed_node)
 
     def _execute_node_sync(

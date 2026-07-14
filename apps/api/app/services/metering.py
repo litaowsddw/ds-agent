@@ -6,9 +6,12 @@ entries and never derives usage from prompt text or streamed characters.
 
 from dataclasses import dataclass, replace
 from datetime import datetime
-from typing import Mapping, Protocol
+from typing import TYPE_CHECKING, Mapping, Protocol
 
 from apps.api.app.services.db.metering_db import UsageEventInput
+
+if TYPE_CHECKING:
+    from sqlalchemy.ext.asyncio import AsyncSession
 
 
 @dataclass(frozen=True, slots=True)
@@ -71,6 +74,60 @@ class UsageRecorder(Protocol):
         self, call_id: str, outcome: UsageTerminalOutcome
     ) -> None:
         """Register the single terminal outcome for a call."""
+
+
+@dataclass(frozen=True, slots=True)
+class UsageContext:
+    """Trusted, server-derived dimensions for one Gateway caller."""
+
+    org_id: str
+    actor_user_id: str
+    source: str
+    api_name: str
+    agent_id: str | None = None
+    session_id: str | None = None
+    workflow_id: str | None = None
+    workflow_version_id: str | None = None
+    workflow_run_id: str | None = None
+    workflow_node_id: str | None = None
+
+    def as_metadata(self) -> dict[str, str]:
+        values = {
+            "org_id": self.org_id,
+            "actor_user_id": self.actor_user_id,
+            "source": self.source,
+            "api_name": self.api_name,
+            "agent_id": self.agent_id,
+            "session_id": self.session_id,
+            "workflow_id": self.workflow_id,
+            "workflow_version_id": self.workflow_version_id,
+            "workflow_run_id": self.workflow_run_id,
+            "workflow_node_id": self.workflow_node_id,
+        }
+        return {key: value for key, value in values.items() if value}
+
+
+class SessionUsageRecorder:
+    """Record one terminal usage fact through the current request session."""
+
+    def __init__(self, session: "AsyncSession") -> None:
+        self._session = session
+        self._started: dict[str, UsageEventInput] = {}
+
+    async def record_started(self, context: UsageEventInput) -> None:
+        self._started[context.gateway_call_id] = context
+
+    async def record_terminal(
+        self, call_id: str, outcome: UsageTerminalOutcome
+    ) -> None:
+        context = self._started.pop(call_id, None)
+        if context is None:
+            return
+        from apps.api.app.services.db.metering_db import metering_db
+
+        await metering_db.record_event(
+            self._session, usage_event_for_terminal(context, outcome)
+        )
 
 
 def normalize_usage(raw: Mapping[str, object] | None) -> NormalizedUsage:

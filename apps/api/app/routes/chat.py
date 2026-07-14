@@ -6,15 +6,17 @@ from pathlib import Path
 from typing import Any, AsyncIterator, Literal
 
 from fastapi import APIRouter, Depends, HTTPException, Query
-from pydantic import BaseModel
+from pydantic import BaseModel, ConfigDict
 from sqlalchemy import desc, select
 from starlette.responses import StreamingResponse
 from sqlalchemy.ext.asyncio import AsyncSession
 
+from app.core.auth import AuthenticatedUser
 from app.core.security import decrypt_api_key
 from app.database import get_db_session
 from app.domain.identity import new_id
 from app.services.chat_events import ChatTraceEvent, format_sse_event
+from app.services.metering import SessionUsageRecorder, UsageContext
 from app.services.skill_creator import (
     detect_skill_creation_request,
     extract_skill_markdown,
@@ -25,11 +27,11 @@ router = APIRouter()
 
 
 class ChatRequest(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
     agent_id: str
-    org_id: str
     message: str
     session_id: str | None = None
-    actor_user_id: str | None = None
     stream: bool = False
     async_exec: bool = False
     execution_mode: Literal["autonomous", "workflow"] = "autonomous"
@@ -71,16 +73,26 @@ def _workflow_message_metadata(workflow_id: str, workflow_run_id: str) -> dict[s
     }
 
 
+def _require_server_authenticated_identity(auth: AuthenticatedUser) -> None:
+    """Reject the development-only query-string actor fallback for chat usage."""
+
+    if not auth.email:
+        raise HTTPException(status_code=401, detail="Bearer token or service API key required")
+
+
 @router.post("/", response_model=ChatResponse)
 async def chat(
     request: ChatRequest,
+    auth: AuthenticatedUser,
     db: AsyncSession = Depends(get_db_session),
 ) -> ChatResponse:
     """Chat with an Agent through its configured real model provider."""
 
     try:
+        _require_server_authenticated_identity(auth)
         from apps.api.app.gateway.llm import LLMGateway, OpenAICompatibleProvider, llm_gateway
         from apps.api.app.services.db.agent_db import agent_db
+        from apps.api.app.services.db.identity_db import membership_db
         from apps.api.app.services.db.runtime_db import model_provider_db
         from apps.api.app.services.db.session_db import session_db, session_message_db
         from packages.runtime.agent_runtime import AgentKind, AgentRuntime
@@ -91,14 +103,15 @@ async def chat(
         except ValueError as exc:
             raise HTTPException(status_code=404, detail="Agent not found") from exc
 
-        if agent.org_id != request.org_id:
-            raise HTTPException(status_code=403, detail="Agent does not belong to the requested organization")
+        org_id = str(agent.org_id)
+        await membership_db.assert_org_access(db, user_id=auth.user_id, org_id=org_id)
+        actor_user_id = auth.user_id
 
         session_id = ""
         if request.session_id:
             try:
                 existing_session = await session_db.get_session_required(db, request.session_id)
-                if existing_session.org_id != request.org_id or existing_session.agent_id != request.agent_id:
+                if existing_session.org_id != org_id or existing_session.agent_id != request.agent_id:
                     raise ValueError("Session does not belong to this agent")
                 session_id = existing_session.session_id
             except ValueError:
@@ -108,7 +121,7 @@ async def chat(
             session = await session_db.create_session(
                 db,
                 session_id=new_id("ses"),
-                org_id=request.org_id,
+                org_id=org_id,
                 agent_id=request.agent_id,
                 user_id=agent.created_by,
             )
@@ -118,7 +131,7 @@ async def chat(
             db,
             message_id=new_id("msg"),
             session_id=session_id,
-            org_id=request.org_id,
+            org_id=org_id,
             agent_id=request.agent_id,
             role="user",
             content=request.message,
@@ -128,7 +141,6 @@ async def chat(
         if request.execution_mode == "workflow":
             from apps.api.app.routes.workflow_runs import execute_workflow_version_for_chat
 
-            actor_user_id = request.actor_user_id or agent.created_by
             workflow = await _resolve_workflow_for_chat(db, agent=agent, request=request)
 
             run = await execute_workflow_version_for_chat(
@@ -142,7 +154,7 @@ async def chat(
                 db,
                 message_id=new_id("msg"),
                 session_id=session_id,
-                org_id=request.org_id,
+                org_id=org_id,
                 agent_id=request.agent_id,
                 role="assistant",
                 content=response_text,
@@ -164,7 +176,7 @@ async def chat(
         if not model_provider or not model_name:
             raise HTTPException(status_code=400, detail="Agent has no model provider or model configured")
 
-        provider_config = await model_provider_db.get_by_key(db, request.org_id, model_provider)
+        provider_config = await model_provider_db.get_by_key(db, org_id, model_provider)
         if provider_config is None or not provider_config.is_enabled:
             raise HTTPException(status_code=400, detail=f"Model provider not configured: {model_provider}")
 
@@ -181,17 +193,27 @@ async def chat(
                 )
             },
             limiter=llm_gateway.limiter,
+            usage_recorder=SessionUsageRecorder(db),
         )
         adapter = LLMCallerAdapter(
             gateway=gateway,
             provider=model_provider,
             model=model_name,
-            org_id=request.org_id,
+            org_id=org_id,
+            actor_user_id=actor_user_id,
+            metadata=UsageContext(
+                org_id=org_id,
+                actor_user_id=actor_user_id,
+                source="chat_autonomous",
+                api_name="chat.completions",
+                agent_id=str(agent.agent_id),
+                session_id=str(session_id),
+            ).as_metadata(),
         )
 
         runtime = AgentRuntime(
             agent_id=request.agent_id,
-            org_id=request.org_id,
+            org_id=org_id,
             model_provider=model_provider,
             model_name=model_name,
             workspace_id=agent.workspace_id or "",
@@ -207,7 +229,7 @@ async def chat(
 
             supervisor_run_cycle.delay(
                 supervisor_agent_id=request.agent_id,
-                org_id=request.org_id,
+                org_id=org_id,
                 user_input=request.message,
             )
             await db.commit()
@@ -229,7 +251,7 @@ async def chat(
                     db,
                     message_id=new_id("msg"),
                     session_id=session_id,
-                    org_id=request.org_id,
+                    org_id=org_id,
                     agent_id=request.agent_id,
                     role="assistant",
                     content=response_text,
@@ -261,20 +283,27 @@ async def chat(
 @router.post("/stream")
 async def chat_stream(
     request: ChatRequest,
+    auth: AuthenticatedUser,
     db: AsyncSession = Depends(get_db_session),
 ) -> StreamingResponse:
     """Stream chat execution events and response chunks as SSE."""
 
+    _require_server_authenticated_identity(auth)
     return StreamingResponse(
-        _chat_stream_events(request=request, db=db),
+        _chat_stream_events(request=request, auth=auth, db=db),
         media_type="text/event-stream",
         headers={"Cache-Control": "no-cache", "X-Accel-Buffering": "no"},
     )
 
 
-async def _chat_stream_events(request: ChatRequest, db: AsyncSession) -> AsyncIterator[str]:
+async def _chat_stream_events(
+    request: ChatRequest,
+    auth: AuthenticatedUser,
+    db: AsyncSession,
+) -> AsyncIterator[str]:
     from apps.api.app.gateway.llm import LLMCallRequest, LLMGateway, OpenAICompatibleProvider, llm_gateway
     from apps.api.app.services.db.agent_db import agent_db
+    from apps.api.app.services.db.identity_db import membership_db
     from apps.api.app.services.db.runtime_db import (
         agent_skill_policy_db,
         memory_db,
@@ -299,7 +328,7 @@ async def _chat_stream_events(request: ChatRequest, db: AsyncSession) -> AsyncIt
     from packages.runtime.llm_caller import LLMCallerAdapter
 
     run_id = new_id("chatrun")
-    actor_user_id = request.actor_user_id or ""
+    actor_user_id = auth.user_id
 
     async def emit(event: str, **data: object) -> str:
         return format_sse_event(ChatTraceEvent(event=event, data={"run_id": run_id, **data}))
@@ -311,16 +340,15 @@ async def _chat_stream_events(request: ChatRequest, db: AsyncSession) -> AsyncIt
             agent = await agent_db.get_agent_required(db, request.agent_id)
         except ValueError as exc:
             raise HTTPException(status_code=404, detail="Agent not found") from exc
-        if agent.org_id != request.org_id:
-            raise HTTPException(status_code=403, detail="Agent does not belong to the requested organization")
-        actor_user_id = actor_user_id or agent.created_by
+        org_id = str(agent.org_id)
+        await membership_db.assert_org_access(db, user_id=actor_user_id, org_id=org_id)
 
         session_id = ""
         current_session = None
         if request.session_id:
             try:
                 existing_session = await session_db.get_session_required(db, request.session_id)
-                if existing_session.org_id != request.org_id or existing_session.agent_id != request.agent_id:
+                if existing_session.org_id != org_id or existing_session.agent_id != request.agent_id:
                     raise ValueError("Session does not belong to this agent")
                 session_id = existing_session.session_id
                 current_session = existing_session
@@ -330,7 +358,7 @@ async def _chat_stream_events(request: ChatRequest, db: AsyncSession) -> AsyncIt
             session = await session_db.create_session(
                 db,
                 session_id=new_id("ses"),
-                org_id=request.org_id,
+                org_id=org_id,
                 agent_id=request.agent_id,
                 user_id=actor_user_id,
             )
@@ -341,7 +369,7 @@ async def _chat_stream_events(request: ChatRequest, db: AsyncSession) -> AsyncIt
             db,
             message_id=new_id("msg"),
             session_id=session_id,
-            org_id=request.org_id,
+            org_id=org_id,
             agent_id=request.agent_id,
             role="user",
             content=request.message,
@@ -371,7 +399,7 @@ async def _chat_stream_events(request: ChatRequest, db: AsyncSession) -> AsyncIt
                 db,
                 message_id=new_id("msg"),
                 session_id=session_id,
-                org_id=request.org_id,
+                org_id=org_id,
                 agent_id=request.agent_id,
                 role="assistant",
                 content=response_text,
@@ -403,7 +431,7 @@ async def _chat_stream_events(request: ChatRequest, db: AsyncSession) -> AsyncIt
         if not model_provider or not model_name:
             raise HTTPException(status_code=400, detail="Agent has no model provider or model configured")
 
-        provider_config = await model_provider_db.get_by_key(db, request.org_id, model_provider)
+        provider_config = await model_provider_db.get_by_key(db, org_id, model_provider)
         if provider_config is None or not provider_config.is_enabled:
             raise HTTPException(status_code=400, detail=f"Model provider not configured: {model_provider}")
         gateway = LLMGateway(
@@ -419,12 +447,22 @@ async def _chat_stream_events(request: ChatRequest, db: AsyncSession) -> AsyncIt
                 )
             },
             limiter=llm_gateway.limiter,
+            usage_recorder=SessionUsageRecorder(db),
         )
         adapter = LLMCallerAdapter(
             gateway=gateway,
             provider=model_provider,
             model=model_name,
-            org_id=request.org_id,
+            org_id=org_id,
+            actor_user_id=actor_user_id,
+            metadata=UsageContext(
+                org_id=org_id,
+                actor_user_id=actor_user_id,
+                source="chat_stream",
+                api_name="chat.completions",
+                agent_id=str(agent.agent_id),
+                session_id=str(session_id),
+            ).as_metadata(),
         )
         recent_messages = await session_message_db.list_recent_uncompacted_messages(db, session_id, limit=24)
         memories, _ = await memory_db.list_agent_memories(db, agent.agent_id, limit=20)
@@ -435,7 +473,7 @@ async def _chat_stream_events(request: ChatRequest, db: AsyncSession) -> AsyncIt
             token_threshold=_memory_compaction_threshold(),
         )
 
-        supervisors = await agent_db.list_org_agents(db, request.org_id, kind="SUPERVISOR")
+        supervisors = await agent_db.list_org_agents(db, org_id, kind="SUPERVISOR")
         supervisor = sorted(supervisors, key=lambda item: item.created_at, reverse=True)[0] if supervisors else None
         planner = supervisor or agent
 
@@ -489,7 +527,7 @@ async def _chat_stream_events(request: ChatRequest, db: AsyncSession) -> AsyncIt
             skill = await skill_db.create_skill(
                 db,
                 skill_id=new_id("skl"),
-                org_id=request.org_id,
+                org_id=org_id,
                 team_id=agent.team_id,
                 agent_id=agent.agent_id,
                 scope="agent",
@@ -531,7 +569,7 @@ async def _chat_stream_events(request: ChatRequest, db: AsyncSession) -> AsyncIt
             allowed_skills = await skill_db.list_agent_allowed_skills(
                 db,
                 agent_id=agent.agent_id,
-                org_id=request.org_id,
+                org_id=org_id,
             )
             skill_catalog = format_skill_description_catalog(allowed_skills)
             skill_selection = None
@@ -604,7 +642,7 @@ async def _chat_stream_events(request: ChatRequest, db: AsyncSession) -> AsyncIt
                 },
                 metadata={
                     "source": "chat_stream",
-                    "org_id": request.org_id,
+                    "org_id": org_id,
                     "actor_user_id": actor_user_id,
                     "agent_id": agent.agent_id,
                     "session_id": session_id,
@@ -639,7 +677,7 @@ async def _chat_stream_events(request: ChatRequest, db: AsyncSession) -> AsyncIt
                 await memory_db.create_memory(
                     db,
                     memory_id=new_id("mem"),
-                    org_id=request.org_id,
+                    org_id=org_id,
                     agent_id=request.agent_id,
                     memory_type=memory_type,
                     content=memory_content,
@@ -651,7 +689,7 @@ async def _chat_stream_events(request: ChatRequest, db: AsyncSession) -> AsyncIt
                 await skill_evaluation_db.create_evaluation(
                     db,
                     evaluation_id=new_id("seval"),
-                    org_id=request.org_id,
+                    org_id=org_id,
                     agent_id=request.agent_id,
                     skill_id=selected_skill_context.skill_id,
                     session_id=session_id,
@@ -663,7 +701,7 @@ async def _chat_stream_events(request: ChatRequest, db: AsyncSession) -> AsyncIt
                 db,
                 message_id=new_id("msg"),
                 session_id=session_id,
-                org_id=request.org_id,
+                org_id=org_id,
                 agent_id=request.agent_id,
                 role="assistant",
                 content=response_text,
