@@ -99,8 +99,9 @@ class UsageEventResponse(BaseModel):
 
 class UsageEventsResponse(BaseModel):
     org_id: str
-    created_at_from: datetime
-    created_at_to: datetime
+    created_at_from: datetime | None = None
+    created_at_to: datetime | None = None
     events: list[UsageEventResponse] = Field(default_factory=list)
     offset: int
     limit: int
+    has_more: bool = False

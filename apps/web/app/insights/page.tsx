@@ -121,7 +121,7 @@ function InsightsContent() {
       .then((eventResponse) => {
         if (!active) return;
         setEvents(eventResponse.events);
-        setTruncated(eventResponse.events.length >= eventResponse.limit);
+        setTruncated(eventResponse.has_more);
       })
       .catch((reason: unknown) => {
         if (active) setError(reason instanceof Error ? reason.message : "无法加载用量洞察。");

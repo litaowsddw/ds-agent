@@ -1,5 +1,12 @@
 import { fireEvent, render, screen, within } from "@testing-library/react";
-import { describe, expect, it, vi } from "vitest";
+import { beforeEach, describe, expect, it, vi } from "vitest";
+
+const { getUsageEventsMock } = vi.hoisted(() => ({ getUsageEventsMock: vi.fn() }));
+
+vi.mock("@/lib/api", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("@/lib/api")>()),
+  getUsageEvents: getUsageEventsMock,
+}));
 import JsonDisclosure from "@/components/runs/JsonDisclosure";
 import NodeRunCard, { formatElapsed } from "@/components/runs/NodeRunCard";
 import RunList from "@/components/runs/RunList";
@@ -76,6 +83,10 @@ describe("RunList", () => {
 });
 
 describe("RunSummary", () => {
+  beforeEach(() => {
+    getUsageEventsMock.mockReset();
+    getUsageEventsMock.mockResolvedValue({ events: [], has_more: false, offset: 0, limit: 200, org_id: "org-1" });
+  });
   it("shows failures before output and uses a dash for missing values", () => {
     const missingRun: WorkflowRun = {
       ...runs[0],
@@ -111,6 +122,23 @@ describe("RunSummary", () => {
     expect(screen.getByText("平台缓存命中率")).toBeInTheDocument();
     expect(screen.getByText("10 Token")).toBeInTheDocument();
     expect(screen.getByText("不支持")).toBeInTheDocument();
+  });
+
+  it("does not sum a run when the exact event query reports more pages", async () => {
+    getUsageEventsMock.mockResolvedValue({
+      events: [{
+        event_id: "event-1", gateway_call_id: "call-1", created_at: "2026-07-12T02:00:00Z",
+        source: "workflow_node", api_name: "chat.completions", provider_key: "openai", model: "gpt-4o",
+        dispatch_status: "succeeded", usage_status: "provider_final", cache_usage_status: "known", total_tokens: 999,
+      }],
+      has_more: true, offset: 0, limit: 200, org_id: "org-1",
+    });
+
+    render(<RunSummary run={runs[1]} />);
+
+    expect(await screen.findByText("运行事件超过可显示上限，无法汇总完整用量。 ".trim())).toBeInTheDocument();
+    expect(screen.queryByText("999 Token")).not.toBeInTheDocument();
+    expect(getUsageEventsMock).toHaveBeenCalledWith({ workflow_run_id: "run-ok", limit: 200 });
   });
 });
 

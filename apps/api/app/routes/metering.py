@@ -56,12 +56,20 @@ class MeteringQuery:
         offset: Annotated[int, Query(ge=0)] = 0,
         limit: Annotated[int, Query(ge=1, le=200)] = 50,
     ) -> None:
-        end = _as_utc(created_at_to) if created_at_to else datetime.now(UTC)
-        start = _as_utc(created_at_from) if created_at_from else end - _DEFAULT_WINDOW
-        if end <= start:
-            raise HTTPException(status_code=422, detail="'to' must be after 'from'")
-        if end - start > _MAX_WINDOW:
-            raise HTTPException(status_code=422, detail="usage query range exceeds 31 days")
+        if workflow_run_id:
+            # A run is already a tenant-authorized, precise execution boundary.  Do not
+            # silently omit its older events with the general dashboard time window.
+            start = _as_utc(created_at_from) if created_at_from else None
+            end = _as_utc(created_at_to) if created_at_to else None
+            if start is not None and end is not None and end <= start:
+                raise HTTPException(status_code=422, detail="'to' must be after 'from'")
+        else:
+            end = _as_utc(created_at_to) if created_at_to else datetime.now(UTC)
+            start = _as_utc(created_at_from) if created_at_from else end - _DEFAULT_WINDOW
+            if end <= start:
+                raise HTTPException(status_code=422, detail="'to' must be after 'from'")
+            if end - start > _MAX_WINDOW:
+                raise HTTPException(status_code=422, detail="usage query range exceeds 31 days")
         self.requested_org_id = org_id
         self.created_at_from = start
         self.created_at_to = end
@@ -169,8 +177,10 @@ async def usage_events(
     """Return a paginated, explicit allow-list of safe event fields."""
     org_id = await _authorize_billing_access(query, auth, session)
     events = await metering_db.list_usage_events(
-        session, query.filters_for_org(org_id), offset=query.offset, limit=query.limit
+        session, query.filters_for_org(org_id), offset=query.offset, limit=query.limit + 1
     )
+    has_more = len(events) > query.limit
+    events = events[: query.limit]
     return UsageEventsResponse(
         org_id=org_id,
         created_at_from=query.created_at_from,
@@ -178,6 +188,7 @@ async def usage_events(
         events=[_event_response(event) for event in events],
         offset=query.offset,
         limit=query.limit,
+        has_more=has_more,
     )
 
 

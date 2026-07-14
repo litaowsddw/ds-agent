@@ -303,8 +303,10 @@ def test_usage_events_accepts_a_specific_workflow_run_filter(
 
     async def _list_events(_session: object, filters: object, *, offset: int, limit: int):
         assert getattr(filters, "workflow_run_id") == "run_1"
+        assert getattr(filters, "created_at_from") is None
+        assert getattr(filters, "created_at_to") is None
         assert offset == 0
-        assert limit == 50
+        assert limit == 51
         return []
 
     monkeypatch.setattr(metering_db, "list_usage_events", _list_events)
@@ -314,6 +316,7 @@ def test_usage_events_accepts_a_specific_workflow_run_filter(
     )
 
     assert response.status_code == 200
+    assert response.json()["has_more"] is False
     assert "a prompt that must never be returned" not in response.text
     assert "must-not-leak" not in response.text
 

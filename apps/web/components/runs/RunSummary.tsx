@@ -51,20 +51,28 @@ function summarizeUsage(events: UsageEvent[]): RunUsageSummary | null {
 
 export default function RunSummary({ run, workflowLabel, usage: suppliedUsage }: RunSummaryProps) {
   const [loadedEvents, setLoadedEvents] = useState<UsageEvent[] | null>(null);
+  const [usageIncomplete, setUsageIncomplete] = useState(false);
   const usage = useMemo(
-    () => suppliedUsage ?? (loadedEvents ? summarizeUsage(loadedEvents) : null),
-    [loadedEvents, suppliedUsage]
+    () => suppliedUsage ?? (usageIncomplete ? null : loadedEvents ? summarizeUsage(loadedEvents) : null),
+    [loadedEvents, suppliedUsage, usageIncomplete]
   );
 
   useEffect(() => {
     if (suppliedUsage) return;
     let active = true;
+    setUsageIncomplete(false);
     void getUsageEvents({ workflow_run_id: run.run_id, limit: 200 })
       .then((response) => {
-        if (active) setLoadedEvents(response.events);
+        if (active) {
+          setUsageIncomplete(response.has_more);
+          setLoadedEvents(response.events);
+        }
       })
       .catch(() => {
-        if (active) setLoadedEvents([]);
+        if (active) {
+          setUsageIncomplete(false);
+          setLoadedEvents([]);
+        }
       });
     return () => {
       active = false;
@@ -93,7 +101,7 @@ export default function RunSummary({ run, workflowLabel, usage: suppliedUsage }:
         <div className="mb-3 text-sm font-semibold text-[#172033]">运行用量</div>
         <div className="grid gap-3 sm:grid-cols-2 lg:grid-cols-4">
           <SummaryField label="调用次数">{usage ? String(usage.callCount) : "—"}</SummaryField>
-          <SummaryField label="总 Token">{usage ? tokenValue(usage.totalTokens) : "—"}</SummaryField>
+          <SummaryField label="总 Token">{usage ? tokenValue(usage.totalTokens) : usageIncomplete ? "用量不完整" : "—"}</SummaryField>
           <SummaryField label="Provider 缓存命中 Token">
             {usage ? tokenValue(usage.providerCacheReadTokens) : "—"}
           </SummaryField>
@@ -101,6 +109,9 @@ export default function RunSummary({ run, workflowLabel, usage: suppliedUsage }:
         </div>
         {usage?.unknownUsageCalls ? (
           <p className="mt-3 text-xs text-[#667085]">{usage.unknownUsageCalls} 次调用的 Provider 未提供用量。</p>
+        ) : null}
+        {usageIncomplete ? (
+          <p className="mt-3 text-xs text-[#667085]">运行事件超过可显示上限，无法汇总完整用量。</p>
         ) : null}
       </div>
 

@@ -58,7 +58,7 @@ describe("InsightsPage", () => {
         event_id: `event-${index}`, gateway_call_id: `call-${index}`, created_at: "2026-07-14T00:00:00Z",
         source: "workflow_node", api_name: "chat.completions", provider_key: "openai", model: "gpt-4o",
         dispatch_status: "succeeded", usage_status: "provider_final", cache_usage_status: "known",
-      })), offset: 0, limit: 200,
+      })), offset: 0, limit: 200, has_more: true,
     });
 
     render(<InsightsPage />);

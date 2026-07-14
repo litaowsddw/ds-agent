@@ -273,11 +273,12 @@ export interface UsageEvent {
 
 export interface UsageEventsResponse {
   org_id: string;
-  created_at_from: string;
-  created_at_to: string;
+  created_at_from?: string | null;
+  created_at_to?: string | null;
   events: UsageEvent[];
   offset: number;
   limit: number;
+  has_more: boolean;
 }
 
 function usageQuery(filters: UsageQueryFilters): string {
