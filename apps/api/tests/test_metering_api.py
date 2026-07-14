@@ -59,9 +59,12 @@ def test_usage_summary_groups_by_api_and_model_for_org_billing_admin(
 ) -> None:
     from app.services.db.metering_db import UsageAggregate, metering_db
 
-    async def _aggregate(_session: object, filters: object, group_by: str):
+    async def _aggregate(
+        _session: object, filters: object, group_by: str, granularity: str
+    ):
         assert getattr(filters, "org_id") == "org_1"
         assert group_by == "model"
+        assert granularity == "day"
         return [
             UsageAggregate(
                 group_by="model",
@@ -85,17 +88,14 @@ def test_usage_summary_groups_by_api_and_model_for_org_billing_admin(
     )
 
     assert response.status_code == 200
-    assert response.json()["groups"] == [
-        {
-            "model": "gpt-4o",
-            "input_tokens": 10,
-            "output_tokens": 2,
-            "total_tokens": 12,
-            "cache_read_input_tokens": 4,
-            "unknown_usage_calls": 0,
-            "call_count": 1,
-        }
-    ]
+    group = response.json()["groups"][0]
+    assert group["model"] == "gpt-4o"
+    assert group["input_tokens"] == 10
+    assert group["output_tokens"] == 2
+    assert group["total_tokens"] == 12
+    assert group["cache_read_input_tokens"] == 4
+    assert group["unknown_usage_calls"] == 0
+    assert group["call_count"] == 1
 
 
 def test_usage_summary_denies_cross_organization_even_for_authenticated_user(
@@ -107,6 +107,113 @@ def test_usage_summary_denies_cross_organization_even_for_authenticated_user(
     )
 
     assert response.status_code == 403
+
+
+def test_usage_rejects_client_org_override_before_membership_lookup(
+    usage_client: TestClient, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    from app.services.db.identity_db import membership_db
+    from app.services.db.metering_db import metering_db
+
+    async def _unexpected_membership(*_args: object, **_kwargs: object):
+        raise AssertionError("client org scope must be rejected before lookup")
+
+    async def _unexpected_aggregate(*_args: object, **_kwargs: object):
+        raise AssertionError("client org scope must never reach metering storage")
+
+    monkeypatch.setattr(membership_db, "assert_org_access", _unexpected_membership)
+    monkeypatch.setattr(metering_db, "aggregate_usage", _unexpected_aggregate)
+    response = usage_client.get(
+        "/metering/usage/summary?org_id=org_2",
+        headers={"X-API-Key": "metering-admin-key"},
+    )
+
+    assert response.status_code == 403
+
+
+def test_usage_rejects_unscoped_service_token_even_with_query_org_id(
+    usage_client: TestClient,
+) -> None:
+    from app.core.auth import register_service_account
+
+    register_service_account("metering-unscoped-key", "billing-admin", None)
+    response = usage_client.get(
+        "/metering/usage/summary?org_id=org_1",
+        headers={"X-API-Key": "metering-unscoped-key"},
+    )
+
+    assert response.status_code == 403
+
+
+def test_usage_scope_comes_from_service_token_not_missing_query_org_id(
+    usage_client: TestClient, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    from app.services.db.metering_db import UsageAggregate, metering_db
+
+    async def _aggregate(
+        _session: object, filters: object, _group_by: str, _granularity: str
+    ):
+        assert getattr(filters, "org_id") == "org_1"
+        return [
+            UsageAggregate(
+                group_by="model",
+                group_value="gpt-4o",
+                call_count=1,
+                unknown_usage_calls=0,
+                input_tokens=10,
+                output_tokens=2,
+                total_tokens=12,
+                reasoning_tokens=None,
+                cache_read_input_tokens=None,
+                cache_write_input_tokens=None,
+                model="gpt-4o",
+            )
+        ]
+
+    monkeypatch.setattr(metering_db, "aggregate_usage", _aggregate)
+    response = usage_client.get(
+        "/metering/usage/summary?group_by=model",
+        headers={"X-API-Key": "metering-admin-key"},
+    )
+
+    assert response.status_code == 200
+    assert response.json()["org_id"] == "org_1"
+
+
+def test_usage_summary_exposes_a_real_hour_bucket(
+    usage_client: TestClient, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    from app.services.db.metering_db import UsageAggregate, metering_db
+
+    async def _aggregate(
+        _session: object, _filters: object, _group_by: str, granularity: str
+    ):
+        assert granularity == "hour"
+        return [
+            UsageAggregate(
+                group_by="model",
+                group_value="gpt-4o",
+                call_count=1,
+                unknown_usage_calls=0,
+                input_tokens=10,
+                output_tokens=2,
+                total_tokens=12,
+                reasoning_tokens=None,
+                cache_read_input_tokens=None,
+                cache_write_input_tokens=None,
+                model="gpt-4o",
+                bucket_start=datetime(2026, 7, 14, 10, tzinfo=UTC),
+            )
+        ]
+
+    monkeypatch.setattr(metering_db, "aggregate_usage", _aggregate)
+    response = usage_client.get(
+        "/metering/usage/summary?granularity=hour",
+        headers={"X-API-Key": "metering-admin-key"},
+    )
+
+    assert response.status_code == 200
+    assert response.json()["groups"][0]["bucket_start"] == "2026-07-14T10:00:00Z"
 
 
 def test_usage_summary_denies_org_member_without_billing_permission(
@@ -196,8 +303,9 @@ def test_usage_by_prefix_returns_only_bucketed_cache_diagnostics(
 ) -> None:
     from app.services.db.metering_db import metering_db
 
-    async def _aggregate_prefix(_session: object, filters: object):
+    async def _aggregate_prefix(_session: object, filters: object, granularity: str):
         assert getattr(filters, "org_id") == "org_1"
+        assert granularity == "day"
         return [
             {
                 "prefix_cache_status": "eligible",

@@ -13,6 +13,7 @@ UsageGranularity = Literal["hour", "day"]
 class UsageAggregateResponse(BaseModel):
     """One safe, organization-scoped aggregate bucket."""
 
+    bucket_start: datetime | None = None
     api_name: str | None = None
     provider_key: str | None = None
     model: str | None = None
@@ -43,6 +44,7 @@ class UsageSummaryResponse(BaseModel):
 class PrefixUsageAggregateResponse(BaseModel):
     """Bucketed prefix-cache diagnostics without a prefix value or hash."""
 
+    bucket_start: datetime | None = None
     prefix_cache_status: str | None = None
     prefix_length_bucket: str | None = None
     call_count: int

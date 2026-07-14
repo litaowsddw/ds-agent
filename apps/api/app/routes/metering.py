@@ -41,7 +41,7 @@ class MeteringQuery:
 
     def __init__(
         self,
-        org_id: Annotated[str, Query(min_length=1)],
+        org_id: Annotated[str | None, Query(min_length=1)] = None,
         created_at_from: Annotated[datetime | None, Query(alias="from")] = None,
         created_at_to: Annotated[datetime | None, Query(alias="to")] = None,
         source: Annotated[str | None, Query()] = None,
@@ -61,15 +61,14 @@ class MeteringQuery:
             raise HTTPException(status_code=422, detail="'to' must be after 'from'")
         if end - start > _MAX_WINDOW:
             raise HTTPException(status_code=422, detail="usage query range exceeds 31 days")
-        self.org_id = org_id
+        self.requested_org_id = org_id
         self.created_at_from = start
         self.created_at_to = end
         self.group_by = group_by
         self.granularity = granularity
         self.offset = offset
         self.limit = limit
-        self.filters = UsageFilters(
-            org_id=org_id,
+        self._filter_values = dict(
             created_at_from=start,
             created_at_to=end,
             source=source,
@@ -80,21 +79,30 @@ class MeteringQuery:
             workflow_id=workflow_id,
         )
 
+    def filters_for_org(self, org_id: str) -> UsageFilters:
+        """Construct filters only after the tenant is server-authenticated."""
+        return UsageFilters(org_id=org_id, **self._filter_values)
+
 
 async def _authorize_billing_access(
     query: MeteringQuery,
     auth: AuthenticatedUser,
     session: AsyncSession,
-) -> None:
+) -> str:
     """Require both membership and the read-only billing permission."""
+    if not auth.org_id:
+        raise HTTPException(status_code=403, detail="authenticated organization context required")
+    if query.requested_org_id and query.requested_org_id != auth.org_id:
+        raise HTTPException(status_code=403, detail="organization scope does not match token")
     try:
         membership = await membership_db.assert_org_access(
-            session, user_id=auth.user_id, org_id=query.org_id
+            session, user_id=auth.user_id, org_id=auth.org_id
         )
     except ValueError as exc:
         raise HTTPException(status_code=403, detail="organization access denied") from exc
     if not rbac_service.has_permission(membership, Permission.ORGANIZATION_BILLING):
         raise HTTPException(status_code=403, detail="billing usage access denied")
+    return auth.org_id
 
 
 @router.get(
@@ -108,11 +116,13 @@ async def usage_summary(
     session: AsyncSession = Depends(get_db_session),
 ) -> UsageSummaryResponse:
     """Aggregate provider-reported usage for one authorized organization."""
-    await _authorize_billing_access(query, auth, session)
+    org_id = await _authorize_billing_access(query, auth, session)
     db_group_by = _GROUP_BY_FIELDS[query.group_by]
-    rows = await metering_db.aggregate_usage(session, query.filters, db_group_by)
+    rows = await metering_db.aggregate_usage(
+        session, query.filters_for_org(org_id), db_group_by, query.granularity
+    )
     return UsageSummaryResponse(
-        org_id=query.org_id,
+        org_id=org_id,
         group_by=query.group_by,
         granularity=query.granularity,
         created_at_from=query.created_at_from,
@@ -132,10 +142,12 @@ async def usage_by_prefix(
     session: AsyncSession = Depends(get_db_session),
 ) -> PrefixUsageResponse:
     """Return only bucketed prefix-cache diagnostics, never a prefix/hash."""
-    await _authorize_billing_access(query, auth, session)
-    rows = await metering_db.aggregate_prefix_usage(session, query.filters)
+    org_id = await _authorize_billing_access(query, auth, session)
+    rows = await metering_db.aggregate_prefix_usage(
+        session, query.filters_for_org(org_id), query.granularity
+    )
     return PrefixUsageResponse(
-        org_id=query.org_id,
+        org_id=org_id,
         created_at_from=query.created_at_from,
         created_at_to=query.created_at_to,
         groups=[PrefixUsageAggregateResponse(**row) for row in rows],
@@ -153,12 +165,12 @@ async def usage_events(
     session: AsyncSession = Depends(get_db_session),
 ) -> UsageEventsResponse:
     """Return a paginated, explicit allow-list of safe event fields."""
-    await _authorize_billing_access(query, auth, session)
+    org_id = await _authorize_billing_access(query, auth, session)
     events = await metering_db.list_usage_events(
-        session, query.filters, offset=query.offset, limit=query.limit
+        session, query.filters_for_org(org_id), offset=query.offset, limit=query.limit
     )
     return UsageEventsResponse(
-        org_id=query.org_id,
+        org_id=org_id,
         created_at_from=query.created_at_from,
         created_at_to=query.created_at_to,
         events=[_event_response(event) for event in events],
@@ -169,6 +181,7 @@ async def usage_events(
 
 def _aggregate_response(row: object) -> UsageAggregateResponse:
     return UsageAggregateResponse(
+        bucket_start=getattr(row, "bucket_start"),
         api_name=getattr(row, "api_name"),
         provider_key=getattr(row, "provider_key"),
         model=getattr(row, "model"),

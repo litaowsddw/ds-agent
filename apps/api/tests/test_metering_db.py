@@ -167,6 +167,104 @@ def test_aggregate_usage_filters_and_supported_dimensions() -> None:
     asyncio.run(case())
 
 
+def test_aggregate_usage_creates_distinct_hour_and_day_buckets() -> None:
+    async def case() -> None:
+        async with session_scope() as session:
+            session.add_all(
+                [
+                    LLMUsageEventModel(
+                        event_id="bucket_1",
+                        org_id="org_1",
+                        gateway_call_id="bucket_call_1",
+                        source="gateway_api",
+                        api_name="chat.completions",
+                        provider_key="openai",
+                        model="gpt-4o",
+                        dispatch_status="completed",
+                        usage_status="reported",
+                        cache_usage_status="unknown",
+                        input_tokens=10,
+                        output_tokens=2,
+                        total_tokens=12,
+                        created_at=datetime(2026, 7, 13, 10, 15, tzinfo=timezone.utc),
+                    ),
+                    LLMUsageEventModel(
+                        event_id="bucket_2",
+                        org_id="org_1",
+                        gateway_call_id="bucket_call_2",
+                        source="gateway_api",
+                        api_name="chat.completions",
+                        provider_key="openai",
+                        model="gpt-4o",
+                        dispatch_status="completed",
+                        usage_status="reported",
+                        cache_usage_status="unknown",
+                        input_tokens=20,
+                        output_tokens=4,
+                        total_tokens=24,
+                        created_at=datetime(2026, 7, 13, 10, 45, tzinfo=timezone.utc),
+                    ),
+                    LLMUsageEventModel(
+                        event_id="bucket_3",
+                        org_id="org_1",
+                        gateway_call_id="bucket_call_3",
+                        source="gateway_api",
+                        api_name="chat.completions",
+                        provider_key="openai",
+                        model="gpt-4o",
+                        dispatch_status="completed",
+                        usage_status="reported",
+                        cache_usage_status="unknown",
+                        input_tokens=None,
+                        output_tokens=None,
+                        total_tokens=None,
+                        created_at=datetime(2026, 7, 13, 11, 5, tzinfo=timezone.utc),
+                    ),
+                    LLMUsageEventModel(
+                        event_id="bucket_4",
+                        org_id="org_1",
+                        gateway_call_id="bucket_call_4",
+                        source="gateway_api",
+                        api_name="chat.completions",
+                        provider_key="openai",
+                        model="gpt-4o",
+                        dispatch_status="completed",
+                        usage_status="reported",
+                        cache_usage_status="unknown",
+                        input_tokens=7,
+                        output_tokens=3,
+                        total_tokens=10,
+                        created_at=datetime(2026, 7, 14, 10, 5, tzinfo=timezone.utc),
+                    ),
+                ]
+            )
+            await session.flush()
+
+            hourly = await metering_db.aggregate_usage(
+                session, UsageFilters(org_id="org_1"), "model", "hour"
+            )
+            daily = await metering_db.aggregate_usage(
+                session, UsageFilters(org_id="org_1"), "model", "day"
+            )
+
+            assert [row.bucket_start for row in hourly] == [
+                datetime(2026, 7, 13, 10, tzinfo=timezone.utc),
+                datetime(2026, 7, 13, 11, tzinfo=timezone.utc),
+                datetime(2026, 7, 14, 10, tzinfo=timezone.utc),
+            ]
+            assert hourly[0].input_tokens == 30
+            assert hourly[1].input_tokens is None
+            assert hourly[1].unknown_usage_calls == 1
+            assert [row.bucket_start for row in daily] == [
+                datetime(2026, 7, 13, tzinfo=timezone.utc),
+                datetime(2026, 7, 14, tzinfo=timezone.utc),
+            ]
+            assert daily[0].input_tokens == 30
+            assert daily[1].input_tokens == 7
+
+    asyncio.run(case())
+
+
 def test_usage_event_rejects_updates_across_sessions() -> None:
     async def case() -> None:
         engine = create_async_engine("sqlite+aiosqlite:///:memory:")

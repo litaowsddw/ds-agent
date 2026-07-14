@@ -1,7 +1,7 @@
 """Persistence and aggregation for immutable LLM usage events."""
 
 from dataclasses import asdict, dataclass
-from datetime import datetime
+from datetime import UTC, datetime
 from decimal import Decimal
 
 from sqlalchemy import case, func, or_, select
@@ -90,6 +90,7 @@ class UsageAggregate:
     api_name: str | None = None
     workflow_id: str | None = None
     workflow_run_id: str | None = None
+    bucket_start: datetime | None = None
 
 
 class MeteringDBService:
@@ -127,7 +128,7 @@ class MeteringDBService:
         return list(result.scalars().all())
 
     async def aggregate_prefix_usage(
-        self, session: AsyncSession, filters: UsageFilters
+        self, session: AsyncSession, filters: UsageFilters, granularity: str | None = None
     ) -> list[dict[str, int | str | None]]:
         """Aggregate bucketed prefix facts without selecting a prefix/hash value."""
         unknown_usage = case(
@@ -140,8 +141,7 @@ class MeteringDBService:
             ),
             else_=0,
         )
-        statement = (
-            select(
+        columns = [
                 LLMUsageEventModel.prefix_cache_status,
                 LLMUsageEventModel.prefix_length_bucket,
                 func.count(LLMUsageEventModel.event_id).label("call_count"),
@@ -152,20 +152,28 @@ class MeteringDBService:
                 func.sum(LLMUsageEventModel.cache_read_input_tokens).label(
                     "cache_read_input_tokens"
                 ),
+        ]
+        grouping = [
+            LLMUsageEventModel.prefix_cache_status,
+            LLMUsageEventModel.prefix_length_bucket,
+        ]
+        ordering = list(grouping)
+        if granularity is not None:
+            bucket_expression = self._time_bucket_expression(session, granularity).label(
+                "bucket_start"
             )
+            columns.insert(0, bucket_expression)
+            grouping.insert(0, bucket_expression)
+            ordering.insert(0, bucket_expression)
+        statement = (
+            select(*columns)
             .where(LLMUsageEventModel.org_id == filters.org_id)
-            .group_by(
-                LLMUsageEventModel.prefix_cache_status,
-                LLMUsageEventModel.prefix_length_bucket,
-            )
-            .order_by(
-                LLMUsageEventModel.prefix_cache_status,
-                LLMUsageEventModel.prefix_length_bucket,
-            )
+            .group_by(*grouping)
+            .order_by(*ordering)
         )
         statement = self._apply_filters(statement, filters)
         result = await session.execute(statement)
-        return [dict(row) for row in result.mappings()]
+        return [self._mapping_with_bucket(dict(row)) for row in result.mappings()]
 
     async def record_event(
         self, session: AsyncSession, event: UsageEventInput
@@ -188,7 +196,11 @@ class MeteringDBService:
         return usage_event
 
     async def aggregate_usage(
-        self, session: AsyncSession, filters: UsageFilters, group_by: str
+        self,
+        session: AsyncSession,
+        filters: UsageFilters,
+        group_by: str,
+        granularity: str | None = None,
     ) -> list[UsageAggregate]:
         """Sum known usage fields and count attempts with unavailable token usage."""
         group_column = self._GROUP_COLUMNS.get(group_by)
@@ -205,8 +217,7 @@ class MeteringDBService:
             ),
             else_=0,
         )
-        statement = (
-            select(
+        columns = [
                 group_column.label("group_value"),
                 func.count(LLMUsageEventModel.event_id).label("call_count"),
                 func.sum(unknown_usage).label("unknown_usage_calls"),
@@ -220,10 +231,21 @@ class MeteringDBService:
                 func.sum(LLMUsageEventModel.cache_write_input_tokens).label(
                     "cache_write_input_tokens"
                 ),
+        ]
+        grouping = [group_column]
+        ordering = [group_column]
+        if granularity is not None:
+            bucket_expression = self._time_bucket_expression(session, granularity).label(
+                "bucket_start"
             )
+            columns.insert(0, bucket_expression)
+            grouping.insert(0, bucket_expression)
+            ordering.insert(0, bucket_expression)
+        statement = (
+            select(*columns)
             .where(LLMUsageEventModel.org_id == filters.org_id)
-            .group_by(group_column)
-            .order_by(group_column)
+            .group_by(*grouping)
+            .order_by(*ordering)
         )
         statement = self._apply_filters(statement, filters)
         result = await session.execute(statement)
@@ -240,10 +262,37 @@ class MeteringDBService:
                 reasoning_tokens=row["reasoning_tokens"],
                 cache_read_input_tokens=row["cache_read_input_tokens"],
                 cache_write_input_tokens=row["cache_write_input_tokens"],
+                bucket_start=self._bucket_datetime(row.get("bucket_start")),
             )
             setattr(aggregate, group_by, row["group_value"])
             aggregates.append(aggregate)
         return aggregates
+
+    @staticmethod
+    def _time_bucket_expression(session: AsyncSession, granularity: str):
+        if granularity not in {"hour", "day"}:
+            raise ValueError(f"Unsupported usage granularity: {granularity}")
+        pattern = "%Y-%m-%d %H:00:00" if granularity == "hour" else "%Y-%m-%d 00:00:00"
+        dialect = session.get_bind().dialect.name
+        if dialect == "sqlite":
+            return func.strftime(pattern, LLMUsageEventModel.created_at)
+        if dialect == "mysql":
+            return func.date_format(LLMUsageEventModel.created_at, pattern)
+        raise ValueError(f"Unsupported metering database dialect: {dialect}")
+
+    @staticmethod
+    def _bucket_datetime(value: object | None) -> datetime | None:
+        if value is None:
+            return None
+        if isinstance(value, datetime):
+            return value.replace(tzinfo=UTC) if value.tzinfo is None else value.astimezone(UTC)
+        return datetime.fromisoformat(str(value)).replace(tzinfo=UTC)
+
+    @classmethod
+    def _mapping_with_bucket(cls, row: dict[str, object]) -> dict[str, object]:
+        if "bucket_start" in row:
+            row["bucket_start"] = cls._bucket_datetime(row["bucket_start"])
+        return row
 
     @staticmethod
     async def _get_by_gateway_call(
