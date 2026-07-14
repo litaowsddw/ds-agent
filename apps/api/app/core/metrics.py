@@ -80,7 +80,7 @@ class Gauge:
 
     def set(self, value: float) -> None:
         """设置值。"""
-        self._value = value
+        self._value = float(value)
 
     def inc(self, amount: float = 1.0) -> None:
         """增加值。"""
