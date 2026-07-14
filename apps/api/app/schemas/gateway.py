@@ -31,7 +31,6 @@ class LLMCallLogResponse(BaseModel):
     call_id: str
     provider: str
     model: str
-    prompt_preview: str
     prefix_hash: str
     status: str
     usage: dict[str, int]

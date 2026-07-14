@@ -476,7 +476,6 @@ class LLMGateway:
         call_id: str | None = None,
     ) -> None:
         """追加调用日志。"""
-        prompt_preview = request.prompt[:160]
         safe_metadata = {
             key: value
             for key, value in request.metadata.items()
@@ -487,7 +486,7 @@ class LLMGateway:
                 call_id=call_id or new_id("llm"),
                 provider=request.provider,
                 model=request.model,
-                prompt_preview=prompt_preview,
+                prompt_preview="",
                 prefix_hash=request.prefix_hash,
                 status=status,
                 usage=usage,

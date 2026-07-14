@@ -15,8 +15,8 @@ from apps.worker.app.celery_app import celery_app
 def execute_workflow(
     self,
     run_id: str,
-    definition: dict,
-    input_data: dict,
+    definition: dict | None = None,
+    input_data: dict | None = None,
     org_id: str = "",
     agent_id: str = "",
     actor_user_id: str = "",
@@ -63,8 +63,8 @@ def execute_workflow(
 
 async def _execute_workflow_with_real_dependencies(
     run_id: str,
-    definition: dict,
-    input_data: dict,
+    definition: dict | None,
+    input_data: dict | None,
     org_id: str,
     agent_id: str,
     actor_user_id: str,
@@ -72,55 +72,27 @@ async def _execute_workflow_with_real_dependencies(
     """在 Worker 中复用 API 层真实节点执行依赖。"""
 
     from app.database import async_session_factory
-    from app.routes.workflow_runs import (
-        _execute_llm_node,
-        _execute_rag_node,
-        _execute_tool_node,
-        _persist_executed_node,
-    )
-    from app.services.db.workflow_db import workflow_run_db
-    from packages.workflow.executor import WorkflowExecutor
+    from app.services.db.workflow_db import node_run_db, workflow_run_db, workflow_version_db
+    from app.services.workflow_execution import workflow_execution_service
 
     async with async_session_factory() as session:
         run = await workflow_run_db.get_run_required(session, run_id)
-        await workflow_run_db.update_run_status(session, run_id, "running")
-
-        executor = WorkflowExecutor(
-            llm_gateway=lambda config, node_input: _execute_llm_node(
-                session=session,
-                config=config,
-                node_input=node_input,
-                actor_user_id=actor_user_id or run.created_by,
-                org_id=org_id or run.org_id,
-            ),
-            rag_search=lambda config, node_input: _execute_rag_node(
-                session=session,
-                config=config,
-                node_input=node_input,
-                actor_user_id=actor_user_id or run.created_by,
-                org_id=org_id or run.org_id,
-            ),
-            tool_call=lambda config, node_input: _execute_tool_node(
-                session=session,
-                config=config,
-                node_input=node_input,
-                actor_user_id=actor_user_id or run.created_by,
-                org_id=org_id or run.org_id,
-                agent_id=agent_id or run.agent_id,
-            ),
+        version = await workflow_version_db.get_by_id_required(
+            session, run.version_id, "version_id"
         )
-        result = await executor.execute_async(definition=definition, input_data=input_data)
-        for index, node_result in enumerate(result.node_runs):
-            await _persist_executed_node(session, run_id, node_result, index)
-        await workflow_run_db.update_run_status(
+        # The queued payload is untrusted at this process boundary. Rebuild all
+        # execution identity and definition inputs from the persisted run.
+        persisted_input = json.loads(run.input_data)
+        result = await workflow_execution_service.execute_existing_run(
             session,
-            run_id,
-            result.status,
-            output_data=result.output_data,
-            error_message=result.error_message,
+            run=run,
+            definition=json.loads(version.definition),
+            input_data=persisted_input,
+            actor_user_id=run.created_by,
         )
+        node_runs = await node_run_db.list_run_node_runs(session, run_id)
         await session.commit()
-        return {"status": result.status, "node_count": len(result.node_runs)}
+        return {"status": result.status, "node_count": len(node_runs)}
 
 
 def _update_run_status(

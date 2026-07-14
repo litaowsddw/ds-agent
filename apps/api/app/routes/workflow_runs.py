@@ -12,6 +12,7 @@ from typing import Any
 from fastapi import APIRouter, Depends, HTTPException, Query
 from sqlalchemy.ext.asyncio import AsyncSession
 
+from app.core.auth import AuthenticatedUser
 from app.database import get_db_session
 from app.domain.identity import new_id
 from app.gateway.llm import OpenAICompatibleProvider
@@ -33,23 +34,29 @@ from app.services.workflow_execution import workflow_execution_service
 router = APIRouter()
 
 
+def _require_server_authenticated_identity(auth: AuthenticatedUser) -> None:
+    if not auth.email:
+        raise HTTPException(status_code=401, detail="Bearer token or service API key required")
+
+
 @router.post("", response_model=WorkflowRunResponse)
 async def create_run(
     request: WorkflowRunCreateRequest,
+    auth: AuthenticatedUser,
     session: AsyncSession = Depends(get_db_session),
 ) -> WorkflowRunResponse:
     """创建并执行 Workflow Run。"""
 
     try:
+        _require_server_authenticated_identity(auth)
         version = await workflow_version_db.get_by_id_required(
             session, request.version_id, "version_id"
         )
         workflow = await workflow_db.get_workflow_required(session, version.workflow_id)
         await membership_db.assert_org_access(
-            session, user_id=request.actor_user_id, org_id=workflow.org_id
+            session, user_id=auth.user_id, org_id=workflow.org_id
         )
 
-        definition = json.loads(version.definition)
         if request.async_mode:
             run = await workflow_run_db.create_run(
                 session,
@@ -58,18 +65,18 @@ async def create_run(
                 version_id=version.version_id,
                 org_id=workflow.org_id,
                 agent_id=workflow.agent_id,
-                created_by=request.actor_user_id,
+                created_by=auth.user_id,
                 input_data=request.input_data,
             )
             await session.commit()
-            await _submit_async_run(run=run, definition=definition, request=request)
+            await _submit_async_run(run=run)
         else:
             workflow_execution_module.OpenAICompatibleProvider = OpenAICompatibleProvider
             run = await workflow_execution_service.create_and_execute(
                 session,
                 version_id=version.version_id,
                 input_data=request.input_data,
-                actor_user_id=request.actor_user_id,
+                actor_user_id=auth.user_id,
             )
             await session.commit()
 
@@ -172,8 +179,6 @@ async def list_node_runs(
 
 async def _submit_async_run(
     run: WorkflowRunModel,
-    definition: dict[str, Any],
-    request: WorkflowRunCreateRequest,
 ) -> None:
     """提交 Celery 异步任务。"""
 
@@ -182,11 +187,6 @@ async def _submit_async_run(
 
         execute_workflow.delay(
             run_id=run.run_id,
-            definition=definition,
-            input_data=request.input_data,
-            org_id=run.org_id,
-            agent_id=run.agent_id,
-            actor_user_id=request.actor_user_id,
         )
     except Exception as exc:
         raise ValueError(f"异步队列不可用：{exc}") from exc

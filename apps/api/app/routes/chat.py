@@ -225,6 +225,10 @@ async def chat(
             runtime.init_supervisor(llm_caller=adapter)
 
         if request.async_exec:
+            raise HTTPException(
+                status_code=501,
+                detail="Async supervisor execution is disabled until metered attribution is available.",
+            )
             from apps.worker.app.tasks.subagent import supervisor_run_cycle
 
             supervisor_run_cycle.delay(

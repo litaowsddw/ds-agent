@@ -100,10 +100,24 @@ async def generate_llm(
 
 
 @router.get("/llm/logs", response_model=list[LLMCallLogResponse])
-async def list_llm_logs() -> list[LLMCallLogResponse]:
-    """Return temporary in-process diagnostic logs."""
+async def list_llm_logs(
+    auth: AuthenticatedUser,
+    session: AsyncSession = Depends(get_db_session),
+) -> list[LLMCallLogResponse]:
+    """Return organization-scoped redacted diagnostic logs."""
 
-    return [_to_log_response(log) for log in llm_gateway.list_logs()]
+    _require_server_authenticated_identity(auth)
+    if not auth.org_id:
+        raise HTTPException(status_code=400, detail="Select an organization before viewing Gateway logs")
+    try:
+        await membership_db.assert_org_access(session, user_id=auth.user_id, org_id=auth.org_id)
+    except ValueError as exc:
+        raise HTTPException(status_code=403, detail=str(exc)) from exc
+    return [
+        _to_log_response(log)
+        for log in llm_gateway.list_logs()
+        if str(log.metadata.get("org_id") or "") == auth.org_id
+    ]
 
 
 def _to_log_response(log: LLMCallLog) -> LLMCallLogResponse:
@@ -111,7 +125,6 @@ def _to_log_response(log: LLMCallLog) -> LLMCallLogResponse:
         call_id=log.call_id,
         provider=log.provider,
         model=log.model,
-        prompt_preview=log.prompt_preview,
         prefix_hash=log.prefix_hash,
         status=log.status,
         usage=log.usage,

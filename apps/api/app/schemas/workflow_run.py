@@ -1,24 +1,25 @@
-"""Workflow Run API Schema。"""
+"""Workflow run API schemas."""
 
 from datetime import datetime
 from typing import Any
 
-from pydantic import BaseModel, Field
+from pydantic import BaseModel, ConfigDict, Field
 
 from apps.api.app.domain.workflow_run import NodeRunStatus, RunStatus
 
 
 class WorkflowRunCreateRequest(BaseModel):
-    """创建 Workflow Run 请求。"""
+    """Client-controlled workflow run inputs only."""
 
-    actor_user_id: str = Field(description="操作者用户 ID")
-    version_id: str = Field(description="发布版本 ID")
-    input_data: dict[str, Any] = Field(default_factory=dict, description="运行输入")
-    async_mode: bool = Field(default=False, description="是否投递到 Celery 异步执行")
+    model_config = ConfigDict(extra="forbid")
+
+    version_id: str = Field(description="Published version ID")
+    input_data: dict[str, Any] = Field(default_factory=dict, description="Run input")
+    async_mode: bool = Field(default=False, description="Execute in Celery")
 
 
 class WorkflowRunResponse(BaseModel):
-    """Workflow Run 响应。"""
+    """Workflow run response."""
 
     run_id: str
     org_id: str
@@ -36,7 +37,7 @@ class WorkflowRunResponse(BaseModel):
 
 
 class NodeRunResponse(BaseModel):
-    """Node Run 响应。"""
+    """Workflow node execution response."""
 
     node_run_id: str
     run_id: str

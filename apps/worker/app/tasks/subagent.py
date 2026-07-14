@@ -36,6 +36,10 @@ def execute_subagent_task(self, run_data: dict[str, Any], org_id: str) -> dict[s
     返回：
         执行结果字典
     """
+    from apps.worker.app.tasks.guards import async_worker_disabled_result
+
+    return async_worker_disabled_result()
+
     run_id = run_data.get("run_id", "unknown")
     task = run_data.get("task", "")
     assigned_subagent_id = run_data.get("assigned_subagent_id", "")
@@ -229,6 +233,9 @@ def supervisor_run_cycle(
     user_input: str,
     max_reflection_rounds: int = 3,
 ) -> dict[str, Any]:
+    from apps.worker.app.tasks.guards import async_worker_disabled_result
+
+    return async_worker_disabled_result()
     """完整的 Supervisor 运行周期：plan → execute → reflect → (repeat)。
 
     参数：

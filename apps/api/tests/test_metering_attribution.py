@@ -102,6 +102,62 @@ def test_gateway_generate_requires_authenticated_user() -> None:
     assert "auth" in str(inspect.signature(generate_llm))
 
 
+def test_gateway_logs_require_authentication_and_never_return_prompt_preview() -> None:
+    _, gateway_router, _, _, _ = _gateway_components()
+    from app.gateway.llm import LLMCallLog
+    from app.routes.gateway import _to_log_response
+
+    app = FastAPI()
+    app.include_router(gateway_router, prefix="/gateway")
+    with TestClient(app) as client:
+        response = client.get("/gateway/llm/logs")
+    assert response.status_code == 401
+
+    body = _to_log_response(
+        LLMCallLog(
+            call_id="call_1",
+            provider="mock",
+            model="m",
+            prompt_preview="sensitive user prompt",
+            prefix_hash="prefix",
+            status="succeeded",
+            usage={},
+        )
+    ).model_dump()
+    assert "prompt_preview" not in body
+    assert "sensitive user prompt" not in str(body)
+
+
+def test_workflow_run_request_forbids_client_actor_and_requires_authentication() -> None:
+    _gateway_components()
+    from app.routes.workflow_runs import router as workflow_runs_router
+    from app.schemas.workflow_run import WorkflowRunCreateRequest
+
+    with pytest.raises(ValidationError):
+        WorkflowRunCreateRequest(
+            actor_user_id="spoofed",
+            version_id="version_1",
+        )
+
+    app = FastAPI()
+    app.include_router(workflow_runs_router, prefix="/workflow-runs")
+    with TestClient(app) as client:
+        response = client.post(
+            "/workflow-runs",
+            json={"version_id": "version_1", "input_data": {}},
+        )
+    assert response.status_code == 401
+
+
+def test_async_supervisor_worker_fails_closed_until_metered_execution_exists() -> None:
+    from apps.worker.app.tasks.guards import async_worker_disabled_result
+
+    assert async_worker_disabled_result() == {
+        "status": "failed",
+        "error_message": "Async supervisor worker execution is disabled until metered attribution is available.",
+    }
+
+
 def test_workflow_llm_usage_contains_server_owned_run_and_node_context() -> None:
     asyncio.run(_workflow_llm_usage_contains_server_owned_run_and_node_context())
 
