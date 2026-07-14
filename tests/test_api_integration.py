@@ -74,6 +74,24 @@ def auth_headers(registered_user: dict) -> dict:
 class TestJWTAuthFlow:
     """JWT 认证流程集成测试。"""
 
+    def test_register_route_uses_the_shared_sqlite_harness(self, client: TestClient) -> None:
+        """A real JWT registration route must not try to connect to localhost MySQL."""
+
+        import uuid
+
+        suffix = uuid.uuid4().hex[:8]
+        response = client.post(
+            "/identity/users/register",
+            json={
+                "email": f"shared-sqlite-{suffix}@example.com",
+                "display_name": "Shared SQLite",
+                "password": "SecurePass123!",
+            },
+        )
+
+        assert response.status_code == 200
+        assert response.json()["user_id"].startswith("usr_")
+
     def test_register_and_login(self, client: TestClient) -> None:
         """注册 → 登录获取 JWT。"""
         import uuid
