@@ -25,7 +25,7 @@ jobs:
       - name: Run tests
         run: |
           python -m py_compile apps/api/alembic/versions/20260714_0002_add_llm_usage_events.py
-          pytest apps/api/tests tests/integration/test_metering_usage_flow.py
+          pytest
 
   web-build:
     name: Web build
