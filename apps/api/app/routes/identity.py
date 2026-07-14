@@ -31,7 +31,7 @@ from app.services.db.identity_db import (
     membership_db,
     audit_log_db,
 )
-from app.domain.identity import new_id
+from app.domain.identity import AuditAction, new_id
 from app.core.security import hash_password, verify_password, create_access_token
 from app.core.auth import CurrentUser, AuthenticatedUser, AuthContext, require_auth
 
@@ -161,6 +161,16 @@ async def create_organization(
             user_id=creator_id,
             role="owner",
         )
+        await audit_log_db.append_log(
+            session,
+            log_id=new_id("aud"),
+            org_id=org.org_id,
+            actor_user_id=creator_id,
+            action=AuditAction.ORGANIZATION_CREATED,
+            resource_type="organization",
+            resource_id=org.org_id,
+            detail={"name": org.name},
+        )
         await session.commit()
     except ValueError as exc:
         await session.rollback()
@@ -196,6 +206,16 @@ async def create_team(
             org_id=org_id,
             name=request.name,
             created_by=request.actor_user_id,
+        )
+        await audit_log_db.append_log(
+            session,
+            log_id=new_id("aud"),
+            org_id=org_id,
+            actor_user_id=request.actor_user_id,
+            action=AuditAction.TEAM_CREATED,
+            resource_type="team",
+            resource_id=team.team_id,
+            detail={"name": team.name},
         )
         await session.commit()
     except ValueError as exc:
@@ -241,6 +261,20 @@ async def add_member(
             user_id=request.target_user_id,
             role=request.role,
             team_ids=request.team_ids,
+        )
+        await audit_log_db.append_log(
+            session,
+            log_id=new_id("aud"),
+            org_id=org_id,
+            actor_user_id=request.actor_user_id,
+            action=AuditAction.MEMBER_JOINED,
+            resource_type="membership",
+            resource_id=membership.membership_id,
+            detail={
+                "user_id": membership.user_id,
+                "role": membership.role,
+                "team_ids": json.loads(membership.team_ids_json),
+            },
         )
         await session.commit()
     except ValueError as exc:
@@ -311,5 +345,5 @@ def _to_audit_log_response(log: AuditLogModel) -> AuditLogResponse:
         action=log.action,
         target_type=log.resource_type,
         target_id=log.resource_id,
-        detail=log.detail,
+        detail=json.loads(log.detail) if log.detail else {},
     )

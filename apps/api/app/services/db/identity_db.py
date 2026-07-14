@@ -206,7 +206,7 @@ class AuditLogDBService(BaseDBService[AuditLogModel]):
         action: str,
         resource_type: str,
         resource_id: str,
-        detail: str = "",
+        detail: dict[str, Any] | None = None,
     ) -> AuditLogModel:
         """追加审计日志（append-only）。"""
         log = AuditLogModel(
@@ -216,7 +216,7 @@ class AuditLogDBService(BaseDBService[AuditLogModel]):
             action=action,
             resource_type=resource_type,
             resource_id=resource_id,
-            detail=detail,
+            detail=json.dumps(detail or {}),
         )
         session.add(log)
         await session.flush()
