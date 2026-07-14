@@ -1,7 +1,11 @@
 """身份与租户 API 测试。"""
 
+import asyncio
+
 from fastapi.testclient import TestClient
 
+from app.database import async_session_factory
+from app.models.identity import AuditLogModel
 from apps.api.app.main import app
 
 
@@ -125,6 +129,78 @@ def test_identity_writes_create_queryable_structured_audit_events() -> None:
         "role": "developer",
         "team_ids": [team_id],
     }
+
+
+def test_audit_logs_tolerate_legacy_non_object_details() -> None:
+    """Malformed legacy audit details cannot make the read API fail."""
+
+    client = TestClient(app)
+    owner_response = client.post(
+        "/identity/users/register",
+        json={
+            "email": "legacy-audit-owner@example.com",
+            "display_name": "Legacy Audit Owner",
+            "password": "password123",
+        },
+    )
+    assert owner_response.status_code == 200
+    owner_user_id = owner_response.json()["user_id"]
+    org_response = client.post(
+        "/identity/organizations",
+        json={"creator_user_id": owner_user_id, "name": "Legacy audit organization"},
+    )
+    assert org_response.status_code == 200
+    org_id = org_response.json()["org_id"]
+
+    async def add_legacy_logs() -> None:
+        async with async_session_factory() as session:
+            session.add_all(
+                [
+                    AuditLogModel(
+                        log_id="aud_legacy_malformed",
+                        org_id=org_id,
+                        actor_user_id=owner_user_id,
+                        action="legacy.malformed",
+                        resource_type="organization",
+                        resource_id=org_id,
+                        detail="not-json",
+                    ),
+                    AuditLogModel(
+                        log_id="aud_legacy_scalar",
+                        org_id=org_id,
+                        actor_user_id=owner_user_id,
+                        action="legacy.scalar",
+                        resource_type="organization",
+                        resource_id=org_id,
+                        detail='"scalar"',
+                    ),
+                    AuditLogModel(
+                        log_id="aud_legacy_array",
+                        org_id=org_id,
+                        actor_user_id=owner_user_id,
+                        action="legacy.array",
+                        resource_type="organization",
+                        resource_id=org_id,
+                        detail="[]",
+                    ),
+                ]
+            )
+            await session.commit()
+
+    asyncio.run(add_legacy_logs())
+
+    audit_response = client.get(
+        f"/identity/organizations/{org_id}/audit-logs",
+        params={"actor_user_id": owner_user_id},
+    )
+    assert audit_response.status_code == 200
+    events = {event["action"]: event for event in audit_response.json()}
+    assert events["organization.created"]["detail"] == {
+        "name": "Legacy audit organization"
+    }
+    assert events["legacy.malformed"]["detail"] == {}
+    assert events["legacy.scalar"]["detail"] == {}
+    assert events["legacy.array"]["detail"] == {}
 
 
 def test_identity_api_rejects_cross_org_access() -> None:

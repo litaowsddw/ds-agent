@@ -345,5 +345,18 @@ def _to_audit_log_response(log: AuditLogModel) -> AuditLogResponse:
         action=log.action,
         target_type=log.resource_type,
         target_id=log.resource_id,
-        detail=json.loads(log.detail) if log.detail else {},
+        detail=_parse_audit_detail(log.detail),
     )
+
+
+def _parse_audit_detail(raw_detail: str | None) -> dict[str, object]:
+    """Return only JSON objects from audit storage, tolerating legacy values."""
+    if not raw_detail:
+        return {}
+
+    try:
+        parsed = json.loads(raw_detail)
+    except (TypeError, json.JSONDecodeError):
+        return {}
+
+    return parsed if isinstance(parsed, dict) else {}
