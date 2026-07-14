@@ -23,7 +23,9 @@ jobs:
         run: pip install -r apps/api/requirements.txt -r apps/worker/requirements.txt -r requirements-dev.txt
 
       - name: Run tests
-        run: pytest
+        run: |
+          python -m py_compile apps/api/alembic/versions/20260714_0002_add_llm_usage_events.py
+          pytest apps/api/tests tests/integration/test_metering_usage_flow.py
 
   web-build:
     name: Web build
@@ -41,7 +43,11 @@ jobs:
 
       - name: Install dependencies
         working-directory: apps/web
-        run: npm install
+        run: npm ci
+
+      - name: Run web tests
+        working-directory: apps/web
+        run: npm run test -- --run
 
       - name: Build
         working-directory: apps/web

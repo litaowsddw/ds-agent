@@ -1,5 +1,31 @@
 # 当前开发状态
 
+## Gateway usage metering release notes
+
+The current feature branch includes organization-scoped Gateway usage metering
+and an administrator-facing Insights screen. It records provider-reported token
+fields per API, provider, model, Agent, workflow, and run when that data is
+available. Missing provider fields remain unknown rather than being converted
+to zero or character-count estimates.
+
+This is a metering/observability capability, not a billing system. Optional
+estimated cost values use configured price cards only; they are not invoices,
+credit debits, token-budget enforcement, or a source of truth for a provider
+charge. Provider cache-read tokens, platform cache metrics, and stable-prefix
+eligibility are independent signals. In particular, an eligible stable prefix
+does not prove a provider cache hit.
+
+### Operational rollout
+
+1. Back up the database and run Alembic revision `20260714_0002` in staging.
+2. Verify the `/metering` API with an organization billing administrator and
+   confirm that cross-organization queries are denied.
+3. Deploy the API and Insights UI together, then watch the known/unknown usage
+   and provider-cache-reporting coverage before relying on aggregate trends.
+4. Roll back application code only with a compatible schema. The migration
+   downgrade drops metering history, so use it only after a verified backup and
+   an explicit data-retention decision.
+
 ## 产品主线
 
 当前产品主线收敛为 Agent 构建与运行平台。Agent 默认可自主处理任务；Workflow 绑定到 Agent，作为可选执行策略提供稳定输入输出和流程审计。
