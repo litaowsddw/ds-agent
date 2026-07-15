@@ -68,7 +68,7 @@ export default function ChatComposer({
           {contextUsage && contextPercent !== null ? (
             <span
               aria-label="当前上下文占比"
-              className="hidden whitespace-nowrap text-xs text-[#667085] sm:inline"
+              className="whitespace-nowrap text-xs text-[#667085]"
               title="基于当前已加载会话消息的 token 估算"
             >
               上下文估算 {contextUsage.usedTokens.toLocaleString()} / {contextUsage.limitTokens.toLocaleString()} · {contextPercent}%

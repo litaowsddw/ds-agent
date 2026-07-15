@@ -149,12 +149,13 @@ export default function AgentsPage() {
               onChange={(systemPrompt) => setAgentForm({ ...agentForm, systemPrompt })}
             />
             <TextInput
-              label="上下文压缩阈值（tokens）"
+              label="上下文压缩上限（tokens）"
               type="number"
               placeholder="默认 2400，最小 800"
               value={agentForm.contextTokenLimit}
               onChange={(contextTokenLimit) => setAgentForm({ ...agentForm, contextTokenLimit })}
             />
+            <p className="text-xs text-[#667085]">达到该上限后会压缩旧会话历史；留空时使用默认值 2400。</p>
             <PrimaryButton
               busy={busy}
               label="创建 Agent"
@@ -239,12 +240,13 @@ export default function AgentsPage() {
                 <TextInput label="Max tokens" type="number" value={parameterForm.maxTokens} onChange={(maxTokens) => setParameterForm({ ...parameterForm, maxTokens })} />
               </div>
               <TextInput
-                label="上下文压缩阈值（tokens）"
+                label="上下文压缩上限（tokens）"
                 type="number"
                 placeholder="默认 2400，最小 800"
                 value={parameterForm.contextTokenLimit}
                 onChange={(contextTokenLimit) => setParameterForm({ ...parameterForm, contextTokenLimit })}
               />
+              <p className="text-xs text-[#667085]">达到该上限后会压缩旧会话历史；留空时使用默认值 2400。</p>
               <TextArea
                 label="系统提示词"
                 placeholder="定义 Agent 的角色、边界和输出要求"

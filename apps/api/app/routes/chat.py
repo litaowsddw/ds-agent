@@ -626,20 +626,21 @@ async def _chat_stream_events(
                 model_name=model_name,
             )
             response_parts: list[str] = []
+            compiled_prompt = _compile_agent_chat_prompt(
+                agent,
+                request.message,
+                memory_context=memory_context.prompt_context,
+                skill_catalog=skill_catalog,
+                skill_context=(
+                    selected_skill_context.prompt_context
+                    if selected_skill_context is not None
+                    else ""
+                ),
+            )
             llm_request = LLMCallRequest(
                 provider=model_provider,
                 model=model_name,
-                prompt=_build_agent_prompt(
-                    agent,
-                    request.message,
-                    memory_context=memory_context.prompt_context,
-                    skill_catalog=skill_catalog,
-                    skill_context=(
-                        selected_skill_context.prompt_context
-                        if selected_skill_context is not None
-                        else ""
-                    ),
-                ),
+                prompt=str(compiled_prompt["compiled_prompt"]),
                 parameters={
                     "temperature": agent.temperature if agent.temperature is not None else 0.3,
                     "max_tokens": agent.max_tokens or _default_chat_max_tokens(),
@@ -651,6 +652,7 @@ async def _chat_stream_events(
                     "agent_id": agent.agent_id,
                     "session_id": session_id,
                 },
+                prefix_hash=str(compiled_prompt["prefix_hash"]),
             )
             llm_stream = gateway.stream_generate(llm_request)
             try:
@@ -763,6 +765,46 @@ def _build_agent_prompt(
     if skill_context.strip():
         system_prompt = f"{system_prompt}\n\n[Loaded Skill]\n{skill_context.strip()}"
     return f"[System]\n{system_prompt}\n\n[User]\n{message}"
+
+
+def _compile_agent_chat_prompt(
+    agent: object,
+    message: str,
+    *,
+    memory_context: str = "",
+    skill_catalog: str = "",
+    skill_context: str = "",
+) -> dict[str, object]:
+    """Compile chat input so its leading bytes stay stable across turns.
+
+    Only Agent configuration and the discoverable skill catalog form the immutable
+    prefix. Conversation/memory and the selected Skill stay outside it, preventing
+    an individual turn from invalidating the structural prefix eligibility metric.
+    """
+    from packages.runtime.prompt_compiler import PromptContextCompiler
+
+    agent_name = str(getattr(agent, "name", "") or "Agent")
+    system_prompt = str(getattr(agent, "system_prompt", "") or "").strip()
+    if not system_prompt:
+        system_prompt = f"You are {agent_name}. Answer the user directly and accurately."
+
+    immutable_prefix = {
+        "agent": {
+            "name": agent_name,
+            "description": str(getattr(agent, "description", "") or "").strip(),
+            "system_prompt": system_prompt,
+        },
+        "skill_catalog": skill_catalog.strip(),
+        "response_contract": "Answer the user directly and accurately.",
+    }
+    return PromptContextCompiler().compile(
+        immutable_prefix=immutable_prefix,
+        append_only_log={
+            "memory_context": memory_context.strip(),
+            "loaded_skill": skill_context.strip(),
+        },
+        current_turn={"message": message},
+    )
 
 
 def _default_chat_max_tokens() -> int:
