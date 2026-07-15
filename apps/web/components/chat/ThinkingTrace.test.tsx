@@ -28,6 +28,15 @@ describe("ThinkingTrace", () => {
     expect(screen.queryByText("步骤 1")).not.toBeInTheDocument();
   });
 
+  it("can hide the trace and restore it without losing events", () => {
+    render(<ThinkingTrace events={[event(1)]} />);
+
+    fireEvent.click(screen.getByRole("button", { name: "隐藏执行 Trace" }));
+    expect(screen.queryByText("步骤 1")).not.toBeInTheDocument();
+    fireEvent.click(screen.getByRole("button", { name: "显示执行 Trace" }));
+    expect(screen.getByText("步骤 1")).toBeInTheDocument();
+  });
+
   it("announces running and failed states in Chinese", () => {
     const { rerender } = render(
       <ThinkingTrace events={[event(1, { event: "node_started", status: "running" })]} />

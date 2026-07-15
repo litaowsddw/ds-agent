@@ -53,4 +53,21 @@ describe("workflow run requests", () => {
       },
     });
   });
+
+  it("removes only the explicitly selected connection", () => {
+    useWorkflowStore.setState({
+      edges: [
+        { id: "start-llm", source: "start", target: "llm" },
+        { id: "llm-end", source: "llm", target: "end" },
+      ],
+      selectedEdgeId: "start-llm",
+    });
+
+    useWorkflowStore.getState().removeSelectedEdge();
+
+    expect(useWorkflowStore.getState().edges).toEqual([
+      { id: "llm-end", source: "llm", target: "end" },
+    ]);
+    expect(useWorkflowStore.getState().selectedEdgeId).toBe("");
+  });
 });

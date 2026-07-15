@@ -30,6 +30,7 @@ interface WorkflowStore {
   workflows: WorkflowItem[];
   selectedWorkflowId: string;
   selectedNodeId: string;
+  selectedEdgeId: string;
   versions: WorkflowVersion[];
   runs: WorkflowRun[];
   selectedRunId: string;
@@ -41,7 +42,9 @@ interface WorkflowStore {
   onConnect: (connection: Connection) => void;
   addNode: (item: WorkflowPaletteItem) => void;
   removeSelectedNode: () => void;
+  removeSelectedEdge: () => void;
   setSelectedNodeId: (id: string) => void;
+  setSelectedEdgeId: (id: string) => void;
   updateSelectedNodeConfig: (patch: Record<string, unknown>) => void;
   setWorkflowForm: (form: { name: string; description: string; input: string }) => void;
   setSelectedWorkflowId: (id: string) => void;
@@ -160,6 +163,7 @@ export const useWorkflowStore = create<WorkflowStore>((set, get) => ({
   workflows: [],
   selectedWorkflowId: "",
   selectedNodeId: "llm",
+  selectedEdgeId: "",
   versions: [],
   runs: [],
   selectedRunId: "",
@@ -168,8 +172,14 @@ export const useWorkflowStore = create<WorkflowStore>((set, get) => ({
 
   onNodesChange: (changes) =>
     set((state) => ({ nodes: applyNodeChanges(changes, state.nodes) as Node<CustomNodeData>[] })),
-  onEdgesChange: (changes) => set((state) => ({ edges: applyEdgeChanges(changes, state.edges) })),
-  onConnect: (connection) => set((state) => ({ edges: addEdge(connection, state.edges) })),
+  onEdgesChange: (changes) =>
+    set((state) => ({
+      edges: applyEdgeChanges(changes, state.edges),
+      selectedEdgeId: changes.some((change) => change.type === "remove" && change.id === state.selectedEdgeId)
+        ? ""
+        : state.selectedEdgeId,
+    })),
+  onConnect: (connection) => set((state) => ({ edges: addEdge(connection, state.edges), selectedEdgeId: "" })),
 
   addNode: (item) => {
     const nodeIndex = get().nodes.length + 1;
@@ -244,10 +254,21 @@ export const useWorkflowStore = create<WorkflowStore>((set, get) => ({
       nodes: state.nodes.filter((node) => node.id !== selectedNodeId),
       edges: state.edges.filter((edge) => edge.source !== selectedNodeId && edge.target !== selectedNodeId),
       selectedNodeId: "llm",
+      selectedEdgeId: "",
+    }));
+  },
+
+  removeSelectedEdge: () => {
+    const selectedEdgeId = get().selectedEdgeId;
+    if (!selectedEdgeId) return;
+    set((state) => ({
+      edges: state.edges.filter((edge) => edge.id !== selectedEdgeId),
+      selectedEdgeId: "",
     }));
   },
 
   setSelectedNodeId: (id) => set({ selectedNodeId: id }),
+  setSelectedEdgeId: (id) => set({ selectedEdgeId: id }),
 
   updateSelectedNodeConfig: (patch) => {
     const selectedNodeId = get().selectedNodeId;
@@ -420,6 +441,7 @@ export const useWorkflowStore = create<WorkflowStore>((set, get) => ({
       workflows: [],
       selectedWorkflowId: "",
       selectedNodeId: "llm",
+      selectedEdgeId: "",
       versions: [],
       runs: [],
       selectedRunId: "",
@@ -443,6 +465,7 @@ export const useWorkflowStore = create<WorkflowStore>((set, get) => ({
         nodes,
         edges: selectedWorkflow ? hydrateEdges(selectedWorkflow.draft_definition) : state.edges,
         selectedNodeId: nodes.find((node) => node.type !== "start")?.id ?? nodes[0]?.id ?? "",
+        selectedEdgeId: "",
       };
     });
   },

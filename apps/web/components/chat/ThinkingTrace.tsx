@@ -1,11 +1,12 @@
 "use client";
 
 import { useState } from "react";
-import { CheckCircle2, ChevronDown, ChevronUp, Loader2, Wrench, XCircle } from "lucide-react";
+import { CheckCircle2, ChevronDown, ChevronUp, Eye, EyeOff, Loader2, Wrench, XCircle } from "lucide-react";
 import type { ChatTraceEvent } from "@/stores/chat";
 
 export default function ThinkingTrace({ events }: { events: ChatTraceEvent[] }) {
   const [expanded, setExpanded] = useState(false);
+  const [hidden, setHidden] = useState(false);
   const visibleEvents = events.filter((event) =>
     ["node_started", "node_finished", "skill_created", "error"].includes(event.event)
   );
@@ -15,6 +16,20 @@ export default function ThinkingTrace({ events }: { events: ChatTraceEvent[] }) 
     : [...visibleEvents].reverse().find((event) => event.status === "running");
   const displayEvents = expanded ? visibleEvents : visibleEvents.slice(-5);
   const heading = activeEvent ? "执行中" : failed ? "执行失败" : "执行 Trace";
+
+  if (hidden) {
+    return (
+      <button
+        aria-label="显示执行 Trace"
+        className="mb-3 inline-flex items-center gap-1 rounded-lg border border-[#dfe4ee] bg-white px-2.5 py-1.5 text-xs text-[#667085] transition hover:border-[#2f6feb] hover:text-[#2f6feb]"
+        onClick={() => setHidden(false)}
+        type="button"
+      >
+        <Eye size={13} />
+        显示执行 Trace
+      </button>
+    );
+  }
 
   return (
     <div className="mb-3 rounded-lg border border-[#dfe4ee] bg-[#f8fafc] px-3 py-2 text-xs">
@@ -28,6 +43,16 @@ export default function ThinkingTrace({ events }: { events: ChatTraceEvent[] }) 
         )}
         <span className="font-medium">{heading}</span>
         {activeEvent ? <span className="truncate text-[#667085]">{activeEvent.label || activeEvent.node}</span> : null}
+        <button
+          aria-label="隐藏执行 Trace"
+          className="ml-auto inline-flex shrink-0 items-center gap-1 rounded px-1.5 py-1 text-[#667085] transition hover:bg-white hover:text-[#172033]"
+          onClick={() => setHidden(true)}
+          title="隐藏执行 Trace"
+          type="button"
+        >
+          <EyeOff size={13} />
+          隐藏
+        </button>
       </div>
       <div className="space-y-1">
         {displayEvents.map((event) => (

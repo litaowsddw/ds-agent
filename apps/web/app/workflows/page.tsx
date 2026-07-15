@@ -4,7 +4,7 @@
 
 import "@xyflow/react/dist/style.css";
 
-import { Background, Controls, MiniMap, ReactFlow, type NodeMouseHandler } from "@xyflow/react";
+import { Background, Controls, MiniMap, ReactFlow, type EdgeMouseHandler, type NodeMouseHandler } from "@xyflow/react";
 import {
   Database,
   GitBranch,
@@ -68,13 +68,16 @@ export default function WorkflowsPage() {
   const nodeRuns = useWorkflowStore((state) => state.nodeRuns);
   const selectedWorkflowId = useWorkflowStore((state) => state.selectedWorkflowId);
   const selectedNodeId = useWorkflowStore((state) => state.selectedNodeId);
+  const selectedEdgeId = useWorkflowStore((state) => state.selectedEdgeId);
   const workflowForm = useWorkflowStore((state) => state.workflowForm);
   const onNodesChange = useWorkflowStore((state) => state.onNodesChange);
   const onEdgesChange = useWorkflowStore((state) => state.onEdgesChange);
   const onConnect = useWorkflowStore((state) => state.onConnect);
   const addNode = useWorkflowStore((state) => state.addNode);
   const removeSelectedNode = useWorkflowStore((state) => state.removeSelectedNode);
+  const removeSelectedEdge = useWorkflowStore((state) => state.removeSelectedEdge);
   const setSelectedNodeId = useWorkflowStore((state) => state.setSelectedNodeId);
+  const setSelectedEdgeId = useWorkflowStore((state) => state.setSelectedEdgeId);
   const updateSelectedNodeConfig = useWorkflowStore((state) => state.updateSelectedNodeConfig);
   const setWorkflowForm = useWorkflowStore((state) => state.setWorkflowForm);
   const setSelectedWorkflowId = useWorkflowStore((state) => state.setSelectedWorkflowId);
@@ -127,6 +130,11 @@ export default function WorkflowsPage() {
 
   const handleNodeClick: NodeMouseHandler = (_, node) => {
     setSelectedNodeId(node.id);
+    setSelectedEdgeId("");
+  };
+
+  const handleEdgeClick: EdgeMouseHandler = (_, edge) => {
+    setSelectedEdgeId(edge.id);
   };
 
   if (!workspace) {
@@ -213,6 +221,15 @@ export default function WorkflowsPage() {
             >
               <Trash2 size={16} />
             </button>
+            <button
+              type="button"
+              disabled={!selectedEdgeId}
+              onClick={removeSelectedEdge}
+              className="inline-flex h-9 w-9 items-center justify-center rounded-lg border border-[#cfd7e6] bg-white text-[#667085] transition hover:border-[#b42318] hover:text-[#b42318] disabled:cursor-not-allowed disabled:opacity-40"
+              title={selectedEdgeId ? "Delete selected connection" : "Select a connection to delete"}
+            >
+              <GitBranch size={16} />
+            </button>
           </div>
         </div>
 
@@ -230,6 +247,7 @@ export default function WorkflowsPage() {
             nodeTypes={nodeTypes}
             nodes={nodes}
             onConnect={onConnect}
+            onEdgeClick={handleEdgeClick}
             onEdgesChange={onEdgesChange}
             onNodeClick={handleNodeClick}
             onNodesChange={onNodesChange}
