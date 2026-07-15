@@ -54,7 +54,7 @@ async def create_agent(
         if request.team_id:
             team = await team_db.get_by_id_required(session, request.team_id)
             if team.org_id != request.org_id:
-                raise ValueError("Team does not belong to the requested organization")
+                raise HTTPException(status_code=403, detail="Forbidden")
 
         agent = await agent_db.create_agent(
             session,

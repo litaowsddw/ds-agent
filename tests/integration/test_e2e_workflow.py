@@ -86,6 +86,7 @@ def test_e2e_sync_workflow_full_trace(client: TestClient) -> None:
     agent_resp = client.post(
         "/agents",
         json={"actor_user_id": owner, "org_id": org_id, "name": "E2E Agent", "description": ""},
+        headers=owner_headers,
     )
     agent_id = agent_resp.json()["agent_id"]
 
@@ -178,6 +179,7 @@ def test_e2e_async_workflow_queuing(client: TestClient) -> None:
     agent_resp = client.post(
         "/agents",
         json={"actor_user_id": owner, "org_id": org_id, "name": "Async Agent", "description": ""},
+        headers=owner_headers,
     )
     agent_id = agent_resp.json()["agent_id"]
 
@@ -266,6 +268,7 @@ def test_e2e_workflow_error_recovery(client: TestClient) -> None:
     agent_a_resp = client.post(
         "/agents",
         json={"actor_user_id": owner_a, "org_id": org_a, "name": "Err Agent A", "description": ""},
+        headers=owner_a_headers,
     )
     agent_a = agent_a_resp.json()["agent_id"]
 
@@ -341,6 +344,7 @@ def test_e2e_workflow_retry_on_failure(client: TestClient) -> None:
     agent_resp = client.post(
         "/agents",
         json={"actor_user_id": owner, "org_id": org_id, "name": "Retry Agent", "description": ""},
+        headers=owner_headers,
     )
     agent_id = agent_resp.json()["agent_id"]
 
@@ -419,6 +423,7 @@ def test_e2e_workflow_output_consistency(client: TestClient) -> None:
     agent_resp = client.post(
         "/agents",
         json={"actor_user_id": owner, "org_id": org_id, "name": "Cons Agent", "description": ""},
+        headers=owner_headers,
     )
     agent_id = agent_resp.json()["agent_id"]
 
@@ -493,6 +498,7 @@ def test_e2e_workflow_different_inputs_keep_same_prefix_hash(client: TestClient)
     agent_resp = client.post(
         "/agents",
         json={"actor_user_id": owner, "org_id": org_id, "name": "Diff Agent", "description": ""},
+        headers=owner_headers,
     )
     agent_id = agent_resp.json()["agent_id"]
 

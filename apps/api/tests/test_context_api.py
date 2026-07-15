@@ -11,10 +11,11 @@ def test_context_api_assembles_session_context() -> None:
     client = TestClient(app)
     suffix = "context-api"
 
+    owner_email = f"owner-{suffix}@example.com"
     owner_response = client.post(
         "/identity/users/register",
         json={
-            "email": f"owner-{suffix}@example.com",
+            "email": owner_email,
             "display_name": "Owner",
             "password": "password123",
         },
@@ -26,6 +27,14 @@ def test_context_api_assembles_session_context() -> None:
         json={"creator_user_id": owner_user_id, "name": "Context 组织"},
     )
     org_id = org_response.json()["org_id"]
+    login_response = client.post(
+        "/identity/users/login",
+        json={"email": owner_email, "password": "password123"},
+    )
+    assert login_response.status_code == 200
+    owner_headers = {
+        "Authorization": f"Bearer {login_response.json()['token']['access_token']}"
+    }
 
     agent_response = client.post(
         "/agents",
@@ -35,6 +44,7 @@ def test_context_api_assembles_session_context() -> None:
             "name": "Context Agent",
             "description": "用于测试上下文组装",
         },
+        headers=owner_headers,
     )
     agent_id = agent_response.json()["agent_id"]
 

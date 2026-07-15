@@ -28,9 +28,10 @@ def test_multi_org_multi_agent_concurrent_resources() -> None:
     suffix = uuid4().hex
 
     # === 组织 A ===
+    owner_a_email = f"mt-owner-a-{suffix}@example.com"
     owner_a_resp = client.post(
         "/identity/users/register",
-        json={"email": f"mt-owner-a-{suffix}@example.com", "display_name": "Owner A", "password": "password123"},
+        json={"email": owner_a_email, "display_name": "Owner A", "password": "password123"},
     )
     owner_a = owner_a_resp.json()["user_id"]
     org_a_resp = client.post("/identity/organizations", json={"creator_user_id": owner_a, "name": "MT Org A"})
@@ -40,26 +41,31 @@ def test_multi_org_multi_agent_concurrent_resources() -> None:
         json={"actor_user_id": owner_a, "name": "Team A"},
     )
     team_a = team_a_resp.json()["team_id"]
+    owner_a_headers = _auth_headers(client, owner_a_email)
 
     # === 组织 B ===
+    owner_b_email = f"mt-owner-b-{suffix}@example.com"
     owner_b_resp = client.post(
         "/identity/users/register",
-        json={"email": f"mt-owner-b-{suffix}@example.com", "display_name": "Owner B", "password": "password123"},
+        json={"email": owner_b_email, "display_name": "Owner B", "password": "password123"},
     )
     owner_b = owner_b_resp.json()["user_id"]
     org_b_resp = client.post("/identity/organizations", json={"creator_user_id": owner_b, "name": "MT Org B"})
     org_b = org_b_resp.json()["org_id"]
+    owner_b_headers = _auth_headers(client, owner_b_email)
 
     # === 组织 A 创建 Agent A1, A2 ===
     agent_a1_resp = client.post(
         "/agents",
         json={"actor_user_id": owner_a, "org_id": org_a, "team_id": team_a, "name": "Agent A1", "description": "A1"},
+        headers=owner_a_headers,
     )
     agent_a1 = agent_a1_resp.json()["agent_id"]
 
     agent_a2_resp = client.post(
         "/agents",
         json={"actor_user_id": owner_a, "org_id": org_a, "team_id": team_a, "name": "Agent A2", "description": "A2"},
+        headers=owner_a_headers,
     )
     agent_a2 = agent_a2_resp.json()["agent_id"]
 
@@ -67,6 +73,7 @@ def test_multi_org_multi_agent_concurrent_resources() -> None:
     agent_b1_resp = client.post(
         "/agents",
         json={"actor_user_id": owner_b, "org_id": org_b, "name": "Agent B1", "description": "B1"},
+        headers=owner_b_headers,
     )
     agent_b1 = agent_b1_resp.json()["agent_id"]
 
@@ -156,17 +163,20 @@ def test_memory_route_distinguishes_missing_agent_from_cross_org_access() -> Non
     client = TestClient(app)
     suffix = uuid4().hex
 
+    owner_a_email = f"memory-owner-a-{suffix}@example.com"
     owner_a = client.post(
         "/identity/users/register",
-        json={"email": f"memory-owner-a-{suffix}@example.com", "display_name": "Owner A", "password": "password123"},
+        json={"email": owner_a_email, "display_name": "Owner A", "password": "password123"},
     ).json()["user_id"]
     org_a = client.post(
         "/identity/organizations",
         json={"creator_user_id": owner_a, "name": "Memory Org A"},
     ).json()["org_id"]
+    owner_a_headers = _auth_headers(client, owner_a_email)
     agent_a = client.post(
         "/agents",
         json={"actor_user_id": owner_a, "org_id": org_a, "name": "Memory Agent A", "description": ""},
+        headers=owner_a_headers,
     ).json()["agent_id"]
 
     owner_b = client.post(
@@ -192,17 +202,20 @@ def test_session_routes_distinguish_missing_session_from_cross_org_access() -> N
     client = TestClient(app)
     suffix = uuid4().hex
 
+    owner_a_email = f"session-owner-a-{suffix}@example.com"
     owner_a = client.post(
         "/identity/users/register",
-        json={"email": f"session-owner-a-{suffix}@example.com", "display_name": "Owner A", "password": "password123"},
+        json={"email": owner_a_email, "display_name": "Owner A", "password": "password123"},
     ).json()["user_id"]
     org_a = client.post(
         "/identity/organizations",
         json={"creator_user_id": owner_a, "name": "Session Org A"},
     ).json()["org_id"]
+    owner_a_headers = _auth_headers(client, owner_a_email)
     agent_a = client.post(
         "/agents",
         json={"actor_user_id": owner_a, "org_id": org_a, "name": "Session Agent A", "description": ""},
+        headers=owner_a_headers,
     ).json()["agent_id"]
     session_a = client.post(
         "/sessions",
@@ -256,20 +269,24 @@ def test_multi_tenant_workflow_isolation() -> None:
     agent_a_resp = client.post(
         "/agents",
         json={"actor_user_id": owner_a, "org_id": org_a, "name": "WF Agent A", "description": ""},
+        headers=owner_a_headers,
     )
     agent_a = agent_a_resp.json()["agent_id"]
 
     # === 组织 B ===
+    owner_b_email = f"wf-iso-b-{suffix}@example.com"
     owner_b_resp = client.post(
         "/identity/users/register",
-        json={"email": f"wf-iso-b-{suffix}@example.com", "display_name": "WF Owner B", "password": "password123"},
+        json={"email": owner_b_email, "display_name": "WF Owner B", "password": "password123"},
     )
     owner_b = owner_b_resp.json()["user_id"]
     org_b_resp = client.post("/identity/organizations", json={"creator_user_id": owner_b, "name": "WF Org B"})
     org_b = org_b_resp.json()["org_id"]
+    owner_b_headers = _auth_headers(client, owner_b_email)
     agent_b_resp = client.post(
         "/agents",
         json={"actor_user_id": owner_b, "org_id": org_b, "name": "WF Agent B", "description": ""},
+        headers=owner_b_headers,
     )
     agent_b = agent_b_resp.json()["agent_id"]
 

@@ -130,7 +130,7 @@ def test_create_agent_requires_active_org_context_and_matching_team(client: Test
         },
         headers=org_a_headers,
     )
-    assert cross_team.status_code == 400
+    assert cross_team.status_code == 403
 
     switched_org = client.post(
         "/agents",
@@ -147,3 +147,9 @@ def test_create_agent_requires_active_org_context_and_matching_team(client: Test
         headers={"X-API-Key": api_key},
     )
     assert api_key_org.status_code == 200
+    api_key_cross_org = client.post(
+        "/agents",
+        json={"org_id": org_a, "name": "Cross org service", "description": ""},
+        headers={"X-API-Key": api_key},
+    )
+    assert api_key_cross_org.status_code == 403
