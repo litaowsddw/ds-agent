@@ -22,7 +22,9 @@ class LLMGenerateResponse(BaseModel):
     text: str
     provider: str
     model: str
-    usage: dict[str, int]
+    # Provider usage may include nested vendor-specific detail objects, e.g.
+    # OpenAI-compatible prompt_tokens_details.cached_tokens.
+    usage: dict[str, Any]
 
 
 class LLMCallLogResponse(BaseModel):
@@ -33,6 +35,6 @@ class LLMCallLogResponse(BaseModel):
     model: str
     prefix_hash: str
     status: str
-    usage: dict[str, int]
+    usage: dict[str, Any]
     error_message: str
     metadata: dict[str, Any]
