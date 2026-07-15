@@ -94,6 +94,7 @@ services:
       REDIS_URL: redis://redis:6379/0
       CELERY_BROKER_URL: redis://redis:6379/1
       CELERY_RESULT_BACKEND: redis://redis:6379/2
+      PYTHONPATH: /app:/app/apps/api:/app/apps/worker:/app/packages/runtime:/app/packages/workflow
     depends_on:
       mysql:
         condition: service_healthy
