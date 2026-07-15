@@ -22,6 +22,9 @@ describe("ChatComposer", () => {
         onSend={vi.fn()}
         contextUsage={{
           inputTokens: 1250,
+          outputTokens: 80,
+          contextTokens: 1330,
+          outputTokenStatus: "provider_final",
           cacheReadInputTokens: 640,
           limitTokens: 2400,
           usageStatus: "provider_final",
@@ -37,7 +40,8 @@ describe("ChatComposer", () => {
       />
     );
 
-    expect(container.textContent).toContain("1,250");
+    expect(container.textContent).toContain("1,330");
+    expect(container.textContent).toContain("输入 1,250 + 输出 80");
     expect(container.textContent).toContain("640");
     expect(container.textContent).not.toContain("estimate");
   });
@@ -49,6 +53,9 @@ describe("ChatComposer", () => {
         onSend={vi.fn()}
         contextUsage={{
           inputTokens: null,
+          outputTokens: 0,
+          contextTokens: null,
+          outputTokenStatus: "unavailable",
           cacheReadInputTokens: null,
           limitTokens: 2400,
           usageStatus: "unavailable",

@@ -28,6 +28,25 @@ class ContextTokenPreflight:
     breakdown: list[dict[str, object]]
 
 
+def count_stream_output_tokens(*, provider: str, model: str, text: str) -> int:
+    """Count the assistant text accumulated so far during a stream.
+
+    This is a live context-window indicator, not billable usage.  The final
+    provider usage event remains authoritative because providers may include
+    hidden/control tokens that are not observable in a streamed text delta.
+    """
+
+    if not text:
+        return 0
+    if _supports_official_deepseek_tokenizer(provider, model):
+        try:
+            token_ids = _deepseek_tokenizer()(text, add_special_tokens=False)["input_ids"]
+            return len(token_ids)
+        except Exception:
+            pass
+    return len(text) // 4
+
+
 def preflight_chat_context(
     *,
     provider: str,

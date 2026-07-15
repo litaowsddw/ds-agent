@@ -172,6 +172,9 @@ export default function ChatPanel({
               actualContextUsage
                 ? {
                     inputTokens: actualContextUsage.inputTokens,
+                    outputTokens: actualContextUsage.outputTokens,
+                    contextTokens: actualContextUsage.contextTokens,
+                    outputTokenStatus: actualContextUsage.outputTokenStatus,
                     cacheReadInputTokens: actualContextUsage.cacheReadInputTokens,
                     limitTokens: actualContextUsage.tokenLimit || contextTokenLimit,
                     usageStatus: actualContextUsage.usageStatus,
@@ -183,6 +186,9 @@ export default function ChatPanel({
                   }
                 : {
                     inputTokens: null,
+                    outputTokens: 0,
+                    contextTokens: null,
+                    outputTokenStatus: "unavailable",
                     cacheReadInputTokens: null,
                     limitTokens: contextTokenLimit,
                     usageStatus: "unavailable",

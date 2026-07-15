@@ -1,7 +1,7 @@
 from types import SimpleNamespace
 
 from app.routes.chat import _compile_agent_chat_prompt
-from app.services.context_tokens import preflight_chat_context
+from app.services.context_tokens import count_stream_output_tokens, preflight_chat_context
 
 
 def test_deepseek_preflight_uses_official_tokenizer_for_final_prompt() -> None:
@@ -43,3 +43,8 @@ def test_unknown_model_uses_explicit_characters_divided_by_four_estimate() -> No
     assert result.status == "characters_divided_by_4"
     assert result.input_tokens == 25
     assert sum(int(item["tokens"]) for item in result.breakdown) == result.input_tokens
+
+
+def test_streamed_output_uses_official_tokenizer_or_explicit_character_fallback() -> None:
+    assert count_stream_output_tokens(provider="deepseek", model="deepseek-v4-pro", text="hello") > 0
+    assert count_stream_output_tokens(provider="custom", model="unknown", text="x" * 100) == 25

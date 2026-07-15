@@ -671,7 +671,10 @@ async def _chat_stream_events(
                 compact_summary=memory_context.compact_summary,
                 long_term_context=memory_context.long_term_context,
             )
-            from app.services.context_tokens import preflight_chat_context
+            from app.services.context_tokens import (
+                count_stream_output_tokens,
+                preflight_chat_context,
+            )
 
             preflight = preflight_chat_context(
                 provider=model_provider,
@@ -716,16 +719,50 @@ async def _chat_stream_events(
                 async for chunk in llm_stream:
                     response_parts.append(chunk)
                     yield await emit("token", text=chunk, session_id=session_id)
+                    streamed_output_tokens = count_stream_output_tokens(
+                        provider=model_provider,
+                        model=model_name,
+                        text="".join(response_parts),
+                    )
+                    yield await emit(
+                        "context_progress",
+                        input_tokens=preflight.input_tokens,
+                        output_tokens=streamed_output_tokens,
+                        context_tokens=(
+                            preflight.input_tokens + streamed_output_tokens
+                            if preflight.input_tokens is not None
+                            else None
+                        ),
+                        output_token_status=(
+                            "official_tokenizer"
+                            if preflight.status == "official_tokenizer"
+                            else "characters_divided_by_4"
+                        ),
+                    )
             finally:
                 await llm_stream.aclose()
             actual_usage = gateway.last_normalized_usage
             yield await emit(
                 "context_usage",
                 input_tokens=(actual_usage.input_tokens if actual_usage else None),
+                output_tokens=(actual_usage.output_tokens if actual_usage else None),
+                total_tokens=(actual_usage.total_tokens if actual_usage else None),
+                context_tokens=(
+                    actual_usage.input_tokens + actual_usage.output_tokens
+                    if actual_usage
+                    and actual_usage.input_tokens is not None
+                    and actual_usage.output_tokens is not None
+                    else None
+                ),
                 cache_read_input_tokens=(
                     actual_usage.cache_read_input_tokens if actual_usage else None
                 ),
                 usage_status=(actual_usage.usage_status if actual_usage else "unavailable"),
+                output_token_status=(
+                    "provider_final"
+                    if actual_usage and actual_usage.output_tokens is not None
+                    else "unavailable"
+                ),
                 token_limit=_memory_compaction_threshold(agent.context_token_limit),
                 preflight_input_tokens=preflight.input_tokens,
                 stable_prefix_tokens=preflight.stable_prefix_tokens,

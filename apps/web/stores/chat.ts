@@ -32,6 +32,9 @@ export interface ChatTraceEvent {
 
 export interface ActualContextUsage {
   inputTokens: number | null;
+  outputTokens: number;
+  contextTokens: number | null;
+  outputTokenStatus: "official_tokenizer" | "characters_divided_by_4" | "provider_final" | "unavailable";
   cacheReadInputTokens: number | null;
   tokenLimit: number;
   usageStatus: "provider_final" | "unavailable";
@@ -171,8 +174,10 @@ export const useChatStore = create<ChatState>((set, get) => ({
             }));
           }
 
-          if (event === "context_preflight" || event === "context_usage") {
+          if (event === "context_preflight" || event === "context_progress" || event === "context_usage") {
             const inputTokens = typeof data.input_tokens === "number" ? data.input_tokens : null;
+            const outputTokens = typeof data.output_tokens === "number" ? data.output_tokens : null;
+            const contextTokens = typeof data.context_tokens === "number" ? data.context_tokens : null;
             const cacheReadInputTokens = typeof data.cache_read_input_tokens === "number"
               ? data.cache_read_input_tokens
               : null;
@@ -180,7 +185,7 @@ export const useChatStore = create<ChatState>((set, get) => ({
             const previous = get().actualContextUsage;
             const preflightInputTokens = typeof data.preflight_input_tokens === "number"
               ? data.preflight_input_tokens
-              : event === "context_preflight" && typeof data.input_tokens === "number"
+              : (event === "context_preflight" || event === "context_progress") && typeof data.input_tokens === "number"
                 ? data.input_tokens
                 : previous?.preflightInputTokens ?? null;
             const stablePrefixTokens = typeof data.stable_prefix_tokens === "number"
@@ -198,6 +203,15 @@ export const useChatStore = create<ChatState>((set, get) => ({
             set({
               actualContextUsage: {
                 inputTokens: event === "context_usage" ? inputTokens : previous?.inputTokens ?? null,
+                outputTokens: outputTokens ?? previous?.outputTokens ?? 0,
+                contextTokens: contextTokens ?? (
+                  preflightInputTokens !== null
+                    ? preflightInputTokens + (outputTokens ?? previous?.outputTokens ?? 0)
+                    : null
+                ),
+                outputTokenStatus: data.output_token_status === "official_tokenizer" || data.output_token_status === "characters_divided_by_4" || data.output_token_status === "provider_final"
+                  ? data.output_token_status
+                  : previous?.outputTokenStatus ?? "unavailable",
                 cacheReadInputTokens: event === "context_usage" ? cacheReadInputTokens : previous?.cacheReadInputTokens ?? null,
                 tokenLimit,
                 usageStatus: event === "context_usage" && data.usage_status === "provider_final" ? "provider_final" : previous?.usageStatus ?? "unavailable",
@@ -419,6 +433,12 @@ function appendTraceEvent(
   event: string,
   data: Record<string, unknown>
 ) {
+  // High-frequency stream and context-meter events belong to the composer,
+  // not the execution trace.  Keeping them out avoids hundreds of invisible
+  // trace records and unnecessary scroll/render work on long responses.
+  if (event === "token" || event === "context_preflight" || event === "context_progress" || event === "context_usage") {
+    return;
+  }
   const status =
     event === "node_started"
       ? "running"

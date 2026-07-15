@@ -18,6 +18,9 @@ export default function ChatComposer({
   retryBlockedMessage?: string;
   contextUsage?: {
     inputTokens: number | null;
+    outputTokens: number;
+    contextTokens: number | null;
+    outputTokenStatus: "official_tokenizer" | "characters_divided_by_4" | "provider_final" | "unavailable";
     cacheReadInputTokens: number | null;
     limitTokens: number;
     usageStatus: "provider_final" | "unavailable";
@@ -30,9 +33,14 @@ export default function ChatComposer({
   children?: ReactNode;
 }) {
   const [input, setInput] = useState("");
-  const displayedTokens = contextUsage?.usageStatus === "provider_final"
+  const inputContextTokens = contextUsage?.usageStatus === "provider_final" && contextUsage.inputTokens !== null
     ? contextUsage.inputTokens
-    : contextUsage?.preflightInputTokens;
+    : contextUsage?.preflightInputTokens ?? null;
+  const displayedTokens = contextUsage?.contextTokens ?? (
+    inputContextTokens !== null && inputContextTokens !== undefined
+      ? inputContextTokens + (contextUsage?.outputTokens ?? 0)
+      : null
+  );
   const contextPercent = displayedTokens !== null && displayedTokens !== undefined && (contextUsage?.limitTokens ?? 0) > 0
     ? Math.round((displayedTokens / contextUsage!.limitTokens) * 100)
     : null;
@@ -82,31 +90,29 @@ export default function ChatComposer({
             <div className="relative whitespace-nowrap text-xs text-[#667085]">
               <span
                 aria-label="当前上下文占比"
-                title="发送前仅使用模型官方 tokenizer；模型返回后以供应商实际 prompt_tokens 和缓存字段为准。"
+                title="请求前即可计算输入上下文；流式过程中会叠加已接收输出。结束后由供应商 usage 校准输入、输出和缓存命中。"
               >
-                {contextUsage.usageStatus === "provider_final" && contextUsage.inputTokens !== null
-                  ? `实际输入 ${contextUsage.inputTokens.toLocaleString()} / 压缩上限 ${contextUsage.limitTokens.toLocaleString()} · ${contextPercent}%${contextUsage.cacheReadInputTokens !== null ? ` · 实际缓存命中 ${contextUsage.cacheReadInputTokens.toLocaleString()}` : ""}`
-                  : contextUsage.preflightInputTokens !== null
-                    ? `${contextUsage.tokenizerStatus === "characters_divided_by_4" ? "预发送估算（字符÷4）" : "预发送上下文"} ${contextUsage.preflightInputTokens.toLocaleString()} / 压缩上限 ${contextUsage.limitTokens.toLocaleString()} · ${contextPercent}%`
-                    : "预发送上下文：等待计算"}
+                {displayedTokens !== null
+                  ? `${contextUsage.tokenizerStatus === "characters_divided_by_4" ? "当前上下文估算（字符÷4）" : "当前上下文"} ${displayedTokens.toLocaleString()} / 压缩上限 ${contextUsage.limitTokens.toLocaleString()} · ${contextPercent}% · 输入 ${(inputContextTokens ?? 0).toLocaleString()} + 输出 ${contextUsage.outputTokens.toLocaleString()}${contextUsage.outputTokenStatus === "provider_final" ? "（供应商已校准）" : "（流式）"}${contextUsage.cacheReadInputTokens !== null ? ` · 实际缓存命中 ${contextUsage.cacheReadInputTokens.toLocaleString()}` : ""}`
+                  : "当前上下文：等待计算"}
               </span>
               {contextUsage.stablePrefixTokens !== null && contextUsage.stablePrefixTokens !== undefined ? (
                 <span className="pl-2 text-[#667085]" title="这是稳定可复用前缀的 token 数，不等于供应商实际缓存命中。">
                   · 稳定前缀候选 {contextUsage.stablePrefixTokens.toLocaleString()}
                 </span>
               ) : null}
-              {displayedTokens && contextUsage.promptBreakdown.length > 0 ? (
+              {inputContextTokens && contextUsage.promptBreakdown.length > 0 ? (
                 <details className="inline-block pl-2">
                   <summary className="cursor-pointer text-[#2f6feb]">构成</summary>
                   <div className="absolute bottom-7 right-0 z-20 w-80 rounded-lg border border-[#dfe4ee] bg-white p-3 text-left shadow-lg">
-                    <div className="mb-2 font-medium text-[#172033]">预发送 Prompt Token 构成</div>
-                    <div className="mb-2 text-[#667085]">{contextUsage.tokenizerStatus === "characters_divided_by_4" ? "该模型未接入 tokenizer，按最终 Prompt 字符数÷4 估算；模型返回后以上方实际输入用于计费核对。" : "按最终请求与 chat template 计算；模型返回后以上方实际输入用于计费核对。"}</div>
+                    <div className="mb-2 font-medium text-[#172033]">当前输入上下文构成</div>
+                    <div className="mb-2 text-[#667085]">{contextUsage.tokenizerStatus === "characters_divided_by_4" ? "该模型未接入 tokenizer，输入与流式输出均按字符÷4 估算；结束后仅以供应商 usage 做计费核对。" : "输入按最终 native messages 与 chat template 计算；流式输出实时累计，结束后由供应商 usage 校准。"}</div>
                     <div className="mb-2 flex h-2 overflow-hidden rounded-full bg-[#eef2f6]">
                       {contextUsage.promptBreakdown.map((section, index) => (
                         <span
                           key={section.key}
                           className={["bg-[#2f6feb]", "bg-[#7c3aed]", "bg-[#0ea5e9]", "bg-[#f59e0b]", "bg-[#10b981]", "bg-[#64748b]"][index % 6]}
-                          style={{ width: `${Math.round((section.tokens / displayedTokens) * 100)}%` }}
+                          style={{ width: `${Math.round((section.tokens / inputContextTokens) * 100)}%` }}
                         />
                       ))}
                     </div>
@@ -114,7 +120,7 @@ export default function ChatComposer({
                       {contextUsage.promptBreakdown.map((section) => (
                         <div key={section.key} className="flex items-center justify-between gap-3">
                           <span className="truncate">{section.label}</span>
-                          <span>{section.tokens.toLocaleString()} · {Math.round((section.tokens / displayedTokens) * 100)}%</span>
+                          <span>{section.tokens.toLocaleString()} · {Math.round((section.tokens / inputContextTokens) * 100)}%</span>
                         </div>
                       ))}
                     </div>
