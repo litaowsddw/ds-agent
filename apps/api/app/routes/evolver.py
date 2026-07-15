@@ -12,6 +12,8 @@ from fastapi import APIRouter, Depends, HTTPException, Query
 from pydantic import BaseModel
 from sqlalchemy.ext.asyncio import AsyncSession
 
+from app.database import get_db_session
+
 router = APIRouter()
 
 
@@ -43,7 +45,7 @@ class EvolutionResponse(BaseModel):
 @router.post("/trigger")
 async def trigger_evolution(
     request: TriggerEvolutionRequest,
-    db: AsyncSession = Depends(),
+    db: AsyncSession = Depends(get_db_session),
 ):
     """触发一次 Skill 进化循环。"""
     try:
@@ -93,7 +95,7 @@ async def trigger_evolution(
 async def get_run_analysis(
     agent_id: str,
     org_id: str = Query(...),
-    db: AsyncSession = Depends(),
+    db: AsyncSession = Depends(get_db_session),
 ):
     """获取 Agent 运行分析。"""
     try:
@@ -121,7 +123,7 @@ async def get_run_analysis(
 async def get_evolution_history(
     agent_id: str,
     org_id: str = Query(...),
-    db: AsyncSession = Depends(),
+    db: AsyncSession = Depends(get_db_session),
 ):
     """获取 Agent 进化历史。"""
     try:
