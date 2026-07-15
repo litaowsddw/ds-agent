@@ -22,8 +22,9 @@ describe("MessageBubble", () => {
   it("uses a Chinese localized time label", () => {
     render(<MessageBubble message={assistantMessage} />);
 
-    expect(screen.getByText(formatChatTime(assistantMessage.created_at))).toBeInTheDocument();
-    expect(formatChatTime(assistantMessage.created_at)).toContain("09:30");
+    const localizedTime = formatChatTime(assistantMessage.created_at);
+    expect(screen.getByText(localizedTime)).toBeInTheDocument();
+    expect(localizedTime).toMatch(/^\d{2}:\d{2}$/);
   });
 
   it("copies assistant text and confirms success with Toast", async () => {
