@@ -73,6 +73,7 @@ else:
         include=[
             "apps.worker.app.tasks.smoke",
             "apps.worker.app.tasks.background",
+            "apps.worker.app.tasks.evolver",
             "apps.worker.app.tasks.workflow",
         ],
     )
@@ -89,6 +90,7 @@ celery_app.conf.task_routes = {
     "agentflow.smoke.ping": {"queue": "workflow.default"},
     "agentflow.background.memory_compact": {"queue": "background.memory"},
     "agentflow.background.mcp_health_check": {"queue": "background.mcp"},
+    "evolver.run_cycle": {"queue": "workflow.default"},
     "agentflow.workflow.execute": {"queue": "workflow.default"},
 }
 
