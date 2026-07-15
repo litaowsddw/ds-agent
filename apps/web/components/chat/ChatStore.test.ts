@@ -97,6 +97,8 @@ describe("chat store retry safety", () => {
       execution_mode: "workflow",
       workflow_id: "workflow-original",
     });
+    expect(JSON.parse(String(secondRequest?.body))).not.toHaveProperty("org_id");
+    expect(JSON.parse(String(secondRequest?.body))).not.toHaveProperty("actor_user_id");
     expect(useChatStore.getState().failedSendSnapshot).toBeNull();
   });
 

@@ -271,8 +271,6 @@ async function streamChat({
     headers,
     body: JSON.stringify({
       agent_id: agentId,
-      org_id: orgId,
-      actor_user_id: actorUserId,
       message,
       session_id: sessionId,
       stream: true,
