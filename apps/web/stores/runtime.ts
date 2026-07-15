@@ -261,8 +261,6 @@ export const useRuntimeStore = create<RuntimeStore>((set, get) => ({
     await apiRequest("/gateway/llm/generate", {
       method: "POST",
       body: {
-        actor_user_id: actorUserId,
-        org_id: orgId,
         provider: selectedProviderKey,
         model: selectedModel,
         prompt,
