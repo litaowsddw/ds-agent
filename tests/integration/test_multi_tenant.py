@@ -141,6 +141,42 @@ def test_multi_org_multi_agent_concurrent_resources() -> None:
     assert a2_sessions.json() == []
 
 
+def test_memory_route_distinguishes_missing_agent_from_cross_org_access() -> None:
+    """Memory routes return 403 for a foreign Agent and 404 only when absent."""
+
+    client = TestClient(app)
+    suffix = uuid4().hex
+
+    owner_a = client.post(
+        "/identity/users/register",
+        json={"email": f"memory-owner-a-{suffix}@example.com", "display_name": "Owner A", "password": "password123"},
+    ).json()["user_id"]
+    org_a = client.post(
+        "/identity/organizations",
+        json={"creator_user_id": owner_a, "name": "Memory Org A"},
+    ).json()["org_id"]
+    agent_a = client.post(
+        "/agents",
+        json={"actor_user_id": owner_a, "org_id": org_a, "name": "Memory Agent A", "description": ""},
+    ).json()["agent_id"]
+
+    owner_b = client.post(
+        "/identity/users/register",
+        json={"email": f"memory-owner-b-{suffix}@example.com", "display_name": "Owner B", "password": "password123"},
+    ).json()["user_id"]
+
+    foreign_response = client.get(
+        "/memory", params={"actor_user_id": owner_b, "agent_id": agent_a}
+    )
+    assert foreign_response.status_code == 403
+    assert foreign_response.json()["detail"] == "Forbidden"
+
+    missing_response = client.get(
+        "/memory", params={"actor_user_id": owner_b, "agent_id": "agt_missing"}
+    )
+    assert missing_response.status_code == 404
+
+
 def test_multi_tenant_workflow_isolation() -> None:
     """验证不同组织的 Workflow 完全隔离。"""
 

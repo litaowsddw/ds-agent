@@ -23,9 +23,10 @@ async def create_memory(
 ) -> MemoryResponse:
     """写入 Agent 长期记忆。"""
 
+    agent = await _get_agent_or_404(session, request.agent_id)
+    await _assert_memory_org_access(session, request.actor_user_id, agent.org_id)
+
     try:
-        agent = await agent_db.get_agent_required(session, request.agent_id)
-        await membership_db.assert_org_access(session, user_id=request.actor_user_id, org_id=agent.org_id)
         memory = await memory_db.create_memory(
             session,
             memory_id=new_id("mem"),
@@ -53,12 +54,9 @@ async def list_memories(
 ) -> list[MemoryResponse]:
     """列出 Agent 下的记忆。"""
 
-    try:
-        agent = await agent_db.get_agent_required(session, agent_id)
-        await membership_db.assert_org_access(session, user_id=actor_user_id, org_id=agent.org_id)
-        memories, _ = await memory_db.list_agent_memories(session, agent_id)
-    except ValueError as exc:
-        raise HTTPException(status_code=404, detail=str(exc)) from exc
+    agent = await _get_agent_or_404(session, agent_id)
+    await _assert_memory_org_access(session, actor_user_id, agent.org_id)
+    memories, _ = await memory_db.list_agent_memories(session, agent_id)
 
     return [_to_memory_response(memory, user_id=actor_user_id) for memory in memories]
 
@@ -70,18 +68,35 @@ async def recall_memories(
 ) -> list[MemoryResponse]:
     """召回 Agent 长期记忆。"""
 
-    try:
-        agent = await agent_db.get_agent_required(session, request.agent_id)
-        await membership_db.assert_org_access(session, user_id=request.actor_user_id, org_id=agent.org_id)
-        memories, _ = await memory_db.list_agent_memories(session, request.agent_id)
-    except ValueError as exc:
-        raise HTTPException(status_code=403, detail=str(exc)) from exc
+    agent = await _get_agent_or_404(session, request.agent_id)
+    await _assert_memory_org_access(session, request.actor_user_id, agent.org_id)
+    memories, _ = await memory_db.list_agent_memories(session, request.agent_id)
 
     ranked = _rank_memories(memories, request.query)
     return [
         _to_memory_response(memory, user_id=request.actor_user_id)
         for memory in ranked[: request.limit]
     ]
+
+
+async def _get_agent_or_404(session: AsyncSession, agent_id: str):
+    """Resolve the requested Agent without treating a missing record as an access denial."""
+
+    try:
+        return await agent_db.get_agent_required(session, agent_id)
+    except ValueError as exc:
+        raise HTTPException(status_code=404, detail=str(exc)) from exc
+
+
+async def _assert_memory_org_access(
+    session: AsyncSession, actor_user_id: str, org_id: str
+) -> None:
+    """Reject an existing foreign-organization resource without exposing its data."""
+
+    try:
+        await membership_db.assert_org_access(session, user_id=actor_user_id, org_id=org_id)
+    except ValueError as exc:
+        raise HTTPException(status_code=403, detail="Forbidden") from exc
 
 
 def _rank_memories(memories: list[MemoryModel], query: str) -> list[MemoryModel]:
