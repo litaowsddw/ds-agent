@@ -165,15 +165,22 @@ async def list_node_runs(
 
     try:
         run = await workflow_run_db.get_run_required(session, run_id)
+    except ValueError as exc:
+        raise HTTPException(status_code=404, detail=str(exc)) from exc
+
+    try:
         await membership_db.assert_org_access(
             session, user_id=actor_user_id, org_id=run.org_id
         )
-        node_runs = sorted(
-            await node_run_db.list_run_node_runs(session, run_id),
-            key=_node_run_sequence,
-        )
     except ValueError as exc:
-        raise HTTPException(status_code=404, detail=str(exc)) from exc
+        # The run exists, so never disguise a cross-organization denial as a
+        # missing resource or reveal membership details.
+        raise HTTPException(status_code=403, detail="Forbidden") from exc
+
+    node_runs = sorted(
+        await node_run_db.list_run_node_runs(session, run_id),
+        key=_node_run_sequence,
+    )
 
     return [_to_node_run_response(nr, sequence=index) for index, nr in enumerate(node_runs)]
 
