@@ -636,6 +636,9 @@ async def _chat_stream_events(
                     if selected_skill_context is not None
                     else ""
                 ),
+                recent_messages=recent_messages,
+                compact_summary=memory_context.compact_summary,
+                long_term_context=memory_context.long_term_context,
             )
             llm_request = LLMCallRequest(
                 provider=model_provider,
@@ -670,6 +673,8 @@ async def _chat_stream_events(
                 ),
                 usage_status=(actual_usage.usage_status if actual_usage else "unavailable"),
                 token_limit=_memory_compaction_threshold(agent.context_token_limit),
+                prompt_bytes=len(str(compiled_prompt["compiled_prompt"]).encode("utf-8")),
+                prompt_breakdown=compiled_prompt["context_breakdown"],
             )
             response_text = "".join(response_parts)
             yield await emit(
@@ -790,6 +795,9 @@ def _compile_agent_chat_prompt(
     memory_context: str = "",
     skill_catalog: str = "",
     skill_context: str = "",
+    recent_messages: list[object] | None = None,
+    compact_summary: str = "",
+    long_term_context: str = "",
 ) -> dict[str, object]:
     """Compile chat input so its leading bytes stay stable across turns.
 
@@ -813,7 +821,7 @@ def _compile_agent_chat_prompt(
         "skill_catalog": skill_catalog.strip(),
         "response_contract": "Answer the user directly and accurately.",
     }
-    return PromptContextCompiler().compile(
+    compiled = PromptContextCompiler().compile(
         immutable_prefix=immutable_prefix,
         append_only_log={
             "memory_context": memory_context.strip(),
@@ -821,6 +829,77 @@ def _compile_agent_chat_prompt(
         },
         current_turn={"message": message},
     )
+    compiled_prompt = str(compiled["compiled_prompt"])
+    compiled["context_breakdown"] = _prompt_structure_breakdown(
+        compiled_prompt=compiled_prompt,
+        system_prompt=system_prompt,
+        agent_description=str(getattr(agent, "description", "") or "").strip(),
+        skill_catalog=skill_catalog,
+        skill_context=skill_context,
+        recent_messages=recent_messages or [],
+        compact_summary=compact_summary,
+        long_term_context=long_term_context,
+        current_message=message,
+    )
+    return compiled
+
+
+def _prompt_structure_breakdown(
+    *,
+    compiled_prompt: str,
+    system_prompt: str,
+    agent_description: str,
+    skill_catalog: str,
+    skill_context: str,
+    recent_messages: list[object],
+    compact_summary: str,
+    long_term_context: str,
+    current_message: str,
+) -> list[dict[str, object]]:
+    """Return non-sensitive byte spans in final Prompt order.
+
+    Providers report only aggregate prompt_tokens. These spans are deliberately
+    measured in UTF-8 bytes so that each section percentage is exact for the
+    serialized prompt and never pretends to be a provider tokenizer result.
+    """
+
+    def byte_length(value: str) -> int:
+        return len(value.encode("utf-8"))
+
+    user_history = []
+    assistant_history = []
+    other_history = []
+    for item in recent_messages:
+        role = str(getattr(item, "role", "") or "")
+        content = str(getattr(item, "content", "") or "")
+        sequence = str(getattr(item, "sequence", "") or "")
+        line = f"{sequence}. {role}: {content}"
+        if role == "user":
+            user_history.append(line)
+        elif role == "assistant":
+            assistant_history.append(line)
+        else:
+            other_history.append(line)
+
+    values = [
+        ("system", "System prompt", f"{system_prompt}\n{agent_description}".strip()),
+        ("tools", "Tools / Skills", f"{skill_catalog}\n{skill_context}".strip()),
+        ("user_history", "User history", "\n".join(user_history)),
+        ("assistant_history", "Assistant history", "\n".join(assistant_history)),
+        ("memory", "Summary / long-term memory", f"{compact_summary}\n{long_term_context}".strip()),
+        ("other_history", "Other history", "\n".join(other_history)),
+        ("current_user", "Current user message", current_message),
+    ]
+    sections = [
+        {"key": key, "label": label, "bytes": byte_length(value)}
+        for key, label, value in values
+        if value
+    ]
+    assigned_bytes = sum(int(section["bytes"]) for section in sections)
+    protocol_bytes = max(0, byte_length(compiled_prompt) - assigned_bytes)
+    if protocol_bytes:
+        sections.append({"key": "protocol", "label": "Prompt protocol / wrappers", "bytes": protocol_bytes})
+    return sections
 
 
 def _default_chat_max_tokens() -> int:

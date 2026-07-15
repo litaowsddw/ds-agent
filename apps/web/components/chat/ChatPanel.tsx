@@ -175,8 +175,17 @@ export default function ChatPanel({
                     cacheReadInputTokens: actualContextUsage.cacheReadInputTokens,
                     limitTokens: actualContextUsage.tokenLimit || contextTokenLimit,
                     usageStatus: actualContextUsage.usageStatus,
+                    promptBytes: actualContextUsage.promptBytes,
+                    promptBreakdown: actualContextUsage.promptBreakdown,
                   }
-                : { inputTokens: null, cacheReadInputTokens: null, limitTokens: contextTokenLimit, usageStatus: "unavailable" }
+                : {
+                    inputTokens: null,
+                    cacheReadInputTokens: null,
+                    limitTokens: contextTokenLimit,
+                    usageStatus: "unavailable",
+                    promptBytes: null,
+                    promptBreakdown: [],
+                  }
             }
           >
             <div className="mb-3 flex flex-wrap items-center gap-2">

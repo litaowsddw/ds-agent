@@ -25,6 +25,11 @@ describe("ChatComposer", () => {
           cacheReadInputTokens: 640,
           limitTokens: 2400,
           usageStatus: "provider_final",
+          promptBytes: 1800,
+          promptBreakdown: [
+            { key: "system", label: "System prompt", bytes: 360 },
+            { key: "tools", label: "Tools / Skills", bytes: 1440 },
+          ],
         }}
       />
     );
@@ -44,6 +49,8 @@ describe("ChatComposer", () => {
           cacheReadInputTokens: null,
           limitTokens: 2400,
           usageStatus: "unavailable",
+          promptBytes: null,
+          promptBreakdown: [],
         }}
       />
     );

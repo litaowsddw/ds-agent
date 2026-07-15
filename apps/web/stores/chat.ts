@@ -35,6 +35,8 @@ export interface ActualContextUsage {
   cacheReadInputTokens: number | null;
   tokenLimit: number;
   usageStatus: "provider_final" | "unavailable";
+  promptBytes: number | null;
+  promptBreakdown: Array<{ key: string; label: string; bytes: number }>;
 }
 
 export type ChatExecutionMode = "autonomous" | "workflow";
@@ -172,12 +174,24 @@ export const useChatStore = create<ChatState>((set, get) => ({
               ? data.cache_read_input_tokens
               : null;
             const tokenLimit = typeof data.token_limit === "number" ? data.token_limit : 2400;
+            const promptBytes = typeof data.prompt_bytes === "number" ? data.prompt_bytes : null;
+            const promptBreakdown = Array.isArray(data.prompt_breakdown)
+              ? data.prompt_breakdown.flatMap((item) => {
+                  if (!item || typeof item !== "object") return [];
+                  const value = item as Record<string, unknown>;
+                  return typeof value.key === "string" && typeof value.label === "string" && typeof value.bytes === "number"
+                    ? [{ key: value.key, label: value.label, bytes: value.bytes }]
+                    : [];
+                })
+              : [];
             set({
               actualContextUsage: {
                 inputTokens,
                 cacheReadInputTokens,
                 tokenLimit,
                 usageStatus: data.usage_status === "provider_final" ? "provider_final" : "unavailable",
+                promptBytes,
+                promptBreakdown,
               },
             });
           }

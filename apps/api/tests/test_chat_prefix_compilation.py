@@ -26,6 +26,7 @@ def test_agent_chat_prefix_is_stable_across_messages_and_memory() -> None:
     assert first["prefix_hash"] == second["prefix_hash"]
     assert "How do I configure it?" in str(first["compiled_prompt"])
     assert "User previously selected model B." in str(second["compiled_prompt"])
+    assert sum(item["bytes"] for item in first["context_breakdown"]) == len(str(first["compiled_prompt"]).encode("utf-8"))
 
 
 def test_agent_chat_prefix_changes_when_agent_instructions_change() -> None:

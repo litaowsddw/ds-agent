@@ -21,6 +21,8 @@ export default function ChatComposer({
     cacheReadInputTokens: number | null;
     limitTokens: number;
     usageStatus: "provider_final" | "unavailable";
+    promptBytes: number | null;
+    promptBreakdown: Array<{ key: string; label: string; bytes: number }>;
   };
   children?: ReactNode;
 }) {
@@ -71,15 +73,42 @@ export default function ChatComposer({
         />
         <div className="flex shrink-0 items-center gap-2">
           {contextUsage ? (
-            <span
-              aria-label="当前上下文占比"
-              className="whitespace-nowrap text-xs text-[#667085]"
-              title="仅显示模型供应商返回的实际输入 token；未返回时不使用本地估算。"
-            >
-              {contextUsage.usageStatus === "provider_final" && contextUsage.inputTokens !== null
-                ? `实际输入 ${contextUsage.inputTokens.toLocaleString()} / 压缩上限 ${contextUsage.limitTokens.toLocaleString()} · ${contextPercent}%${contextUsage.cacheReadInputTokens !== null ? ` · 缓存命中 ${contextUsage.cacheReadInputTokens.toLocaleString()}` : ""}`
-                : "实际输入 Token：等待模型返回"}
-            </span>
+            <div className="relative whitespace-nowrap text-xs text-[#667085]">
+              <span
+                aria-label="当前上下文占比"
+                title="仅显示模型供应商返回的实际输入 token；未返回时不使用本地估算。"
+              >
+                {contextUsage.usageStatus === "provider_final" && contextUsage.inputTokens !== null
+                  ? `实际输入 ${contextUsage.inputTokens.toLocaleString()} / 压缩上限 ${contextUsage.limitTokens.toLocaleString()} · ${contextPercent}%${contextUsage.cacheReadInputTokens !== null ? ` · 缓存命中 ${contextUsage.cacheReadInputTokens.toLocaleString()}` : ""}`
+                  : "实际输入 Token：等待模型返回"}
+              </span>
+              {contextUsage.promptBytes && contextUsage.promptBreakdown.length > 0 ? (
+                <details className="inline-block pl-2">
+                  <summary className="cursor-pointer text-[#2f6feb]">构成</summary>
+                  <div className="absolute bottom-7 right-0 z-20 w-80 rounded-lg border border-[#dfe4ee] bg-white p-3 text-left shadow-lg">
+                    <div className="mb-2 font-medium text-[#172033]">最终 Prompt 结构占比</div>
+                    <div className="mb-2 text-[#667085]">按实际拼接后的 UTF-8 字节区间统计；实际 Token 总数以上方模型返回值为准。</div>
+                    <div className="mb-2 flex h-2 overflow-hidden rounded-full bg-[#eef2f6]">
+                      {contextUsage.promptBreakdown.map((section, index) => (
+                        <span
+                          key={section.key}
+                          className={["bg-[#2f6feb]", "bg-[#7c3aed]", "bg-[#0ea5e9]", "bg-[#f59e0b]", "bg-[#10b981]", "bg-[#64748b]"][index % 6]}
+                          style={{ width: `${Math.round((section.bytes / contextUsage.promptBytes!) * 100)}%` }}
+                        />
+                      ))}
+                    </div>
+                    <div className="space-y-1">
+                      {contextUsage.promptBreakdown.map((section) => (
+                        <div key={section.key} className="flex items-center justify-between gap-3">
+                          <span className="truncate">{section.label}</span>
+                          <span>{Math.round((section.bytes / contextUsage.promptBytes!) * 100)}%</span>
+                        </div>
+                      ))}
+                    </div>
+                  </div>
+                </details>
+              ) : null}
+            </div>
           ) : null}
           <button
             onClick={send}
