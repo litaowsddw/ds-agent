@@ -16,10 +16,10 @@ from app.schemas.agent import (
     WorkspaceResponse,
 )
 from app.services.db.agent_db import agent_db, workspace_db
-from app.services.db.identity_db import membership_db
+from app.services.db.identity_db import membership_db, team_db
 from app.services.db.workflow_db import workflow_db
 from app.domain.identity import new_id
-from app.core.auth import AuthenticatedUser
+from app.core.auth import AuthenticatedUser, require_org
 
 router = APIRouter()
 
@@ -38,6 +38,7 @@ async def create_agent(
         raise HTTPException(status_code=401, detail="Bearer token or service API key required")
 
     actor_user_id = auth.user_id
+    require_org(auth, request.org_id)
     try:
         # 权限校验
         await membership_db.assert_org_access(
@@ -50,6 +51,11 @@ async def create_agent(
         raise HTTPException(status_code=403, detail=str(exc)) from exc
 
     try:
+        if request.team_id:
+            team = await team_db.get_by_id_required(session, request.team_id)
+            if team.org_id != request.org_id:
+                raise ValueError("Team does not belong to the requested organization")
+
         agent = await agent_db.create_agent(
             session,
             agent_id=new_id("agt"),

@@ -106,6 +106,14 @@ def test_full_api_integration_chain(monkeypatch) -> None:
         },
     )
     assert member_response.status_code == 200
+    viewer_login = client.post(
+        "/identity/users/login",
+        json={"email": f"full-viewer-{suffix}@example.com", "password": "password123"},
+    )
+    assert viewer_login.status_code == 200
+    viewer_headers = {
+        "Authorization": f"Bearer {viewer_login.json()['token']['access_token']}"
+    }
 
     provider_response = client.post(
         "/model-providers",
@@ -141,6 +149,7 @@ def test_full_api_integration_chain(monkeypatch) -> None:
             "name": "Full API Agent",
             "description": "用于完整 API 联调。",
         },
+        headers=owner_headers,
     )
     assert agent_response.status_code == 200
     agent_id = agent_response.json()["agent_id"]
@@ -413,6 +422,7 @@ def test_full_api_integration_chain(monkeypatch) -> None:
             "name": "非法 Agent",
             "description": "viewer 不应创建该资源。",
         },
+        headers=viewer_headers,
     )
     assert forbidden_response.status_code == 403
 
