@@ -1,0 +1,46 @@
+name: Export offline deployment images
+
+on:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  export:
+    runs-on: ubuntu-latest
+    timeout-minutes: 90
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Pull runtime images and build application images
+        run: |
+          set -euo pipefail
+          export MYSQL_ROOT_PASSWORD=ci MYSQL_PASSWORD=ci MINIO_ROOT_USER=ci-minio
+          export MINIO_ROOT_PASSWORD=ci JWT_SECRET=ci ENCRYPTION_KEY=ci
+          export GF_SECURITY_ADMIN_PASSWORD=ci DEPLOY_USER=ci
+          export DEPLOY_PASSWORD_HASH='$$2a$$12$$abcdefghijklmnopqrstuvabcdefghijklmnopqrstuvabcdefghijklmno'
+          docker compose -f docker-compose.yml -f docker-compose.production.yml pull
+          docker compose -f docker-compose.yml -f docker-compose.production.yml build
+
+      - name: Export Docker images
+        run: |
+          set -euo pipefail
+          mkdir -p offline-images
+          docker image save \
+            mysql:8.0 redis:7 quay.io/coreos/etcd:v3.5.18 \
+            minio/minio:RELEASE.2025-09-07T16-13-09Z \
+            milvusdb/milvus:v2.6.4 prom/prometheus:v2.54.1 \
+            grafana/grafana:11.3.0 \
+            otel/opentelemetry-collector-contrib:0.112.0 \
+            caddy:2.10.2-alpine \
+            ds-agent-api ds-agent-worker ds-agent-web \
+            | zstd -T0 -19 -o offline-images/ds-agent-images.tar.zst
+          sha256sum offline-images/ds-agent-images.tar.zst > offline-images/SHA256SUMS
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: ds-agent-offline-images
+          path: offline-images/
+          retention-days: 1
+          if-no-files-found: error
