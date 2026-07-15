@@ -18,15 +18,25 @@ def _suffix(label: str) -> str:
     return f"{label}-{uuid4().hex[:8]}"
 
 
+def _login_headers(client: TestClient, email: str) -> dict[str, str]:
+    response = client.post(
+        "/identity/users/login",
+        json={"email": email, "password": "password123"},
+    )
+    assert response.status_code == 200
+    return {"Authorization": f"Bearer {response.json()['token']['access_token']}"}
+
+
 def test_agent_api_create_and_read_workspace(client: TestClient) -> None:
     """验证 Agent 创建和 Workspace 读取主流程。"""
 
     suffix = _suffix("agent-api-main")
 
+    owner_email = f"owner-{suffix}@example.com"
     owner_response = client.post(
         "/identity/users/register",
         json={
-            "email": f"owner-{suffix}@example.com",
+            "email": owner_email,
             "display_name": "Owner",
             "password": "password123",
         },
@@ -38,6 +48,7 @@ def test_agent_api_create_and_read_workspace(client: TestClient) -> None:
         json={"creator_user_id": owner_user_id, "name": "Agent API 组织"},
     )
     org_id = org_response.json()["org_id"]
+    owner_headers = _login_headers(client, owner_email)
 
     agent_response = client.post(
         "/agents",
@@ -47,6 +58,7 @@ def test_agent_api_create_and_read_workspace(client: TestClient) -> None:
             "name": "API Agent",
             "description": "通过 API 创建的 Agent",
         },
+        headers=owner_headers,
     )
     assert agent_response.status_code == 200
     agent_id = agent_response.json()["agent_id"]
@@ -64,10 +76,11 @@ def test_agent_api_rejects_cross_org_workspace_read(client: TestClient) -> None:
 
     suffix = _suffix("agent-api-cross")
 
+    alice_email = f"alice-{suffix}@example.com"
     alice_response = client.post(
         "/identity/users/register",
         json={
-            "email": f"alice-{suffix}@example.com",
+            "email": alice_email,
             "display_name": "Alice",
             "password": "password123",
         },
@@ -88,6 +101,7 @@ def test_agent_api_rejects_cross_org_workspace_read(client: TestClient) -> None:
         json={"creator_user_id": alice_user_id, "name": "Alice Agent 组织"},
     )
     org_id = org_response.json()["org_id"]
+    alice_headers = _login_headers(client, alice_email)
 
     agent_response = client.post(
         "/agents",
@@ -97,6 +111,7 @@ def test_agent_api_rejects_cross_org_workspace_read(client: TestClient) -> None:
             "name": "私有 Agent",
             "description": "不允许跨组织读取",
         },
+        headers=alice_headers,
     )
     agent_id = agent_response.json()["agent_id"]
 
@@ -109,9 +124,10 @@ def test_agent_api_rejects_cross_org_workspace_read(client: TestClient) -> None:
 
 def test_agent_default_workflow_starts_empty(client: TestClient) -> None:
     suffix = _suffix("agent-wf-empty")
+    owner_email = f"owner-{suffix}@example.com"
     owner_response = client.post(
         "/identity/users/register",
-        json={"email": f"owner-{suffix}@example.com", "display_name": "Owner", "password": "password123"},
+        json={"email": owner_email, "display_name": "Owner", "password": "password123"},
     )
     owner_user_id = owner_response.json()["user_id"]
     org_response = client.post(
@@ -119,10 +135,12 @@ def test_agent_default_workflow_starts_empty(client: TestClient) -> None:
         json={"creator_user_id": owner_user_id, "name": "Default Workflow Org"},
     )
     org_id = org_response.json()["org_id"]
+    owner_headers = _login_headers(client, owner_email)
 
     agent_response = client.post(
         "/agents",
         json={"actor_user_id": owner_user_id, "org_id": org_id, "name": "Autonomous Agent", "description": ""},
+        headers=owner_headers,
     )
 
     assert agent_response.status_code == 200
@@ -131,22 +149,26 @@ def test_agent_default_workflow_starts_empty(client: TestClient) -> None:
 
 def test_agent_update_rejects_default_workflow_from_other_agent(client: TestClient) -> None:
     suffix = _suffix("agent-wf-cross")
+    owner_email = f"owner-{suffix}@example.com"
     owner_response = client.post(
         "/identity/users/register",
-        json={"email": f"owner-{suffix}@example.com", "display_name": "Owner", "password": "password123"},
+        json={"email": owner_email, "display_name": "Owner", "password": "password123"},
     )
     owner_user_id = owner_response.json()["user_id"]
     org_id = client.post(
         "/identity/organizations",
         json={"creator_user_id": owner_user_id, "name": "Cross Workflow Org"},
     ).json()["org_id"]
+    owner_headers = _login_headers(client, owner_email)
     agent_a = client.post(
         "/agents",
         json={"actor_user_id": owner_user_id, "org_id": org_id, "name": "Agent A", "description": ""},
+        headers=owner_headers,
     ).json()
     agent_b = client.post(
         "/agents",
         json={"actor_user_id": owner_user_id, "org_id": org_id, "name": "Agent B", "description": ""},
+        headers=owner_headers,
     ).json()
     workflow = client.post(
         "/workflows",
@@ -180,18 +202,21 @@ def test_agent_update_rejects_default_workflow_from_other_agent(client: TestClie
 
 def test_agent_update_accepts_own_published_default_workflow(client: TestClient) -> None:
     suffix = _suffix("agent-wf-own")
+    owner_email = f"owner-{suffix}@example.com"
     owner_response = client.post(
         "/identity/users/register",
-        json={"email": f"owner-{suffix}@example.com", "display_name": "Owner", "password": "password123"},
+        json={"email": owner_email, "display_name": "Owner", "password": "password123"},
     )
     owner_user_id = owner_response.json()["user_id"]
     org_id = client.post(
         "/identity/organizations",
         json={"creator_user_id": owner_user_id, "name": "Own Workflow Org"},
     ).json()["org_id"]
+    owner_headers = _login_headers(client, owner_email)
     agent = client.post(
         "/agents",
         json={"actor_user_id": owner_user_id, "org_id": org_id, "name": "Agent", "description": ""},
+        headers=owner_headers,
     ).json()
     workflow = client.post(
         "/workflows",

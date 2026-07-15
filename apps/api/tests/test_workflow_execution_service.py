@@ -51,6 +51,12 @@ def _create_owner_org_agent(client: TestClient, suffix: str) -> tuple[str, str, 
         "/identity/organizations",
         json={"creator_user_id": owner_user_id, "name": f"Org {suffix}"},
     ).json()["org_id"]
+    login = client.post(
+        "/identity/users/login",
+        json={"email": email, "password": "password123"},
+    )
+    assert login.status_code == 200
+    headers = {"Authorization": f"Bearer {login.json()['token']['access_token']}"}
     agent_id = client.post(
         "/agents",
         json={
@@ -59,13 +65,8 @@ def _create_owner_org_agent(client: TestClient, suffix: str) -> tuple[str, str, 
             "name": f"Agent {suffix}",
             "description": "",
         },
+        headers=headers,
     ).json()["agent_id"]
-    login = client.post(
-        "/identity/users/login",
-        json={"email": email, "password": "password123"},
-    )
-    assert login.status_code == 200
-    headers = {"Authorization": f"Bearer {login.json()['token']['access_token']}"}
     return owner_user_id, org_id, agent_id, headers
 
 

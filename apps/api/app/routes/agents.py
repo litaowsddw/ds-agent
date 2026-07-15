@@ -19,6 +19,7 @@ from app.services.db.agent_db import agent_db, workspace_db
 from app.services.db.identity_db import membership_db
 from app.services.db.workflow_db import workflow_db
 from app.domain.identity import new_id
+from app.core.auth import AuthenticatedUser
 
 router = APIRouter()
 
@@ -26,14 +27,22 @@ router = APIRouter()
 @router.post("", response_model=AgentResponse)
 async def create_agent(
     request: AgentCreateRequest,
+    auth: AuthenticatedUser,
     session: AsyncSession = Depends(get_db_session),
 ) -> AgentResponse:
     """创建 Agent。"""
+    # The legacy actor_user_id request field is never an authority source.
+    # Development query-string fallback identities have no email; JWT and
+    # service API-key identities do, so this endpoint remains authenticated.
+    if not auth.email:
+        raise HTTPException(status_code=401, detail="Bearer token or service API key required")
+
+    actor_user_id = auth.user_id
     try:
         # 权限校验
         await membership_db.assert_org_access(
             session,
-            user_id=request.actor_user_id,
+            user_id=actor_user_id,
             org_id=request.org_id,
             required_role="developer",
         )
@@ -54,7 +63,7 @@ async def create_agent(
             temperature=request.temperature,
             max_tokens=request.max_tokens,
             default_workflow_id=request.default_workflow_id,
-            created_by=request.actor_user_id,
+            created_by=actor_user_id,
         )
         await _validate_default_workflow(session, agent, request.default_workflow_id)
 
@@ -64,7 +73,7 @@ async def create_agent(
             workspace_id=new_id("wsp"),
             org_id=request.org_id,
             agent_id=agent.agent_id,
-            updated_by=request.actor_user_id,
+            updated_by=actor_user_id,
         )
 
         await session.commit()

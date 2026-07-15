@@ -42,6 +42,7 @@ def _setup_environment(client: TestClient) -> dict:
     agent_resp = client.post(
         "/agents",
         json={"actor_user_id": owner, "org_id": org_id, "name": "Stress Agent", "description": ""},
+        headers=headers,
     )
     agent_id = agent_resp.json()["agent_id"]
     provider_resp = client.post(
@@ -264,10 +265,11 @@ def test_stress_tenant_isolation_under_concurrency() -> None:
     # 并发创建多个组织及其资源
     def _create_org_resources(org_index: int) -> dict:
         suffix = uuid4().hex[:6]
+        owner_email = f"iso-{org_index}-{suffix}@example.com"
         owner_resp = client.post(
             "/identity/users/register",
             json={
-                "email": f"iso-{org_index}-{suffix}@example.com",
+                "email": owner_email,
                 "display_name": f"Iso Owner {org_index}",
                 "password": "password123",
             },
@@ -278,12 +280,19 @@ def test_stress_tenant_isolation_under_concurrency() -> None:
             json={"creator_user_id": owner, "name": f"Iso Org {org_index}"},
         )
         org_id = org_resp.json()["org_id"]
+        login = client.post(
+            "/identity/users/login",
+            json={"email": owner_email, "password": "password123"},
+        )
+        assert login.status_code == 200
+        headers = {"Authorization": f"Bearer {login.json()['token']['access_token']}"}
 
         agent_ids = []
         for j in range(agents_per_org):
             agent_resp = client.post(
                 "/agents",
                 json={"actor_user_id": owner, "org_id": org_id, "name": f"Agent {org_index}-{j}", "description": ""},
+                headers=headers,
             )
             agent_ids.append(agent_resp.json()["agent_id"])
 

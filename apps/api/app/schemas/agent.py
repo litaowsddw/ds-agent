@@ -8,7 +8,10 @@ from apps.api.app.domain.agent import WorkspaceFileKind
 class AgentCreateRequest(BaseModel):
     """创建 Agent 请求。"""
 
-    actor_user_id: str = Field(description="操作者用户 ID")
+    actor_user_id: str = Field(
+        default="",
+        description="Compatibility field; authenticated identity is used for authorization.",
+    )
     org_id: str = Field(description="Agent 所属组织 ID")
     team_id: str | None = Field(default=None, description="Agent 所属群组 ID")
     name: str = Field(min_length=1, max_length=80, description="Agent 名称")

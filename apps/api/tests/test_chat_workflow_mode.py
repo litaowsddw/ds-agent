@@ -28,23 +28,31 @@ def _create_owner_org_agent(client: TestClient, suffix: str) -> tuple[str, str, 
         "/identity/organizations",
         json={"creator_user_id": owner_user_id, "name": f"Org {suffix}"},
     ).json()["org_id"]
-    agent_id = client.post(
-        "/agents",
-        json={"actor_user_id": owner_user_id, "org_id": org_id, "name": f"Agent {suffix}", "description": ""},
-    ).json()["agent_id"]
     login = client.post(
         "/identity/users/login",
         json={"email": owner_email, "password": "password123"},
     )
     assert login.status_code == 200
     headers = {"Authorization": f"Bearer {login.json()['token']['access_token']}"}
+    agent_id = client.post(
+        "/agents",
+        json={"actor_user_id": owner_user_id, "org_id": org_id, "name": f"Agent {suffix}", "description": ""},
+        headers=headers,
+    ).json()["agent_id"]
     return owner_user_id, org_id, agent_id, headers
 
 
-def _create_agent(client: TestClient, owner_user_id: str, org_id: str, name: str) -> str:
+def _create_agent(
+    client: TestClient,
+    owner_user_id: str,
+    org_id: str,
+    name: str,
+    headers: dict[str, str],
+) -> str:
     return client.post(
         "/agents",
         json={"actor_user_id": owner_user_id, "org_id": org_id, "name": name, "description": ""},
+        headers=headers,
     ).json()["agent_id"]
 
 
@@ -248,7 +256,7 @@ def test_chat_history_preserves_empty_metadata_for_autonomous_messages(client: T
 
 def test_chat_workflow_mode_rejects_cross_agent_workflow(client: TestClient) -> None:
     owner_user_id, org_id, agent_a, headers = _create_owner_org_agent(client, _suffix("chat-cross-a"))
-    agent_b = _create_agent(client, owner_user_id, org_id, "Agent B")
+    agent_b = _create_agent(client, owner_user_id, org_id, "Agent B", headers)
     workflow_id = _create_published_passthrough_workflow(client, owner_user_id, agent_b)
 
     response = client.post(
