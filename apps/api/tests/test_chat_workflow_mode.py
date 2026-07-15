@@ -18,10 +18,11 @@ def _suffix(label: str) -> str:
     return f"{label}-{uuid4().hex[:8]}"
 
 
-def _create_owner_org_agent(client: TestClient, suffix: str) -> tuple[str, str, str]:
+def _create_owner_org_agent(client: TestClient, suffix: str) -> tuple[str, str, str, dict[str, str]]:
+    owner_email = f"owner-{suffix}@example.com"
     owner_user_id = client.post(
         "/identity/users/register",
-        json={"email": f"owner-{suffix}@example.com", "display_name": "Owner", "password": "password123"},
+        json={"email": owner_email, "display_name": "Owner", "password": "password123"},
     ).json()["user_id"]
     org_id = client.post(
         "/identity/organizations",
@@ -31,7 +32,13 @@ def _create_owner_org_agent(client: TestClient, suffix: str) -> tuple[str, str, 
         "/agents",
         json={"actor_user_id": owner_user_id, "org_id": org_id, "name": f"Agent {suffix}", "description": ""},
     ).json()["agent_id"]
-    return owner_user_id, org_id, agent_id
+    login = client.post(
+        "/identity/users/login",
+        json={"email": owner_email, "password": "password123"},
+    )
+    assert login.status_code == 200
+    headers = {"Authorization": f"Bearer {login.json()['token']['access_token']}"}
+    return owner_user_id, org_id, agent_id, headers
 
 
 def _create_agent(client: TestClient, owner_user_id: str, org_id: str, name: str) -> str:
@@ -82,19 +89,18 @@ def _parse_sse_events(body: str) -> list[dict[str, object]]:
 
 def test_chat_workflow_mode_executes_published_workflow_and_saves_session(client: TestClient) -> None:
     suffix = _suffix("chat-wf")
-    owner_user_id, org_id, agent_id = _create_owner_org_agent(client, suffix)
+    owner_user_id, _org_id, agent_id, headers = _create_owner_org_agent(client, suffix)
     workflow_id = _create_published_passthrough_workflow(client, owner_user_id, agent_id)
 
     response = client.post(
         "/chat/",
         json={
-            "actor_user_id": owner_user_id,
             "agent_id": agent_id,
-            "org_id": org_id,
             "message": "稳定输入",
             "execution_mode": "workflow",
             "workflow_id": workflow_id,
         },
+        headers=headers,
     )
 
     assert response.status_code == 200
@@ -114,19 +120,18 @@ def test_chat_workflow_mode_executes_published_workflow_and_saves_session(client
 
 def test_canonical_session_messages_include_workflow_metadata(client: TestClient) -> None:
     suffix = _suffix("session-wf-meta")
-    owner_user_id, org_id, agent_id = _create_owner_org_agent(client, suffix)
+    owner_user_id, _org_id, agent_id, headers = _create_owner_org_agent(client, suffix)
     workflow_id = _create_published_passthrough_workflow(client, owner_user_id, agent_id)
 
     chat_response = client.post(
         "/chat/",
         json={
-            "actor_user_id": owner_user_id,
             "agent_id": agent_id,
-            "org_id": org_id,
             "message": "canonical metadata",
             "execution_mode": "workflow",
             "workflow_id": workflow_id,
         },
+        headers=headers,
     )
 
     assert chat_response.status_code == 200
@@ -146,20 +151,19 @@ def test_canonical_session_messages_include_workflow_metadata(client: TestClient
 
 def test_streaming_workflow_mode_saves_metadata_in_history(client: TestClient) -> None:
     suffix = _suffix("stream-wf-meta")
-    owner_user_id, org_id, agent_id = _create_owner_org_agent(client, suffix)
+    owner_user_id, _org_id, agent_id, headers = _create_owner_org_agent(client, suffix)
     workflow_id = _create_published_passthrough_workflow(client, owner_user_id, agent_id)
 
     with client.stream(
         "POST",
         "/chat/stream",
         json={
-            "actor_user_id": owner_user_id,
             "agent_id": agent_id,
-            "org_id": org_id,
             "message": "stream metadata",
             "execution_mode": "workflow",
             "workflow_id": workflow_id,
         },
+        headers=headers,
     ) as response:
         assert response.status_code == 200
         body = "".join(response.iter_text())
@@ -183,19 +187,18 @@ def test_streaming_workflow_mode_saves_metadata_in_history(client: TestClient) -
 
 def test_normal_and_stream_workflow_mode_emit_matching_metadata(client: TestClient) -> None:
     suffix = _suffix("chat-parity")
-    owner_user_id, org_id, agent_id = _create_owner_org_agent(client, suffix)
+    owner_user_id, _org_id, agent_id, headers = _create_owner_org_agent(client, suffix)
     workflow_id = _create_published_passthrough_workflow(client, owner_user_id, agent_id)
 
     normal_response = client.post(
         "/chat/",
         json={
-            "actor_user_id": owner_user_id,
             "agent_id": agent_id,
-            "org_id": org_id,
             "message": "normal mode",
             "execution_mode": "workflow",
             "workflow_id": workflow_id,
         },
+        headers=headers,
     )
     assert normal_response.status_code == 200
     normal_body = normal_response.json()
@@ -204,13 +207,12 @@ def test_normal_and_stream_workflow_mode_emit_matching_metadata(client: TestClie
         "POST",
         "/chat/stream",
         json={
-            "actor_user_id": owner_user_id,
             "agent_id": agent_id,
-            "org_id": org_id,
             "message": "stream mode",
             "execution_mode": "workflow",
             "workflow_id": workflow_id,
         },
+        headers=headers,
     ) as response:
         assert response.status_code == 200
         stream_body = "".join(response.iter_text())
@@ -225,7 +227,7 @@ def test_normal_and_stream_workflow_mode_emit_matching_metadata(client: TestClie
 
 def test_chat_history_preserves_empty_metadata_for_autonomous_messages(client: TestClient) -> None:
     suffix = _suffix("chat-auto-meta")
-    owner_user_id, _org_id, agent_id = _create_owner_org_agent(client, suffix)
+    owner_user_id, _org_id, agent_id, _headers = _create_owner_org_agent(client, suffix)
     session_id = client.post(
         "/sessions",
         json={"actor_user_id": owner_user_id, "agent_id": agent_id},
@@ -245,20 +247,19 @@ def test_chat_history_preserves_empty_metadata_for_autonomous_messages(client: T
 
 
 def test_chat_workflow_mode_rejects_cross_agent_workflow(client: TestClient) -> None:
-    owner_user_id, org_id, agent_a = _create_owner_org_agent(client, _suffix("chat-cross-a"))
+    owner_user_id, org_id, agent_a, headers = _create_owner_org_agent(client, _suffix("chat-cross-a"))
     agent_b = _create_agent(client, owner_user_id, org_id, "Agent B")
     workflow_id = _create_published_passthrough_workflow(client, owner_user_id, agent_b)
 
     response = client.post(
         "/chat/",
         json={
-            "actor_user_id": owner_user_id,
             "agent_id": agent_a,
-            "org_id": org_id,
             "message": "try cross",
             "execution_mode": "workflow",
             "workflow_id": workflow_id,
         },
+        headers=headers,
     )
 
     assert response.status_code == 400
