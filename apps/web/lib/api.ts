@@ -61,7 +61,7 @@ export function isAuthenticated(): boolean {
  * of trusting a browser-provided organization header.
  */
 async function synchronizeOrganizationToken(path: string): Promise<void> {
-  if (path.startsWith("/identity/users/switch-org")) return;
+  if (path === "/health" || path.startsWith("/identity/users/switch-org")) return;
 
   const token = getAccessToken();
   const orgId = getCurrentOrgId();
