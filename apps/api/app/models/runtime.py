@@ -43,6 +43,7 @@ class MCPServerModel(Base):
     name: Mapped[str] = mapped_column(String(255), nullable=False)
     transport: Mapped[str] = mapped_column(String(16), default="http")
     url: Mapped[str] = mapped_column(String(512), nullable=False)
+    credentials_encrypted: Mapped[str] = mapped_column(Text, default="")
     created_by: Mapped[str] = mapped_column(String(64), default="")
     created_at: Mapped[datetime] = mapped_column(DateTime, default=datetime.utcnow)
 

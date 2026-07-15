@@ -150,6 +150,7 @@ class MCPServerDBService(BaseDBService[MCPServerModel]):
         name: str,
         url: str,
         transport: str = "http",
+        credentials_encrypted: str = "",
         created_by: str = "",
     ) -> MCPServerModel:
         """注册 MCP Server。"""
@@ -159,6 +160,7 @@ class MCPServerDBService(BaseDBService[MCPServerModel]):
             name=name,
             transport=transport,
             url=url,
+            credentials_encrypted=credentials_encrypted,
             created_by=created_by,
         )
         session.add(server)

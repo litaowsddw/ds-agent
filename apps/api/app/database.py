@@ -85,6 +85,7 @@ async def init_db() -> None:
     async with async_engine.begin() as conn:
         await conn.run_sync(Base.metadata.create_all)
         await conn.run_sync(_ensure_session_message_meta_info_column)
+        await conn.run_sync(_ensure_mcp_credentials_column)
 
 
 def _ensure_session_message_meta_info_column(connection) -> None:
@@ -97,3 +98,14 @@ def _ensure_session_message_meta_info_column(connection) -> None:
         return
     connection.execute(text("ALTER TABLE session_messages ADD COLUMN meta_info TEXT"))
     connection.execute(text("UPDATE session_messages SET meta_info = '{}' WHERE meta_info IS NULL"))
+
+
+def _ensure_mcp_credentials_column(connection) -> None:
+    """Backfill encrypted connection credentials for existing deployments."""
+    inspector = inspect(connection)
+    if "mcp_servers" not in inspector.get_table_names():
+        return
+    columns = {column["name"] for column in inspector.get_columns("mcp_servers")}
+    if "credentials_encrypted" not in columns:
+        connection.execute(text("ALTER TABLE mcp_servers ADD COLUMN credentials_encrypted TEXT"))
+        connection.execute(text("UPDATE mcp_servers SET credentials_encrypted = '' WHERE credentials_encrypted IS NULL"))

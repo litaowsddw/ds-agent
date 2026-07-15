@@ -13,10 +13,14 @@ from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.database import get_db_session
+from app.core.security import encrypt_api_key
 from app.domain.identity import new_id
+from app.domain.mcp import MCPTransport
 from app.models.runtime import AgentMCPPolicyModel, MCPServerModel, MCPToolModel
 from app.schemas.mcp import (
     AgentMCPPolicyRequest,
+    MCPAgentImportRequest,
+    MCPAgentImportResponse,
     MCPServerRegisterRequest,
     MCPServerResponse,
     MCPToolResponse,
@@ -25,8 +29,68 @@ from app.schemas.mcp import (
 from app.services.db.agent_db import agent_db
 from app.services.db.identity_db import membership_db
 from app.services.db.runtime_db import agent_mcp_policy_db, mcp_server_db, mcp_tool_db
+from app.services.external_import import ExternalImportError, discover_streamable_http_tools
 
 router = APIRouter()
+
+
+@router.post("/agents/{agent_id}/import", response_model=MCPAgentImportResponse)
+async def import_agent_mcp(
+    agent_id: str,
+    request: MCPAgentImportRequest,
+    session: AsyncSession = Depends(get_db_session),
+) -> MCPAgentImportResponse:
+    """Discover an external MCP service and bind its tools to one Agent.
+
+    This endpoint only imports the declared tools.  Runtime tools/call is kept
+    separate so a discovery request cannot trigger third-party side effects.
+    """
+
+    try:
+        agent = await agent_db.get_agent_required(session, agent_id)
+        await membership_db.assert_org_access(
+            session, user_id=request.actor_user_id, org_id=agent.org_id
+        )
+        if request.transport != MCPTransport.STREAMABLE_HTTP:
+            raise ValueError("当前仅支持 streamable_http MCP 导入；SSE/stdio 需要受管连接器")
+        credential_headers = _credential_headers(request)
+        discovered_tools = discover_streamable_http_tools(request.url, credential_headers)
+        server = await mcp_server_db.create_server(
+            session,
+            server_id=new_id("mcp"),
+            org_id=agent.org_id,
+            name=request.name,
+            transport=request.transport.value,
+            url=request.url,
+            credentials_encrypted=encrypt_api_key(json.dumps(credential_headers, ensure_ascii=False)),
+            created_by=request.actor_user_id,
+        )
+        tools = []
+        for discovered in discovered_tools:
+            tool = await mcp_tool_db.create_tool(
+                session,
+                tool_id=new_id("tool"),
+                server_id=server.server_id,
+                name=discovered.name,
+                description=discovered.description,
+                input_schema=discovered.input_schema,
+                risk_level="low",
+                created_by=request.actor_user_id,
+            )
+            tools.append(tool)
+        await agent_mcp_policy_db.set_policy(
+            session, agent_id=agent.agent_id, server_id=server.server_id, allowed=True
+        )
+        await session.commit()
+    except (ValueError, ExternalImportError) as exc:
+        await session.rollback()
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
+
+    return MCPAgentImportResponse(
+        server=_to_server_response(server),
+        tools=[_to_tool_response(tool, agent.org_id) for tool in tools],
+        agent_id=agent.agent_id,
+    )
 
 
 @router.post("/servers", response_model=MCPServerResponse)
@@ -226,6 +290,17 @@ def _to_server_response(server: MCPServerModel) -> MCPServerResponse:
         url=server.url,
         enabled=True,
     )
+
+
+def _credential_headers(request: MCPAgentImportRequest) -> dict[str, str]:
+    """Turn explicit credential fields into outbound MCP headers only in memory."""
+
+    headers = dict(request.credentials.headers)
+    if request.credentials.bearer_token:
+        headers["Authorization"] = f"Bearer {request.credentials.bearer_token}"
+    if request.credentials.api_key:
+        headers["X-API-Key"] = request.credentials.api_key
+    return headers
 
 
 def _to_tool_response(tool: MCPToolModel, org_id: str) -> MCPToolResponse:

@@ -12,6 +12,7 @@ from app.domain.identity import new_id
 from app.models.runtime import SkillModel
 from app.schemas.skill import (
     AgentSkillPolicyRequest,
+    SkillImportRequest,
     SkillRegisterRequest,
     SkillResponse,
     SkillSummaryResponse,
@@ -19,6 +20,7 @@ from app.schemas.skill import (
 from app.services.db.agent_db import agent_db
 from app.services.db.identity_db import membership_db
 from app.services.db.runtime_db import agent_skill_policy_db, skill_db
+from app.services.external_import import ExternalImportError, fetch_github_skill
 
 router = APIRouter()
 
@@ -54,6 +56,50 @@ async def register_skill(
         )
         await session.commit()
     except ValueError as exc:
+        await session.rollback()
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
+
+    return _to_skill_response(skill)
+
+
+@router.post("/import", response_model=SkillResponse)
+async def import_github_skill(
+    request: SkillImportRequest,
+    session: AsyncSession = Depends(get_db_session),
+) -> SkillResponse:
+    """Import exactly one public GitHub SKILL.md and authorize the target Agent.
+
+    The downloader is intentionally narrow: no arbitrary URLs, redirects, or
+    repository-wide cloning.  A user must provide the exact file to review.
+    """
+
+    try:
+        await membership_db.assert_org_access(session, user_id=request.actor_user_id, org_id=request.org_id)
+        agent = await agent_db.get_agent_required(session, request.agent_id)
+        if agent.org_id != request.org_id:
+            raise ValueError("Agent 不属于该组织")
+        content, resolved_source = fetch_github_skill(request.source_url)
+        metadata = _parse_skill_markdown(content)
+        skill = await skill_db.create_skill(
+            session,
+            skill_id=new_id("skl"),
+            org_id=request.org_id,
+            scope="agent",
+            name=metadata["name"],
+            description=metadata["description"],
+            content=content,
+            agent_id=agent.agent_id,
+            # Do not expose a remote URL as a local resource directory.  The
+            # imported SKILL.md lives in the database and its instructions are
+            # still available to progressive disclosure.
+            file_path=None,
+            created_by=request.actor_user_id,
+        )
+        await agent_skill_policy_db.set_policy(
+            session, agent_id=agent.agent_id, skill_id=skill.skill_id, allowed=True
+        )
+        await session.commit()
+    except (ValueError, ExternalImportError) as exc:
         await session.rollback()
         raise HTTPException(status_code=400, detail=str(exc)) from exc
 

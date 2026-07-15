@@ -37,6 +37,15 @@ class AgentSkillPolicyRequest(BaseModel):
     allowed: bool = Field(description="是否允许使用")
 
 
+class SkillImportRequest(BaseModel):
+    """Import one reviewed public GitHub SKILL.md and bind it to an Agent."""
+
+    actor_user_id: str = Field(description="操作用户 ID")
+    org_id: str = Field(description="组织 ID")
+    agent_id: str = Field(description="目标 Agent ID")
+    source_url: str = Field(max_length=1024, description="GitHub SKILL.md 文件链接")
+
+
 class SkillSummaryResponse(BaseModel):
     """Skill 摘要响应。"""
 
