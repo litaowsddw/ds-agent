@@ -31,6 +31,7 @@ export default function ChatPanel({
     intent,
     subtaskCount,
     failedSendSnapshot,
+    actualContextUsage,
     sendMessage,
     retryLastMessage,
     loadLatestSession,
@@ -45,10 +46,6 @@ export default function ChatPanel({
   const visibleFailedSnapshot = isCurrentAgent ? failedSendSnapshot : null;
   const visibleIntent = isCurrentAgent ? intent : "";
   const visibleSubtaskCount = isCurrentAgent ? subtaskCount : 0;
-  const estimatedContextTokens = useMemo(
-    () => visibleMessages.reduce((total, message) => total + Math.max(1, Math.ceil(message.content.length / 4)), 0),
-    [visibleMessages]
-  );
   const contextTokenLimit = agent?.context_token_limit ?? 2400;
   const [executionMode, setExecutionMode] = useState<ChatExecutionMode>("autonomous");
   const [workflowId, setWorkflowId] = useState("");
@@ -171,7 +168,16 @@ export default function ChatPanel({
             onSend={handleSend}
             onRetry={visibleFailedSnapshot ? retryLastMessage : undefined}
             retryBlockedMessage={retryBlockedMessage}
-            contextUsage={{ usedTokens: estimatedContextTokens, limitTokens: contextTokenLimit }}
+            contextUsage={
+              actualContextUsage
+                ? {
+                    inputTokens: actualContextUsage.inputTokens,
+                    cacheReadInputTokens: actualContextUsage.cacheReadInputTokens,
+                    limitTokens: actualContextUsage.tokenLimit || contextTokenLimit,
+                    usageStatus: actualContextUsage.usageStatus,
+                  }
+                : { inputTokens: null, cacheReadInputTokens: null, limitTokens: contextTokenLimit, usageStatus: "unavailable" }
+            }
           >
             <div className="mb-3 flex flex-wrap items-center gap-2">
               <div className="inline-flex rounded-lg border border-[#dfe4ee] bg-white p-1 text-xs">

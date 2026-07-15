@@ -240,6 +240,9 @@ def test_gateway_records_only_final_stream_usage_with_nested_cache_tokens() -> N
     assert event.output_tokens == 4
     assert event.cache_read_input_tokens == 10
     assert event.cache_miss_input_tokens == 10
+    assert gateway.last_normalized_usage is not None
+    assert gateway.last_normalized_usage.input_tokens == 20
+    assert gateway.last_normalized_usage.cache_read_input_tokens == 10
 
 
 @pytest.mark.parametrize(

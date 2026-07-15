@@ -16,12 +16,17 @@ export default function ChatComposer({
   onSend: (message: string) => void | Promise<void>;
   onRetry?: () => void | Promise<void>;
   retryBlockedMessage?: string;
-  contextUsage?: { usedTokens: number; limitTokens: number };
+  contextUsage?: {
+    inputTokens: number | null;
+    cacheReadInputTokens: number | null;
+    limitTokens: number;
+    usageStatus: "provider_final" | "unavailable";
+  };
   children?: ReactNode;
 }) {
   const [input, setInput] = useState("");
-  const contextPercent = contextUsage && contextUsage.limitTokens > 0
-    ? Math.min(100, Math.round((contextUsage.usedTokens / contextUsage.limitTokens) * 100))
+  const contextPercent = contextUsage?.inputTokens !== null && contextUsage?.inputTokens !== undefined && contextUsage.limitTokens > 0
+    ? Math.round((contextUsage.inputTokens / contextUsage.limitTokens) * 100)
     : null;
 
   const send = () => {
@@ -65,13 +70,15 @@ export default function ChatComposer({
           disabled={disabled}
         />
         <div className="flex shrink-0 items-center gap-2">
-          {contextUsage && contextPercent !== null ? (
+          {contextUsage ? (
             <span
               aria-label="当前上下文占比"
               className="whitespace-nowrap text-xs text-[#667085]"
-              title="基于当前已加载会话消息的 token 估算"
+              title="仅显示模型供应商返回的实际输入 token；未返回时不使用本地估算。"
             >
-              上下文估算 {contextUsage.usedTokens.toLocaleString()} / {contextUsage.limitTokens.toLocaleString()} · {contextPercent}%
+              {contextUsage.usageStatus === "provider_final" && contextUsage.inputTokens !== null
+                ? `实际输入 ${contextUsage.inputTokens.toLocaleString()} / 压缩上限 ${contextUsage.limitTokens.toLocaleString()} · ${contextPercent}%${contextUsage.cacheReadInputTokens !== null ? ` · 缓存命中 ${contextUsage.cacheReadInputTokens.toLocaleString()}` : ""}`
+                : "实际输入 Token：等待模型返回"}
             </span>
           ) : null}
           <button

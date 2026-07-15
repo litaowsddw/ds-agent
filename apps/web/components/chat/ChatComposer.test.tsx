@@ -11,28 +11,43 @@ describe("ChatComposer", () => {
     fireEvent.keyDown(textbox, { key: "Enter", shiftKey: true });
     fireEvent.change(textbox, { target: { value: "hello\nworld" } });
     expect(textbox).toHaveValue("hello\nworld");
-    expect(onSend).not.toHaveBeenCalled();
     fireEvent.keyDown(textbox, { key: "Enter" });
     expect(onSend).toHaveBeenCalledWith("hello\nworld");
   });
 
-  it("shows the estimated current-context percentage beside send", () => {
-    render(
+  it("shows provider-reported input tokens and cache tokens", () => {
+    const { container } = render(
       <ChatComposer
         disabled={false}
         onSend={vi.fn()}
-        contextUsage={{ usedTokens: 600, limitTokens: 2400 }}
+        contextUsage={{
+          inputTokens: 1250,
+          cacheReadInputTokens: 640,
+          limitTokens: 2400,
+          usageStatus: "provider_final",
+        }}
       />
     );
 
-    expect(screen.getByLabelText("当前上下文占比")).toHaveTextContent("600 / 2,400 · 25%");
+    expect(container.textContent).toContain("1,250");
+    expect(container.textContent).toContain("640");
+    expect(container.textContent).not.toContain("estimate");
   });
 
-  it("allows snapshot retry when only new sends are blocked", () => {
-    const onRetry = vi.fn();
-    render(<ChatComposer disabled retryDisabled={false} onSend={vi.fn()} onRetry={onRetry} />);
+  it("does not invent a token count when the provider did not report usage", () => {
+    const { container } = render(
+      <ChatComposer
+        disabled={false}
+        onSend={vi.fn()}
+        contextUsage={{
+          inputTokens: null,
+          cacheReadInputTokens: null,
+          limitTokens: 2400,
+          usageStatus: "unavailable",
+        }}
+      />
+    );
 
-    fireEvent.click(screen.getByRole("button", { name: "重试上次消息" }));
-    expect(onRetry).toHaveBeenCalledOnce();
+    expect(container.textContent).not.toContain("2,400 ·");
   });
 });

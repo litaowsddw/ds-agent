@@ -30,6 +30,13 @@ export interface ChatTraceEvent {
   created_at: string;
 }
 
+export interface ActualContextUsage {
+  inputTokens: number | null;
+  cacheReadInputTokens: number | null;
+  tokenLimit: number;
+  usageStatus: "provider_final" | "unavailable";
+}
+
 export type ChatExecutionMode = "autonomous" | "workflow";
 
 export interface SendMessageOptions {
@@ -55,6 +62,7 @@ interface ChatState {
   intent: string;
   subtaskCount: number;
   failedSendSnapshot: FailedSendSnapshot | null;
+  actualContextUsage: ActualContextUsage | null;
 
   sendMessage: (
     agentId: string,
@@ -83,6 +91,7 @@ export const useChatStore = create<ChatState>((set, get) => ({
   intent: "",
   subtaskCount: 0,
   failedSendSnapshot: null,
+  actualContextUsage: null,
 
   sendMessage: async (agentId, orgId, message, actorUserId, options) => {
     const generation = ++activeChatGeneration;
@@ -98,7 +107,7 @@ export const useChatStore = create<ChatState>((set, get) => ({
       },
     };
     let streamFailed = false;
-    set({ isGenerating: true, agentId, traceEvents: [], failedSendSnapshot: null });
+    set({ isGenerating: true, agentId, traceEvents: [], failedSendSnapshot: null, actualContextUsage: null });
 
     const userMsg: Message = {
       message_id: `temp_${Date.now()}`,
@@ -155,6 +164,22 @@ export const useChatStore = create<ChatState>((set, get) => ({
                   ]
                 : state.sessions,
             }));
+          }
+
+          if (event === "context_usage") {
+            const inputTokens = typeof data.input_tokens === "number" ? data.input_tokens : null;
+            const cacheReadInputTokens = typeof data.cache_read_input_tokens === "number"
+              ? data.cache_read_input_tokens
+              : null;
+            const tokenLimit = typeof data.token_limit === "number" ? data.token_limit : 2400;
+            set({
+              actualContextUsage: {
+                inputTokens,
+                cacheReadInputTokens,
+                tokenLimit,
+                usageStatus: data.usage_status === "provider_final" ? "provider_final" : "unavailable",
+              },
+            });
           }
 
           if (event === "error") {
@@ -218,6 +243,7 @@ export const useChatStore = create<ChatState>((set, get) => ({
       isGenerating: false,
       intent: "",
       subtaskCount: 0,
+      actualContextUsage: null,
     });
     try {
       const result = await apiRequest<{ session_id: string | null; messages: Message[] }>(
@@ -267,6 +293,7 @@ export const useChatStore = create<ChatState>((set, get) => ({
       traceEvents: [],
       intent: "",
       subtaskCount: 0,
+      actualContextUsage: null,
       failedSendSnapshot: null,
       isGenerating: false,
     });

@@ -20,6 +20,7 @@ from apps.api.app.gateway.rate_limiter import (
 )
 from apps.api.app.services.db.metering_db import UsageEventInput
 from apps.api.app.services.metering import (
+    NormalizedUsage,
     UsageRecorder,
     UsageTerminalOutcome,
     normalize_usage,
@@ -212,6 +213,10 @@ class LLMGateway:
         self.prompt_compiler = PromptContextCompiler()
         self.limiter = limiter or rate_limiter
         self.usage_recorder = usage_recorder
+        # A gateway instance is scoped to one chat request when it is used by
+        # the chat route. Keep only provider-reported facts, never a derived
+        # count from prompt text.
+        self.last_normalized_usage: NormalizedUsage | None = None
 
     async def generate(self, request: LLMCallRequest) -> LLMCallResponse:
         """执行一次 LLM 调用并记录日志（异步版本，支持 Redis 限流）。"""
@@ -267,6 +272,7 @@ class LLMGateway:
         await self._record_terminal(
             usage_context, dispatch_status="succeeded", raw_usage=response.usage
         )
+        self.last_normalized_usage = normalize_usage(response.usage)
         self._append_log(
             request=request,
             status="succeeded",
@@ -361,6 +367,7 @@ class LLMGateway:
             raise GatewayProviderError(error_message) from exc
 
         else:
+            self.last_normalized_usage = normalize_usage(usage) if usage else unavailable_usage()
             await record_terminal_once(dispatch_status="succeeded", raw_usage=usage)
             self._append_log(
                 request=request,

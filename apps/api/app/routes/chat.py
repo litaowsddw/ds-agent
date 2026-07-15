@@ -661,6 +661,16 @@ async def _chat_stream_events(
                     yield await emit("token", text=chunk, session_id=session_id)
             finally:
                 await llm_stream.aclose()
+            actual_usage = gateway.last_normalized_usage
+            yield await emit(
+                "context_usage",
+                input_tokens=(actual_usage.input_tokens if actual_usage else None),
+                cache_read_input_tokens=(
+                    actual_usage.cache_read_input_tokens if actual_usage else None
+                ),
+                usage_status=(actual_usage.usage_status if actual_usage else "unavailable"),
+                token_limit=_memory_compaction_threshold(agent.context_token_limit),
+            )
             response_text = "".join(response_parts)
             yield await emit(
                 "node_finished",
@@ -713,7 +723,13 @@ async def _chat_stream_events(
                 content=response_text,
                 estimated_tokens=max(1, len(response_text) // 4),
             )
-            if memory_context.should_compact:
+            actual_context_tokens = actual_usage.input_tokens if actual_usage else None
+            should_compact = (
+                actual_context_tokens >= _memory_compaction_threshold(agent.context_token_limit)
+                if actual_context_tokens is not None
+                else memory_context.should_compact
+            )
+            if should_compact:
                 messages_for_compaction = recent_messages[-18:]
                 if messages_for_compaction:
                     compacted_summary = await adapter.call(
