@@ -11,6 +11,14 @@ export interface Message {
   created_at: string;
 }
 
+export interface ChatSession {
+  session_id: string;
+  status: string;
+  compact_summary: string;
+  created_at: string;
+  updated_at: string;
+}
+
 export interface ChatTraceEvent {
   id: string;
   event: string;
@@ -39,6 +47,7 @@ export interface FailedSendSnapshot {
 
 interface ChatState {
   sessionId: string | null;
+  sessions: ChatSession[];
   messages: Message[];
   traceEvents: ChatTraceEvent[];
   isGenerating: boolean;
@@ -56,6 +65,7 @@ interface ChatState {
   ) => Promise<void>;
   retryLastMessage: () => Promise<void>;
   loadLatestSession: (agentId: string, actorUserId: string) => Promise<void>;
+  loadSessionHistory: (agentId: string, actorUserId: string) => Promise<void>;
   loadMessages: (sessionId: string) => Promise<void>;
   clearSession: () => void;
   subscribeMessages: () => () => void;
@@ -65,6 +75,7 @@ let activeChatGeneration = 0;
 
 export const useChatStore = create<ChatState>((set, get) => ({
   sessionId: null,
+  sessions: [],
   messages: [],
   traceEvents: [],
   isGenerating: false,
@@ -127,10 +138,23 @@ export const useChatStore = create<ChatState>((set, get) => ({
           }
 
           if (event === "run_finished") {
-            set({
-              sessionId: String(data.session_id ?? get().sessionId ?? ""),
+            const finishedSessionId = String(data.session_id ?? get().sessionId ?? "");
+            set((state) => ({
+              sessionId: finishedSessionId,
               isGenerating: false,
-            });
+              sessions: finishedSessionId && !state.sessions.some((item) => item.session_id === finishedSessionId)
+                ? [
+                    {
+                      session_id: finishedSessionId,
+                      status: "idle",
+                      compact_summary: "",
+                      created_at: new Date().toISOString(),
+                      updated_at: new Date().toISOString(),
+                    },
+                    ...state.sessions,
+                  ]
+                : state.sessions,
+            }));
           }
 
           if (event === "error") {
@@ -187,6 +211,7 @@ export const useChatStore = create<ChatState>((set, get) => ({
     set({
       agentId,
       sessionId: null,
+      sessions: [],
       messages: [],
       traceEvents: [],
       failedSendSnapshot: null,
@@ -211,6 +236,19 @@ export const useChatStore = create<ChatState>((set, get) => ({
     }
   },
 
+  loadSessionHistory: async (agentId, actorUserId) => {
+    if (!agentId || !actorUserId) return;
+    try {
+      const sessions = await apiRequest<ChatSession[]>(
+        `/sessions?agent_id=${encodeURIComponent(agentId)}&actor_user_id=${encodeURIComponent(actorUserId)}`
+      );
+      if (get().agentId !== agentId) return;
+      set({ sessions: [...sessions].sort((left, right) => right.updated_at.localeCompare(left.updated_at)) });
+    } catch {
+      if (get().agentId === agentId) set({ sessions: [] });
+    }
+  },
+
   loadMessages: async (sessionId) => {
     try {
       const result = await apiRequest<{ messages: Message[] }>(`/chat/sessions/${sessionId}/messages`);
@@ -224,6 +262,7 @@ export const useChatStore = create<ChatState>((set, get) => ({
     activeChatGeneration += 1;
     set({
       sessionId: null,
+      sessions: [],
       messages: [],
       traceEvents: [],
       intent: "",

@@ -1,5 +1,7 @@
 """Session API Schema。"""
 
+from datetime import datetime
+
 from pydantic import BaseModel, Field
 from typing import Any
 
@@ -24,6 +26,8 @@ class SessionResponse(BaseModel):
     queue_mode: SessionQueueMode
     status: SessionStatus
     compact_summary: str
+    created_at: datetime
+    updated_at: datetime
 
 
 class MessageAppendRequest(BaseModel):

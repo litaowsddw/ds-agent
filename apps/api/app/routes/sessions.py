@@ -186,6 +186,8 @@ def _to_session_response(s: SessionModel) -> SessionResponse:
         queue_mode=s.queue_mode,
         status=s.status,
         compact_summary=s.compact_summary or "",
+        created_at=s.created_at,
+        updated_at=s.updated_at,
     )
 
 

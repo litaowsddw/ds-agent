@@ -1,4 +1,4 @@
-import { render, screen } from "@testing-library/react";
+import { fireEvent, render, screen } from "@testing-library/react";
 import { describe, expect, it, vi } from "vitest";
 import ChatPanel from "@/components/chat/ChatPanel";
 import type { Agent } from "@/types/agent";
@@ -6,6 +6,8 @@ import type { Agent } from "@/types/agent";
 const { chatState } = vi.hoisted(() => ({
   chatState: {
     agentId: "agent-old",
+    sessionId: null,
+    sessions: [],
     messages: [
       {
         message_id: "old-message",
@@ -23,6 +25,8 @@ const { chatState } = vi.hoisted(() => ({
     sendMessage: vi.fn(),
     retryLastMessage: vi.fn(),
     loadLatestSession: vi.fn(),
+    loadSessionHistory: vi.fn(),
+    loadMessages: vi.fn(),
     clearSession: vi.fn(),
   },
 }));
@@ -44,6 +48,43 @@ function agent(agentId: string): Agent {
 }
 
 describe("ChatPanel Agent rendering gate", () => {
+  it("shows saved conversations and loads the selected session", async () => {
+    Element.prototype.scrollIntoView = vi.fn();
+    chatState.agentId = "agent-old";
+    chatState.sessionId = "session-current";
+    chatState.sessions = [
+      {
+        session_id: "session-current",
+        status: "idle",
+        compact_summary: "Current planning discussion",
+        created_at: "2026-07-12T01:00:00Z",
+        updated_at: "2026-07-12T02:00:00Z",
+      },
+      {
+        session_id: "session-earlier",
+        status: "idle",
+        compact_summary: "Earlier discussion",
+        created_at: "2026-07-11T01:00:00Z",
+        updated_at: "2026-07-11T02:00:00Z",
+      },
+    ];
+    render(
+      <ChatPanel
+        agentId="agent-old"
+        orgId="org-a"
+        actorUserId="user-a"
+        workflows={[]}
+        agent={agent("agent-old")}
+      />
+    );
+
+    const history = screen.getByLabelText("会话历史");
+    expect(history).toHaveValue("session-current");
+    expect(screen.getByRole("option", { name: "Earlier discussion" })).toBeInTheDocument();
+    fireEvent.change(history, { target: { value: "session-earlier" } });
+    expect(chatState.loadMessages).toHaveBeenCalledWith("session-earlier");
+  });
+
   it("hides old messages in the same render that switches the Agent prop", () => {
     Element.prototype.scrollIntoView = vi.fn();
     const { rerender } = render(

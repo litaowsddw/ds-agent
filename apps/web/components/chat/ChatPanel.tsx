@@ -23,7 +23,9 @@ export default function ChatPanel({
   agent: Agent | null;
 }) {
   const {
+    sessionId,
     messages,
+    sessions,
     traceEvents,
     isGenerating,
     intent,
@@ -32,6 +34,8 @@ export default function ChatPanel({
     sendMessage,
     retryLastMessage,
     loadLatestSession,
+    loadSessionHistory,
+    loadMessages,
     clearSession,
   } = useChatStore();
   const isCurrentAgent = useChatStore((state) => state.agentId) === agentId;
@@ -77,7 +81,16 @@ export default function ChatPanel({
 
   useEffect(() => {
     void loadLatestSession(agentId, actorUserId);
-  }, [agentId, actorUserId, loadLatestSession]);
+    void loadSessionHistory(agentId, actorUserId);
+  }, [agentId, actorUserId, loadLatestSession, loadSessionHistory]);
+
+  const formatSessionLabel = (session: (typeof sessions)[number]) => {
+    const summary = session.compact_summary.trim();
+    if (summary) return summary.length > 28 ? `${summary.slice(0, 28)}…` : summary;
+    const timestamp = new Date(session.updated_at || session.created_at);
+    const date = Number.isNaN(timestamp.getTime()) ? "" : timestamp.toLocaleString();
+    return date ? `会话 · ${date}` : `会话 · ${session.session_id.slice(-8)}`;
+  };
 
   useEffect(() => {
     const defaultWorkflow = defaultWorkflowId
@@ -113,6 +126,23 @@ export default function ChatPanel({
           >
             新建对话
           </button>
+          <select
+            aria-label="会话历史"
+            className="ml-2 max-w-52 rounded border border-[#dfe4ee] bg-white px-2 py-1 text-xs text-[#475467]"
+            disabled={visibleIsGenerating || sessions.length === 0}
+            onChange={(event) => {
+              const nextSessionId = event.target.value;
+              if (nextSessionId) void loadMessages(nextSessionId);
+            }}
+            value={isCurrentAgent ? sessionId || "" : ""}
+          >
+            <option value="">{sessions.length === 0 ? "暂无历史会话" : "选择历史会话"}</option>
+            {sessions.map((session) => (
+              <option key={session.session_id} value={session.session_id}>
+                {formatSessionLabel(session)}
+              </option>
+            ))}
+          </select>
         </div>
 
         <div className="min-h-0 flex-1 space-y-3 overflow-y-auto px-4 py-3">
