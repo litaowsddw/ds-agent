@@ -84,7 +84,7 @@ export default function Sidebar({
           <StatusPill status={apiStatus} />
         </div>
         <p className="text-xs leading-5 text-[#667085]">
-          {process.env.NEXT_PUBLIC_API_BASE_URL ?? "http://127.0.0.1:18000"}
+          {process.env.NEXT_PUBLIC_API_BASE_URL ?? "/api"}
         </p>
       </div>
 
