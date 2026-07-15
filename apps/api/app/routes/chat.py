@@ -329,6 +329,7 @@ async def _chat_stream_events(
         build_three_layer_memory_context,
         format_recent_messages,
     )
+    from app.services.memory_vector import memory_vector_service
     from packages.runtime.llm_caller import LLMCallerAdapter
 
     run_id = new_id("chatrun")
@@ -469,10 +470,18 @@ async def _chat_stream_events(
             ).as_metadata(),
         )
         recent_messages = await session_message_db.list_recent_uncompacted_messages(db, session_id, limit=24)
-        memories, _ = await memory_db.list_agent_memories(db, agent.agent_id, limit=20)
+        memories = await memory_vector_service.recall(
+            db,
+            org_id=org_id,
+            agent_id=agent.agent_id,
+            query=request.message,
+            limit=5,
+        )
         memory_context = build_three_layer_memory_context(
             recent_messages=recent_messages,
-            compact_summary=(current_session.compact_summary if current_session else "") or "",
+            # Compressed summaries are recalled from the vector store above;
+            # they are no longer injected wholesale into every turn.
+            compact_summary="",
             memories=memories,
             token_threshold=_memory_compaction_threshold(agent.context_token_limit),
         )
@@ -640,6 +649,27 @@ async def _chat_stream_events(
                 compact_summary=memory_context.compact_summary,
                 long_term_context=memory_context.long_term_context,
             )
+            from app.services.context_tokens import preflight_chat_context
+
+            preflight = preflight_chat_context(
+                provider=model_provider,
+                model=model_name,
+                compiled_prompt=str(compiled_prompt["compiled_prompt"]),
+                components=compiled_prompt["context_breakdown"],
+            )
+            # This happens after all prompt assembly (memory, selected Skill and
+            # protocol wrappers) but before the main Agent LLM request starts.
+            # It is therefore useful for an immediate UI context meter without
+            # presenting a provider cache prediction as an actual cache hit.
+            yield await emit(
+                "context_preflight",
+                input_tokens=preflight.input_tokens,
+                stable_prefix_tokens=preflight.stable_prefix_tokens,
+                tokenizer_status=preflight.status,
+                tokenizer=preflight.tokenizer,
+                token_limit=_memory_compaction_threshold(agent.context_token_limit),
+                prompt_breakdown=preflight.breakdown,
+            )
             llm_request = LLMCallRequest(
                 provider=model_provider,
                 model=model_name,
@@ -673,8 +703,11 @@ async def _chat_stream_events(
                 ),
                 usage_status=(actual_usage.usage_status if actual_usage else "unavailable"),
                 token_limit=_memory_compaction_threshold(agent.context_token_limit),
-                prompt_bytes=len(str(compiled_prompt["compiled_prompt"]).encode("utf-8")),
-                prompt_breakdown=compiled_prompt["context_breakdown"],
+                preflight_input_tokens=preflight.input_tokens,
+                stable_prefix_tokens=preflight.stable_prefix_tokens,
+                tokenizer_status=preflight.status,
+                tokenizer=preflight.tokenizer,
+                prompt_breakdown=preflight.breakdown,
             )
             response_text = "".join(response_parts)
             yield await emit(
@@ -695,7 +728,7 @@ async def _chat_stream_events(
             memory_candidate = build_memory_extraction_candidate(request.message)
             if memory_candidate is not None:
                 memory_type, memory_content = memory_candidate
-                await memory_db.create_memory(
+                memory = await memory_db.create_memory(
                     db,
                     memory_id=new_id("mem"),
                     org_id=org_id,
@@ -706,6 +739,12 @@ async def _chat_stream_events(
                     confidence=0.85,
                     source="auto_hermes",
                 )
+                try:
+                    memory_vector_service.upsert(memory)
+                except Exception:
+                    # A transient vector outage must not discard a successful
+                    # user-visible answer or the durable SQL memory record.
+                    pass
             if selected_skill_context is not None:
                 await skill_evaluation_db.create_evaluation(
                     db,
@@ -746,7 +785,26 @@ async def _chat_stream_events(
                         temperature=0,
                         max_tokens=768,
                     )
-                    await session_db.compact_session(db, session_id, compacted_summary.strip())
+                    compacted_summary = compacted_summary.strip()
+                    if compacted_summary:
+                        summary_memory = await memory_db.create_memory(
+                            db,
+                            memory_id=new_id("mem"),
+                            org_id=org_id,
+                            agent_id=request.agent_id,
+                            memory_type="session_summary",
+                            content=compacted_summary,
+                            summary=compacted_summary[:240],
+                            confidence=0.9,
+                            source=f"session_compaction:{session_id}",
+                        )
+                        try:
+                            memory_vector_service.upsert(summary_memory)
+                        except Exception:
+                            pass
+                    # Keep only session metadata in SQL. The summary itself is
+                    # recalled by vector similarity on the next user message.
+                    await session_db.compact_session(db, session_id, "")
                     await session_message_db.mark_messages_compacted(
                         db,
                         [message.message_id for message in messages_for_compaction],
@@ -856,49 +914,83 @@ def _prompt_structure_breakdown(
     long_term_context: str,
     current_message: str,
 ) -> list[dict[str, object]]:
-    """Return non-sensitive byte spans in final Prompt order.
+    """Return serialized component spans in final Prompt order.
 
-    Providers report only aggregate prompt_tokens. These spans are deliberately
-    measured in UTF-8 bytes so that each section percentage is exact for the
-    serialized prompt and never pretends to be a provider tokenizer result.
+    ``start``/``end`` index the exact JSON-serialized text sent upstream. They
+    are private server-side inputs for the official tokenizer; the SSE payload
+    deliberately exposes token totals only, never prompt content.
     """
 
     def byte_length(value: str) -> int:
         return len(value.encode("utf-8"))
 
-    user_history = []
-    assistant_history = []
-    other_history = []
-    for item in recent_messages:
+    sections: list[dict[str, object]] = []
+
+    def encoded_value(value: str) -> str:
+        # PromptContextCompiler uses the same JSON settings. Excluding the
+        # surrounding JSON quotes means wrapper punctuation is accounted as
+        # protocol rather than falsely attributed to message content.
+        return json.dumps(value, ensure_ascii=False)[1:-1]
+
+    def add_section(
+        key: str,
+        label: str,
+        value: str,
+        *,
+        search_from: int = 0,
+        use_last_match: bool = False,
+    ) -> int:
+        if not value:
+            return search_from
+        needle = encoded_value(value)
+        start = compiled_prompt.rfind(needle) if use_last_match else compiled_prompt.find(needle, search_from)
+        if start < 0:
+            return search_from
+        end = start + len(needle)
+        sections.append(
+            {
+                "key": key,
+                "label": label,
+                "bytes": len(needle.encode("utf-8")),
+                "start": start,
+                "end": end,
+            }
+        )
+        return end
+
+    add_section("system", "System prompt", system_prompt)
+    add_section("agent", "Agent configuration", agent_description)
+    add_section("tools", "Tools / Skills catalog", skill_catalog)
+    add_section("loaded_skill", "Loaded skill instructions", skill_context)
+
+    memory_start = compiled_prompt.find(encoded_value("[Hermes Memory Layer 1: Recent Turns]"))
+    memory_cursor = max(0, memory_start)
+    for item in sorted(recent_messages, key=lambda value: int(getattr(value, "sequence", 0))):
         role = str(getattr(item, "role", "") or "")
         content = str(getattr(item, "content", "") or "")
         sequence = str(getattr(item, "sequence", "") or "")
         line = f"{sequence}. {role}: {content}"
         if role == "user":
-            user_history.append(line)
+            memory_cursor = add_section("user_history", "User history", line, search_from=memory_cursor)
         elif role == "assistant":
-            assistant_history.append(line)
+            memory_cursor = add_section(
+                "assistant_history", "Assistant history", line, search_from=memory_cursor
+            )
         else:
-            other_history.append(line)
+            memory_cursor = add_section("other_history", "Other history", line, search_from=memory_cursor)
 
-    values = [
-        ("system", "System prompt", f"{system_prompt}\n{agent_description}".strip()),
-        ("tools", "Tools / Skills", f"{skill_catalog}\n{skill_context}".strip()),
-        ("user_history", "User history", "\n".join(user_history)),
-        ("assistant_history", "Assistant history", "\n".join(assistant_history)),
-        ("memory", "Summary / long-term memory", f"{compact_summary}\n{long_term_context}".strip()),
-        ("other_history", "Other history", "\n".join(other_history)),
-        ("current_user", "Current user message", current_message),
-    ]
-    sections = [
-        {"key": key, "label": label, "bytes": byte_length(value)}
-        for key, label, value in values
-        if value
-    ]
+    memory_cursor = add_section(
+        "memory_summary", "Compressed session summary", compact_summary, search_from=memory_cursor
+    )
+    add_section("long_term_memory", "Long-term memory", long_term_context, search_from=memory_cursor)
+    add_section("current_user", "Current user message", current_message, use_last_match=True)
+
     assigned_bytes = sum(int(section["bytes"]) for section in sections)
     protocol_bytes = max(0, byte_length(compiled_prompt) - assigned_bytes)
     if protocol_bytes:
-        sections.append({"key": "protocol", "label": "Prompt protocol / wrappers", "bytes": protocol_bytes})
+        sections.append(
+            {"key": "protocol", "label": "Prompt protocol / wrappers", "bytes": protocol_bytes}
+        )
     return sections
 
 

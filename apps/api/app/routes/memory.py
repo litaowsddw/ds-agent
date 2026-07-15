@@ -12,6 +12,7 @@ from app.schemas.memory import MemoryCreateRequest, MemoryRecallRequest, MemoryR
 from app.services.db.agent_db import agent_db
 from app.services.db.identity_db import membership_db
 from app.services.db.runtime_db import memory_db
+from app.services.memory_vector import memory_vector_service
 
 router = APIRouter()
 
@@ -38,6 +39,12 @@ async def create_memory(
             confidence=request.confidence,
             source=request.source,
         )
+        try:
+            memory_vector_service.upsert(memory)
+        except Exception:
+            # The SQL record remains durable and will be available for retry or
+            # lexical fallback if the configured vector backend is unavailable.
+            pass
         await session.commit()
     except ValueError as exc:
         await session.rollback()

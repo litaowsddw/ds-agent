@@ -175,7 +175,10 @@ export default function ChatPanel({
                     cacheReadInputTokens: actualContextUsage.cacheReadInputTokens,
                     limitTokens: actualContextUsage.tokenLimit || contextTokenLimit,
                     usageStatus: actualContextUsage.usageStatus,
-                    promptBytes: actualContextUsage.promptBytes,
+                    preflightInputTokens: actualContextUsage.preflightInputTokens,
+                    stablePrefixTokens: actualContextUsage.stablePrefixTokens,
+                    tokenizerStatus: actualContextUsage.tokenizerStatus,
+                    tokenizer: actualContextUsage.tokenizer,
                     promptBreakdown: actualContextUsage.promptBreakdown,
                   }
                 : {
@@ -183,7 +186,10 @@ export default function ChatPanel({
                     cacheReadInputTokens: null,
                     limitTokens: contextTokenLimit,
                     usageStatus: "unavailable",
-                    promptBytes: null,
+                    preflightInputTokens: null,
+                    stablePrefixTokens: null,
+                    tokenizerStatus: "characters_divided_by_4",
+                    tokenizer: null,
                     promptBreakdown: [],
                   }
             }

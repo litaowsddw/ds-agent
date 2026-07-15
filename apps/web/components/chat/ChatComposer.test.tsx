@@ -25,10 +25,13 @@ describe("ChatComposer", () => {
           cacheReadInputTokens: 640,
           limitTokens: 2400,
           usageStatus: "provider_final",
-          promptBytes: 1800,
+          preflightInputTokens: 1248,
+          stablePrefixTokens: 960,
+          tokenizerStatus: "official_tokenizer",
+          tokenizer: "deepseek-v3-official",
           promptBreakdown: [
-            { key: "system", label: "System prompt", bytes: 360 },
-            { key: "tools", label: "Tools / Skills", bytes: 1440 },
+            { key: "system", label: "System prompt", tokens: 250 },
+            { key: "tools", label: "Tools / Skills", tokens: 998 },
           ],
         }}
       />
@@ -49,7 +52,10 @@ describe("ChatComposer", () => {
           cacheReadInputTokens: null,
           limitTokens: 2400,
           usageStatus: "unavailable",
-          promptBytes: null,
+          preflightInputTokens: null,
+          stablePrefixTokens: null,
+          tokenizerStatus: "characters_divided_by_4",
+          tokenizer: null,
           promptBreakdown: [],
         }}
       />

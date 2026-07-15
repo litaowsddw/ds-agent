@@ -35,8 +35,11 @@ export interface ActualContextUsage {
   cacheReadInputTokens: number | null;
   tokenLimit: number;
   usageStatus: "provider_final" | "unavailable";
-  promptBytes: number | null;
-  promptBreakdown: Array<{ key: string; label: string; bytes: number }>;
+  preflightInputTokens: number | null;
+  stablePrefixTokens: number | null;
+  tokenizerStatus: "official_tokenizer" | "official_total_only" | "characters_divided_by_4";
+  tokenizer: string | null;
+  promptBreakdown: Array<{ key: string; label: string; tokens: number }>;
 }
 
 export type ChatExecutionMode = "autonomous" | "workflow";
@@ -168,29 +171,42 @@ export const useChatStore = create<ChatState>((set, get) => ({
             }));
           }
 
-          if (event === "context_usage") {
+          if (event === "context_preflight" || event === "context_usage") {
             const inputTokens = typeof data.input_tokens === "number" ? data.input_tokens : null;
             const cacheReadInputTokens = typeof data.cache_read_input_tokens === "number"
               ? data.cache_read_input_tokens
               : null;
             const tokenLimit = typeof data.token_limit === "number" ? data.token_limit : 2400;
-            const promptBytes = typeof data.prompt_bytes === "number" ? data.prompt_bytes : null;
+            const previous = get().actualContextUsage;
+            const preflightInputTokens = typeof data.preflight_input_tokens === "number"
+              ? data.preflight_input_tokens
+              : event === "context_preflight" && typeof data.input_tokens === "number"
+                ? data.input_tokens
+                : previous?.preflightInputTokens ?? null;
+            const stablePrefixTokens = typeof data.stable_prefix_tokens === "number"
+              ? data.stable_prefix_tokens
+              : previous?.stablePrefixTokens ?? null;
             const promptBreakdown = Array.isArray(data.prompt_breakdown)
               ? data.prompt_breakdown.flatMap((item) => {
                   if (!item || typeof item !== "object") return [];
                   const value = item as Record<string, unknown>;
-                  return typeof value.key === "string" && typeof value.label === "string" && typeof value.bytes === "number"
-                    ? [{ key: value.key, label: value.label, bytes: value.bytes }]
+                  return typeof value.key === "string" && typeof value.label === "string" && typeof value.tokens === "number"
+                    ? [{ key: value.key, label: value.label, tokens: value.tokens }]
                     : [];
                 })
-              : [];
+              : previous?.promptBreakdown ?? [];
             set({
               actualContextUsage: {
-                inputTokens,
-                cacheReadInputTokens,
+                inputTokens: event === "context_usage" ? inputTokens : previous?.inputTokens ?? null,
+                cacheReadInputTokens: event === "context_usage" ? cacheReadInputTokens : previous?.cacheReadInputTokens ?? null,
                 tokenLimit,
-                usageStatus: data.usage_status === "provider_final" ? "provider_final" : "unavailable",
-                promptBytes,
+                usageStatus: event === "context_usage" && data.usage_status === "provider_final" ? "provider_final" : previous?.usageStatus ?? "unavailable",
+                preflightInputTokens,
+                stablePrefixTokens,
+                tokenizerStatus: data.tokenizer_status === "official_tokenizer" || data.tokenizer_status === "official_total_only" || data.tokenizer_status === "characters_divided_by_4"
+                  ? data.tokenizer_status
+                  : "characters_divided_by_4",
+                tokenizer: typeof data.tokenizer === "string" ? data.tokenizer : previous?.tokenizer ?? null,
                 promptBreakdown,
               },
             });
