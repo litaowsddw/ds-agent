@@ -52,9 +52,9 @@ async def trigger_evolution(
         if request.async_exec:
             # 异步执行
             from apps.worker.app.tasks.evolver import run_evolution_cycle
-            task = run_evolution_cycle.delay(
-                agent_id=request.agent_id,
-                org_id=request.org_id,
+            task = run_evolution_cycle.apply_async(
+                kwargs={"agent_id": request.agent_id, "org_id": request.org_id},
+                queue="workflow.default",
             )
             return {
                 "status": "triggered",
