@@ -171,7 +171,7 @@ export default function ChatPanel({
             onSend={handleSend}
             onRetry={visibleFailedSnapshot ? retryLastMessage : undefined}
             retryBlockedMessage={retryBlockedMessage}
-            contextUsage={isCurrentAgent ? { usedTokens: estimatedContextTokens, limitTokens: contextTokenLimit } : undefined}
+            contextUsage={{ usedTokens: estimatedContextTokens, limitTokens: contextTokenLimit }}
           >
             <div className="mb-3 flex flex-wrap items-center gap-2">
               <div className="inline-flex rounded-lg border border-[#dfe4ee] bg-white p-1 text-xs">
