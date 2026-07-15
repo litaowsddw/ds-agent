@@ -108,7 +108,9 @@ def test_full_api_integration_chain() -> None:
         },
     )
     assert provider_response.status_code == 200
-    assert provider_response.json()["api_key_masked"] == "sk-t...-key"
+    masked_api_key = provider_response.json()["api_key_masked"]
+    assert masked_api_key == "sk-tes...-key"
+    assert masked_api_key != "sk-test-provider-key"
 
     provider_list_response = client.get(
         "/model-providers",
