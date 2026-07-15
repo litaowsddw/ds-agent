@@ -10,25 +10,9 @@ import { EmptyText, Metric } from "@/components/ui/DataDisplay";
 import { TextArea, TextInput } from "@/components/ui/Form";
 import Panel from "@/components/ui/Panel";
 import WorkspaceRequired from "@/components/ui/WorkspaceRequired";
+import { PROVIDER_PRESETS } from "@/lib/provider-presets";
 import { useRuntimeStore } from "@/stores/runtime";
 import { useWorkspaceStore } from "@/stores/workspace";
-
-const PROVIDER_PRESETS = [
-  {
-    key: "deepseek",
-    label: "DeepSeek",
-    baseUrl: "https://api.deepseek.com/v1",
-    models: "deepseek-chat, deepseek-reasoner",
-    defaultModel: "deepseek-chat",
-  },
-  {
-    key: "ollama",
-    label: "Ollama Local",
-    baseUrl: "http://127.0.0.1:11434/v1",
-    models: "deepseek-r1:1.5b",
-    defaultModel: "deepseek-r1:1.5b",
-  },
-];
 
 export default function ModelsPage() {
   const workspace = useWorkspaceStore((s) => s.workspace);
@@ -66,7 +50,7 @@ export default function ModelsPage() {
 
   function applyPreset(preset: (typeof PROVIDER_PRESETS)[number]) {
     setProviderForm({
-      providerKey: providerForm.providerKey || preset.key,
+      providerKey: preset.key,
       displayName: preset.label,
       baseUrl: preset.baseUrl,
       apiKey: providerForm.apiKey,
