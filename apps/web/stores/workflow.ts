@@ -389,7 +389,6 @@ export const useWorkflowStore = create<WorkflowStore>((set, get) => ({
     const run = await apiRequest<WorkflowRun>("/workflow-runs", {
       method: "POST",
       body: {
-        actor_user_id: actorUserId,
         version_id: workflow.published_version_id,
         input_data: { text: input },
         async_mode: false,
