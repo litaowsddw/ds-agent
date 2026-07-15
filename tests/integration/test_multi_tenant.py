@@ -177,6 +177,57 @@ def test_memory_route_distinguishes_missing_agent_from_cross_org_access() -> Non
     assert missing_response.status_code == 404
 
 
+def test_session_routes_distinguish_missing_session_from_cross_org_access() -> None:
+    """Existing foreign sessions return 403, while unknown IDs remain 404."""
+
+    client = TestClient(app)
+    suffix = uuid4().hex
+
+    owner_a = client.post(
+        "/identity/users/register",
+        json={"email": f"session-owner-a-{suffix}@example.com", "display_name": "Owner A", "password": "password123"},
+    ).json()["user_id"]
+    org_a = client.post(
+        "/identity/organizations",
+        json={"creator_user_id": owner_a, "name": "Session Org A"},
+    ).json()["org_id"]
+    agent_a = client.post(
+        "/agents",
+        json={"actor_user_id": owner_a, "org_id": org_a, "name": "Session Agent A", "description": ""},
+    ).json()["agent_id"]
+    session_a = client.post(
+        "/sessions",
+        json={"actor_user_id": owner_a, "agent_id": agent_a, "queue_mode": "queue"},
+    ).json()["session_id"]
+
+    owner_b = client.post(
+        "/identity/users/register",
+        json={"email": f"session-owner-b-{suffix}@example.com", "display_name": "Owner B", "password": "password123"},
+    ).json()["user_id"]
+
+    foreign_responses = [
+        client.get(f"/sessions/{session_a}", params={"actor_user_id": owner_b}),
+        client.get(f"/sessions/{session_a}/messages", params={"actor_user_id": owner_b}),
+        client.post(
+            f"/sessions/{session_a}/messages",
+            json={"actor_user_id": owner_b, "role": "user", "content": "do not write"},
+        ),
+        client.post(
+            f"/sessions/{session_a}/compact",
+            json={"actor_user_id": owner_b, "summary": "do not compact"},
+        ),
+        client.get("/sessions", params={"agent_id": agent_a, "actor_user_id": owner_b}),
+    ]
+    for response in foreign_responses:
+        assert response.status_code == 403
+        assert response.json() == {"detail": "Forbidden"}
+
+    missing_response = client.get(
+        "/sessions/ses_missing", params={"actor_user_id": owner_b}
+    )
+    assert missing_response.status_code == 404
+
+
 def test_multi_tenant_workflow_isolation() -> None:
     """验证不同组织的 Workflow 完全隔离。"""
 

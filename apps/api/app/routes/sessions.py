@@ -32,12 +32,10 @@ async def create_session(
     session: AsyncSession = Depends(get_db_session),
 ) -> SessionResponse:
     """创建 Agent Session。"""
-    try:
-        agent = await agent_db.get_agent_required(session, request.agent_id)
-        await membership_db.assert_org_access(
-            session, user_id=request.actor_user_id, org_id=agent.org_id
-        )
+    agent = await _get_agent_or_404(session, request.agent_id)
+    await _assert_session_org_access(session, request.actor_user_id, agent.org_id)
 
+    try:
         s = await session_db.create_session(
             session,
             session_id=new_id("ses"),
@@ -61,14 +59,9 @@ async def list_sessions(
     session: AsyncSession = Depends(get_db_session),
 ) -> list[SessionResponse]:
     """列出 Agent 下的 Session。"""
-    try:
-        agent = await agent_db.get_agent_required(session, agent_id)
-        await membership_db.assert_org_access(
-            session, user_id=actor_user_id, org_id=agent.org_id
-        )
-        sessions, _ = await session_db.list_agent_sessions(session, agent_id)
-    except ValueError as exc:
-        raise HTTPException(status_code=404, detail=str(exc)) from exc
+    agent = await _get_agent_or_404(session, agent_id)
+    await _assert_session_org_access(session, actor_user_id, agent.org_id)
+    sessions, _ = await session_db.list_agent_sessions(session, agent_id)
 
     return [_to_session_response(s) for s in sessions]
 
@@ -80,13 +73,8 @@ async def get_session(
     db_session: AsyncSession = Depends(get_db_session),
 ) -> SessionResponse:
     """读取 Agent Session。"""
-    try:
-        s = await session_db.get_session_required(db_session, session_id)
-        await membership_db.assert_org_access(
-            db_session, user_id=actor_user_id, org_id=s.org_id
-        )
-    except ValueError as exc:
-        raise HTTPException(status_code=404, detail=str(exc)) from exc
+    s = await _get_session_or_404(db_session, session_id)
+    await _assert_session_org_access(db_session, actor_user_id, s.org_id)
 
     return _to_session_response(s)
 
@@ -98,12 +86,10 @@ async def append_message(
     session: AsyncSession = Depends(get_db_session),
 ) -> MessageResponse:
     """向 Session 追加消息。"""
-    try:
-        s = await session_db.get_session_required(session, session_id)
-        await membership_db.assert_org_access(
-            session, user_id=request.actor_user_id, org_id=s.org_id
-        )
+    s = await _get_session_or_404(session, session_id)
+    await _assert_session_org_access(session, request.actor_user_id, s.org_id)
 
+    try:
         if s.status == "closed":
             raise ValueError("会话已关闭")
 
@@ -133,14 +119,9 @@ async def list_messages(
     session: AsyncSession = Depends(get_db_session),
 ) -> list[MessageResponse]:
     """列出 Session 消息。"""
-    try:
-        s = await session_db.get_session_required(session, session_id)
-        await membership_db.assert_org_access(
-            session, user_id=actor_user_id, org_id=s.org_id
-        )
-        messages = await session_message_db.list_session_messages(session, session_id)
-    except ValueError as exc:
-        raise HTTPException(status_code=404, detail=str(exc)) from exc
+    s = await _get_session_or_404(session, session_id)
+    await _assert_session_org_access(session, actor_user_id, s.org_id)
+    messages = await session_message_db.list_session_messages(session, session_id)
 
     return [_to_message_response(m) for m in messages]
 
@@ -152,8 +133,11 @@ async def compact_session(
     db_session: AsyncSession = Depends(get_db_session),
 ) -> SessionResponse:
     """写入 Session 压缩摘要。"""
+    s = await _get_session_or_404(db_session, session_id)
+    await _assert_session_org_access(db_session, request.actor_user_id, s.org_id)
+
     try:
-        s = await session_db.compact_session(db_session, session_id, request.summary)
+        s = await session_db.compact_session(db_session, s.session_id, request.summary)
         await session_message_db.mark_compacted(db_session, session_id)
         await db_session.commit()
     except ValueError as exc:
@@ -161,6 +145,35 @@ async def compact_session(
         raise HTTPException(status_code=404, detail=str(exc)) from exc
 
     return _to_session_response(s)
+
+
+async def _get_agent_or_404(session: AsyncSession, agent_id: str):
+    """Resolve an Agent without treating absence as an authorization failure."""
+
+    try:
+        return await agent_db.get_agent_required(session, agent_id)
+    except ValueError as exc:
+        raise HTTPException(status_code=404, detail=str(exc)) from exc
+
+
+async def _get_session_or_404(session: AsyncSession, session_id: str) -> SessionModel:
+    """Resolve a Session without treating absence as an authorization failure."""
+
+    try:
+        return await session_db.get_session_required(session, session_id)
+    except ValueError as exc:
+        raise HTTPException(status_code=404, detail=str(exc)) from exc
+
+
+async def _assert_session_org_access(
+    session: AsyncSession, actor_user_id: str, org_id: str
+) -> None:
+    """Reject an existing foreign-organization session without exposing it."""
+
+    try:
+        await membership_db.assert_org_access(session, user_id=actor_user_id, org_id=org_id)
+    except ValueError as exc:
+        raise HTTPException(status_code=403, detail="Forbidden") from exc
 
 
 def _to_session_response(s: SessionModel) -> SessionResponse:
