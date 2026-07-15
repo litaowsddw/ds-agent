@@ -43,6 +43,13 @@ export interface MCPTool {
   risk_level: string;
 }
 
+/** Import result from a discovered external MCP service. */
+export interface MCPAgentImportResult {
+  agent_id: string;
+  server: MCPServer;
+  tools: MCPTool[];
+}
+
 /** Memory 条目 */
 export interface MemoryItem {
   memory_id: string;

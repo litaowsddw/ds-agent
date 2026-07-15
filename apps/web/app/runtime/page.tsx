@@ -15,6 +15,7 @@ import { TextInput, TextArea } from "@/components/ui/Form";
 import { PrimaryButton } from "@/components/ui/Button";
 import { Metric, ResourceList } from "@/components/ui/DataDisplay";
 import WorkspaceRequired from "@/components/ui/WorkspaceRequired";
+import ExternalCapabilityImport from "@/components/runtime/ExternalCapabilityImport";
 
 export default function RuntimePage() {
   const workspace = useWorkspaceStore((s) => s.workspace);
@@ -118,6 +119,12 @@ export default function RuntimePage() {
 
       {/* Skill Registry */}
       <Panel title="Skill Registry" icon={<Brain size={17} />}>
+        <p className="mb-3 text-sm leading-6 text-[#667085]">
+          推荐使用下方 MCP Tools 面板中的 GitHub SKILL.md 导入；此处保留手动创建方式。
+        </p>
+        <details open className="border-t border-[#e7ebf3] pt-4">
+          <summary className="cursor-pointer text-sm font-medium text-[#344054]">高级：手动创建 Skill</summary>
+          <div className="mt-3">
         <TextInput
           label="Skill 名称"
           value={skillForm.name}
@@ -140,6 +147,8 @@ export default function RuntimePage() {
             }
           }}
         />
+          </div>
+        </details>
         <ResourceList items={skills.map((s) => `${s.name} · ${s.description}`)} />
       </Panel>
 
@@ -194,6 +203,10 @@ export default function RuntimePage() {
 
       {/* MCP Tools */}
       <Panel title="MCP Tools" icon={<Server size={17} />}>
+        <ExternalCapabilityImport />
+        <details className="mt-5 border-t border-[#e7ebf3] pt-4">
+          <summary className="cursor-pointer text-sm font-medium text-[#344054]">高级：手动创建 MCP Server 和 Tool</summary>
+          <div className="mt-3">
         <TextInput
           label="Server 名称"
           value={mcpForm.serverName}
@@ -221,6 +234,8 @@ export default function RuntimePage() {
             }
           }}
         />
+          </div>
+        </details>
         <ResourceList
           items={[
             ...mcpServers.map((s) => `Server: ${s.name}`),

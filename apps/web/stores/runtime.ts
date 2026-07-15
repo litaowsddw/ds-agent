@@ -10,6 +10,7 @@ import type {
   ContextBundle,
   LLMCallLog,
   MCPServer,
+  MCPAgentImportResult,
   MCPTool,
   MemoryItem,
   ModelProvider,
@@ -38,6 +39,8 @@ interface RuntimeStore {
 
   skillForm: { name: string; description: string };
   mcpForm: { serverName: string; url: string; toolName: string };
+  mcpImportForm: { name: string; url: string; bearerToken: string; apiKey: string };
+  skillImportUrl: string;
   memoryForm: string;
   sessionInput: string;
   providerForm: {
@@ -51,6 +54,8 @@ interface RuntimeStore {
 
   setSkillForm: (form: { name: string; description: string }) => void;
   setMcpForm: (form: { serverName: string; url: string; toolName: string }) => void;
+  setMcpImportForm: (form: RuntimeStore["mcpImportForm"]) => void;
+  setSkillImportUrl: (sourceUrl: string) => void;
   setMemoryForm: (text: string) => void;
   setSessionInput: (text: string) => void;
   setProviderForm: (form: RuntimeStore["providerForm"]) => void;
@@ -60,6 +65,8 @@ interface RuntimeStore {
   createSkill: (actorUserId: string, orgId: string, agentId: string) => Promise<void>;
   suggestSkillEvaluationPatch: (actorUserId: string, evaluationId: string) => Promise<void>;
   createMcpTool: (actorUserId: string, orgId: string, agentId: string) => Promise<void>;
+  importMcpServer: (actorUserId: string, agentId: string) => Promise<void>;
+  importGithubSkill: (actorUserId: string, orgId: string, agentId: string) => Promise<void>;
   createMemory: (actorUserId: string, agentId: string) => Promise<void>;
   saveModelProvider: (actorUserId: string, orgId: string) => Promise<void>;
   createSessionAndAssembleContext: (actorUserId: string, agentId: string) => Promise<void>;
@@ -85,6 +92,8 @@ export const useRuntimeStore = create<RuntimeStore>((set, get) => ({
 
   skillForm: { name: "", description: "" },
   mcpForm: { serverName: "", url: "", toolName: "" },
+  mcpImportForm: { name: "", url: "", bearerToken: "", apiKey: "" },
+  skillImportUrl: "",
   memoryForm: "",
   sessionInput: "",
   providerForm: {
@@ -98,6 +107,8 @@ export const useRuntimeStore = create<RuntimeStore>((set, get) => ({
 
   setSkillForm: (form) => set({ skillForm: form }),
   setMcpForm: (form) => set({ mcpForm: form }),
+  setMcpImportForm: (form) => set({ mcpImportForm: form }),
+  setSkillImportUrl: (sourceUrl) => set({ skillImportUrl: sourceUrl }),
   setMemoryForm: (text) => set({ memoryForm: text }),
   setSessionInput: (text) => set({ sessionInput: text }),
   setProviderForm: (form) => set({ providerForm: form }),
@@ -176,6 +187,49 @@ export const useRuntimeStore = create<RuntimeStore>((set, get) => ({
     set((state) => ({
       mcpServers: [server, ...state.mcpServers],
       mcpTools: [tool, ...state.mcpTools],
+    }));
+  },
+
+  importMcpServer: async (actorUserId, agentId) => {
+    const { mcpImportForm } = get();
+    if (!mcpImportForm.name.trim() || !mcpImportForm.url.trim()) {
+      throw new Error("请填写 MCP 服务名称和 URL");
+    }
+    const credentials: Record<string, string> = {};
+    if (mcpImportForm.bearerToken.trim()) credentials.bearer_token = mcpImportForm.bearerToken.trim();
+    if (mcpImportForm.apiKey.trim()) credentials.api_key = mcpImportForm.apiKey.trim();
+    const result = await apiRequest<MCPAgentImportResult>(`/mcp/agents/${agentId}/import`, {
+      method: "POST",
+      body: {
+        actor_user_id: actorUserId,
+        name: mcpImportForm.name.trim(),
+        transport: "streamable_http",
+        url: mcpImportForm.url.trim(),
+        credentials,
+      },
+    });
+    set((state) => ({
+      mcpServers: [result.server, ...state.mcpServers.filter((server) => server.server_id !== result.server.server_id)],
+      mcpTools: [
+        ...result.tools,
+        ...state.mcpTools.filter((tool) => !result.tools.some((imported) => imported.tool_id === tool.tool_id)),
+      ],
+      mcpImportForm: { name: "", url: "", bearerToken: "", apiKey: "" },
+    }));
+  },
+
+  importGithubSkill: async (actorUserId, orgId, agentId) => {
+    const sourceUrl = get().skillImportUrl.trim();
+    if (!sourceUrl) {
+      throw new Error("请填写 GitHub 上 SKILL.md 的完整链接");
+    }
+    const skill = await apiRequest<Skill>("/skills/import", {
+      method: "POST",
+      body: { actor_user_id: actorUserId, org_id: orgId, agent_id: agentId, source_url: sourceUrl },
+    });
+    set((state) => ({
+      skills: [skill, ...state.skills.filter((item) => item.skill_id !== skill.skill_id)],
+      skillImportUrl: "",
     }));
   },
 

@@ -12,6 +12,7 @@ import { TextInput } from "@/components/ui/Form";
 import { PrimaryButton } from "@/components/ui/Button";
 import { EmptyText, Metric } from "@/components/ui/DataDisplay";
 import WorkspaceRequired from "@/components/ui/WorkspaceRequired";
+import ExternalCapabilityImport from "@/components/runtime/ExternalCapabilityImport";
 
 export default function ToolsPage() {
   const workspace = useWorkspaceStore((s) => s.workspace);
@@ -37,26 +38,30 @@ export default function ToolsPage() {
 
   return (
     <div className="grid gap-6 xl:grid-cols-[420px_1fr]">
-      <Panel title="注册 MCP Server" icon={<Server size={17} />}>
-        <div className="space-y-3">
-          <TextInput label="Server 名称" value={mcpForm.serverName} onChange={(serverName) => setMcpForm({ ...mcpForm, serverName })} />
-          <TextInput label="Server URL" value={mcpForm.url} onChange={(url) => setMcpForm({ ...mcpForm, url })} />
-          <TextInput label="Tool 名称" value={mcpForm.toolName} onChange={(toolName) => setMcpForm({ ...mcpForm, toolName })} />
-          <PrimaryButton
-            busy={busy}
-            label="创建并授权给当前 Agent"
-            onClick={async () => {
-              try {
-                if (!selectedAgentId) throw new Error("请先创建或选择 Agent");
-                await createMcpTool(workspace.userId, workspace.orgId, selectedAgentId);
-                await refreshRuntimeData(workspace.orgId, workspace.userId, selectedAgentId);
-                showToast("success", "MCP Tool 已创建并授权");
-              } catch (error) {
-                showToast("error", error instanceof Error ? error.message : "创建 MCP Tool 失败");
-              }
-            }}
-          />
-        </div>
+      <Panel title="连接外部能力" icon={<Server size={17} />}>
+        <ExternalCapabilityImport />
+        <details className="mt-5 border-t border-[#e7ebf3] pt-4">
+          <summary className="cursor-pointer text-sm font-medium text-[#344054]">高级：手动创建 MCP Server 和单个 Tool</summary>
+          <div className="mt-3 space-y-3">
+            <TextInput label="Server 名称" value={mcpForm.serverName} onChange={(serverName) => setMcpForm({ ...mcpForm, serverName })} />
+            <TextInput label="Server URL" value={mcpForm.url} onChange={(url) => setMcpForm({ ...mcpForm, url })} />
+            <TextInput label="Tool 名称" value={mcpForm.toolName} onChange={(toolName) => setMcpForm({ ...mcpForm, toolName })} />
+            <PrimaryButton
+              busy={busy}
+              label="手动创建并授权给当前 Agent"
+              onClick={async () => {
+                try {
+                  if (!selectedAgentId) throw new Error("请先创建或选择 Agent");
+                  await createMcpTool(workspace.userId, workspace.orgId, selectedAgentId);
+                  await refreshRuntimeData(workspace.orgId, workspace.userId, selectedAgentId);
+                  showToast("success", "MCP Tool 已创建并授权");
+                } catch (error) {
+                  showToast("error", error instanceof Error ? error.message : "创建 MCP Tool 失败");
+                }
+              }}
+            />
+          </div>
+        </details>
       </Panel>
 
       <div className="space-y-6">
