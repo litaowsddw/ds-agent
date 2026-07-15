@@ -45,6 +45,7 @@ interface WorkspaceStore {
     systemPrompt?: string;
     temperature?: number | null;
     maxTokens?: number | null;
+    contextTokenLimit?: number | null;
     defaultWorkflowId?: string | null;
   }) => Promise<void>;
 
@@ -57,6 +58,7 @@ interface WorkspaceStore {
     systemPrompt?: string;
     temperature?: number | null;
     maxTokens?: number | null;
+    contextTokenLimit?: number | null;
     defaultWorkflowId?: string | null;
   }) => Promise<void>;
 
@@ -145,6 +147,7 @@ persist((set, get) => ({
           system_prompt: form.systemPrompt || null,
           temperature: form.temperature ?? 0,
           max_tokens: form.maxTokens ?? null,
+          context_token_limit: form.contextTokenLimit ?? null,
           default_workflow_id: form.defaultWorkflowId ?? null,
         },
       });
@@ -176,6 +179,7 @@ persist((set, get) => ({
           system_prompt: form.systemPrompt || null,
           temperature: form.temperature ?? 0,
           max_tokens: form.maxTokens ?? null,
+          context_token_limit: form.contextTokenLimit ?? null,
           default_workflow_id: form.defaultWorkflowId ?? null,
         },
       });

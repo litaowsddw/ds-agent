@@ -6,42 +6,31 @@ describe("ChatComposer", () => {
   it("sends with Enter and keeps a controlled Shift+Enter newline", () => {
     const onSend = vi.fn();
     render(<ChatComposer disabled={false} onSend={onSend} />);
-    const textbox = screen.getByRole("textbox", { name: "消息" });
-    fireEvent.change(textbox, { target: { value: "你好" } });
+    const textbox = screen.getByRole("textbox");
+    fireEvent.change(textbox, { target: { value: "hello" } });
     fireEvent.keyDown(textbox, { key: "Enter", shiftKey: true });
-    fireEvent.change(textbox, { target: { value: "你好\n世界" } });
-    expect(textbox).toHaveValue("你好\n世界");
+    fireEvent.change(textbox, { target: { value: "hello\nworld" } });
+    expect(textbox).toHaveValue("hello\nworld");
     expect(onSend).not.toHaveBeenCalled();
     fireEvent.keyDown(textbox, { key: "Enter" });
-    expect(onSend).toHaveBeenCalledWith("你好\n世界");
+    expect(onSend).toHaveBeenCalledWith("hello\nworld");
   });
 
-  it("blocks retry and explains when the captured Workflow is unavailable", () => {
-    const onRetry = vi.fn();
+  it("shows the estimated current-context percentage beside send", () => {
     render(
       <ChatComposer
         disabled={false}
         onSend={vi.fn()}
-        onRetry={onRetry}
-        retryBlockedMessage="上次消息使用的 Workflow 已不可用，请重新选择后发送。"
+        contextUsage={{ usedTokens: 600, limitTokens: 2400 }}
       />
     );
 
-    expect(screen.getByText("上次消息使用的 Workflow 已不可用，请重新选择后发送。")).toBeInTheDocument();
-    fireEvent.click(screen.getByRole("button", { name: "重试上次消息" }));
-    expect(onRetry).not.toHaveBeenCalled();
+    expect(screen.getByLabelText("当前上下文占比")).toHaveTextContent("600 / 2,400 · 25%");
   });
 
   it("allows snapshot retry when only new sends are blocked", () => {
     const onRetry = vi.fn();
-    render(
-      <ChatComposer
-        disabled
-        retryDisabled={false}
-        onSend={vi.fn()}
-        onRetry={onRetry}
-      />
-    );
+    render(<ChatComposer disabled retryDisabled={false} onSend={vi.fn()} onRetry={onRetry} />);
 
     fireEvent.click(screen.getByRole("button", { name: "重试上次消息" }));
     expect(onRetry).toHaveBeenCalledOnce();

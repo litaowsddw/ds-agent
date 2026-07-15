@@ -68,6 +68,7 @@ async def create_agent(
             system_prompt=request.system_prompt,
             temperature=request.temperature,
             max_tokens=request.max_tokens,
+            context_token_limit=request.context_token_limit,
             default_workflow_id=request.default_workflow_id,
             created_by=actor_user_id,
         )
@@ -252,6 +253,7 @@ def _to_agent_response(agent: AgentModel) -> AgentResponse:
         system_prompt=agent.system_prompt,
         temperature=agent.temperature,
         max_tokens=agent.max_tokens,
+        context_token_limit=agent.context_token_limit,
         default_workflow_id=agent.default_workflow_id,
         created_by=agent.created_by,
     )

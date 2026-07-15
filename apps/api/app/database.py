@@ -86,6 +86,7 @@ async def init_db() -> None:
         await conn.run_sync(Base.metadata.create_all)
         await conn.run_sync(_ensure_session_message_meta_info_column)
         await conn.run_sync(_ensure_mcp_credentials_column)
+        await conn.run_sync(_ensure_agent_context_token_limit_column)
 
 
 def _ensure_session_message_meta_info_column(connection) -> None:
@@ -109,3 +110,13 @@ def _ensure_mcp_credentials_column(connection) -> None:
     if "credentials_encrypted" not in columns:
         connection.execute(text("ALTER TABLE mcp_servers ADD COLUMN credentials_encrypted TEXT"))
         connection.execute(text("UPDATE mcp_servers SET credentials_encrypted = '' WHERE credentials_encrypted IS NULL"))
+
+
+def _ensure_agent_context_token_limit_column(connection) -> None:
+    """Backfill the per-agent memory compaction threshold for existing deployments."""
+    inspector = inspect(connection)
+    if "agents" not in inspector.get_table_names():
+        return
+    columns = {column["name"] for column in inspector.get_columns("agents")}
+    if "context_token_limit" not in columns:
+        connection.execute(text("ALTER TABLE agents ADD COLUMN context_token_limit INTEGER"))

@@ -8,6 +8,7 @@ export default function ChatComposer({
   onSend,
   onRetry,
   retryBlockedMessage = "",
+  contextUsage,
   children,
 }: {
   disabled: boolean;
@@ -15,9 +16,13 @@ export default function ChatComposer({
   onSend: (message: string) => void | Promise<void>;
   onRetry?: () => void | Promise<void>;
   retryBlockedMessage?: string;
+  contextUsage?: { usedTokens: number; limitTokens: number };
   children?: ReactNode;
 }) {
   const [input, setInput] = useState("");
+  const contextPercent = contextUsage && contextUsage.limitTokens > 0
+    ? Math.min(100, Math.round((contextUsage.usedTokens / contextUsage.limitTokens) * 100))
+    : null;
 
   const send = () => {
     const message = input.trim();
@@ -59,14 +64,25 @@ export default function ChatComposer({
           className="flex-1 resize-none rounded-lg border border-[#dfe4ee] bg-white px-3 py-2 text-sm text-[#172033] focus:outline-none focus:ring-2 focus:ring-[#2f6feb]"
           disabled={disabled}
         />
-        <button
-          onClick={send}
-          disabled={disabled || !input.trim()}
-          className="rounded-lg bg-[#2f6feb] px-4 py-2 text-sm font-medium text-white transition-colors hover:bg-[#2459c9] disabled:cursor-not-allowed disabled:opacity-50"
-          type="button"
-        >
-          发送
-        </button>
+        <div className="flex shrink-0 items-center gap-2">
+          {contextUsage && contextPercent !== null ? (
+            <span
+              aria-label="当前上下文占比"
+              className="hidden whitespace-nowrap text-xs text-[#667085] sm:inline"
+              title="基于当前已加载会话消息的 token 估算"
+            >
+              上下文估算 {contextUsage.usedTokens.toLocaleString()} / {contextUsage.limitTokens.toLocaleString()} · {contextPercent}%
+            </span>
+          ) : null}
+          <button
+            onClick={send}
+            disabled={disabled || !input.trim()}
+            className="rounded-lg bg-[#2f6feb] px-4 py-2 text-sm font-medium text-white transition-colors hover:bg-[#2459c9] disabled:cursor-not-allowed disabled:opacity-50"
+            type="button"
+          >
+            发送
+          </button>
+        </div>
       </div>
     </div>
   );

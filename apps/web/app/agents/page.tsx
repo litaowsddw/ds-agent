@@ -44,6 +44,7 @@ export default function AgentsPage() {
     systemPrompt: "",
     temperature: "0.3",
     maxTokens: "",
+    contextTokenLimit: "",
     defaultWorkflowId: "",
   });
   const [parameterForm, setParameterForm] = useState({
@@ -54,6 +55,7 @@ export default function AgentsPage() {
     systemPrompt: "",
     temperature: "0.3",
     maxTokens: "",
+    contextTokenLimit: "",
     defaultWorkflowId: "",
   });
   const [workspaceText, setWorkspaceText] = useState("");
@@ -85,6 +87,7 @@ export default function AgentsPage() {
         systemPrompt: "",
         temperature: "0.3",
         maxTokens: "",
+        contextTokenLimit: "",
         defaultWorkflowId: "",
       });
       return;
@@ -97,6 +100,7 @@ export default function AgentsPage() {
       systemPrompt: selectedAgent.system_prompt ?? "",
       temperature: String(selectedAgent.temperature ?? 0.3),
       maxTokens: selectedAgent.max_tokens ? String(selectedAgent.max_tokens) : "",
+      contextTokenLimit: selectedAgent.context_token_limit ? String(selectedAgent.context_token_limit) : "",
       defaultWorkflowId: selectedAgent.default_workflow_id ?? "",
     });
   }, [selectedAgent]);
@@ -144,6 +148,13 @@ export default function AgentsPage() {
               value={agentForm.systemPrompt}
               onChange={(systemPrompt) => setAgentForm({ ...agentForm, systemPrompt })}
             />
+            <TextInput
+              label="上下文压缩阈值（tokens）"
+              type="number"
+              placeholder="默认 2400，最小 800"
+              value={agentForm.contextTokenLimit}
+              onChange={(contextTokenLimit) => setAgentForm({ ...agentForm, contextTokenLimit })}
+            />
             <PrimaryButton
               busy={busy}
               label="创建 Agent"
@@ -157,9 +168,10 @@ export default function AgentsPage() {
                     systemPrompt: agentForm.systemPrompt,
                     temperature: Number(agentForm.temperature || 0),
                     maxTokens: agentForm.maxTokens ? Number(agentForm.maxTokens) : null,
+                    contextTokenLimit: agentForm.contextTokenLimit ? Number(agentForm.contextTokenLimit) : null,
                     defaultWorkflowId: null,
                   });
-                  setAgentForm({ name: "", description: "", modelProvider: "", modelName: "", systemPrompt: "", temperature: "0.3", maxTokens: "", defaultWorkflowId: "" });
+                  setAgentForm({ name: "", description: "", modelProvider: "", modelName: "", systemPrompt: "", temperature: "0.3", maxTokens: "", contextTokenLimit: "", defaultWorkflowId: "" });
                   showToast("success", "Agent 已创建");
                 } catch (error) {
                   showToast("error", error instanceof Error ? error.message : "创建 Agent 失败");
@@ -226,6 +238,13 @@ export default function AgentsPage() {
                 <TextInput label="Temperature" type="number" value={parameterForm.temperature} onChange={(temperature) => setParameterForm({ ...parameterForm, temperature })} />
                 <TextInput label="Max tokens" type="number" value={parameterForm.maxTokens} onChange={(maxTokens) => setParameterForm({ ...parameterForm, maxTokens })} />
               </div>
+              <TextInput
+                label="上下文压缩阈值（tokens）"
+                type="number"
+                placeholder="默认 2400，最小 800"
+                value={parameterForm.contextTokenLimit}
+                onChange={(contextTokenLimit) => setParameterForm({ ...parameterForm, contextTokenLimit })}
+              />
               <TextArea
                 label="系统提示词"
                 placeholder="定义 Agent 的角色、边界和输出要求"
@@ -246,6 +265,7 @@ export default function AgentsPage() {
                       systemPrompt: parameterForm.systemPrompt,
                       temperature: Number(parameterForm.temperature || 0),
                       maxTokens: parameterForm.maxTokens ? Number(parameterForm.maxTokens) : null,
+                      contextTokenLimit: parameterForm.contextTokenLimit ? Number(parameterForm.contextTokenLimit) : null,
                       defaultWorkflowId: parameterForm.defaultWorkflowId || null,
                     });
                     showToast("success", "Agent 参数已保存");

@@ -24,6 +24,7 @@ export interface Agent {
   temperature?: number | null;
   /** 最大输出 tokens */
   max_tokens?: number | null;
+  context_token_limit?: number | null;
   /** 默认 Workflow，空值表示自主模式 */
   default_workflow_id?: string | null;
   created_by: string;
@@ -43,6 +44,7 @@ export interface CreateAgentRequest {
   system_prompt?: string;
   temperature?: number | null;
   max_tokens?: number | null;
+  context_token_limit?: number | null;
   default_workflow_id?: string | null;
 }
 

@@ -26,6 +26,7 @@ class AgentModel(Base):
     system_prompt: Mapped[str | None] = mapped_column(Text, nullable=True)
     temperature: Mapped[float | None] = mapped_column(nullable=True, default=0.0)
     max_tokens: Mapped[int | None] = mapped_column(nullable=True)
+    context_token_limit: Mapped[int | None] = mapped_column(nullable=True)
     default_workflow_id: Mapped[str | None] = mapped_column(String(64), nullable=True)
     # A2A Agent Card URL
     a2a_url: Mapped[str | None] = mapped_column(String(512), nullable=True)

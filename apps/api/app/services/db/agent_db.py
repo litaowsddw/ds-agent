@@ -43,6 +43,7 @@ class AgentDBService(BaseDBService[AgentModel]):
         system_prompt: str | None = None,
         temperature: float | None = 0.0,
         max_tokens: int | None = None,
+        context_token_limit: int | None = None,
         default_workflow_id: str | None = None,
     ) -> AgentModel:
         """创建 Agent。"""
@@ -59,6 +60,7 @@ class AgentDBService(BaseDBService[AgentModel]):
             system_prompt=system_prompt,
             temperature=temperature,
             max_tokens=max_tokens,
+            context_token_limit=context_token_limit,
             default_workflow_id=default_workflow_id,
             created_by=created_by,
         )

@@ -474,7 +474,7 @@ async def _chat_stream_events(
             recent_messages=recent_messages,
             compact_summary=(current_session.compact_summary if current_session else "") or "",
             memories=memories,
-            token_threshold=_memory_compaction_threshold(),
+            token_threshold=_memory_compaction_threshold(agent.context_token_limit),
         )
 
         supervisors = await agent_db.list_org_agents(db, org_id, kind="SUPERVISOR")
@@ -773,7 +773,9 @@ def _default_chat_max_tokens() -> int:
         return 1024
 
 
-def _memory_compaction_threshold() -> int:
+def _memory_compaction_threshold(configured_limit: int | None = None) -> int:
+    if configured_limit is not None:
+        return max(800, configured_limit)
     raw_value = os.getenv("AGENTFLOW_MEMORY_COMPACTION_TOKENS", "2400")
     try:
         return max(800, int(raw_value))

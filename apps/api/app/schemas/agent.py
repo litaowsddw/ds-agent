@@ -21,6 +21,7 @@ class AgentCreateRequest(BaseModel):
     system_prompt: str | None = Field(default=None, description="系统提示词")
     temperature: float | None = Field(default=0.0, ge=0, le=2, description="采样温度")
     max_tokens: int | None = Field(default=None, ge=128, le=32768, description="最大输出 tokens")
+    context_token_limit: int | None = Field(default=None, ge=800, le=2000000, description="上下文压缩阈值 tokens")
     default_workflow_id: str | None = Field(default=None, description="默认 Workflow ID，空值表示自主模式")
 
 
@@ -35,6 +36,7 @@ class AgentUpdateRequest(BaseModel):
     system_prompt: str | None = Field(default=None, description="系统提示词")
     temperature: float | None = Field(default=None, ge=0, le=2, description="采样温度")
     max_tokens: int | None = Field(default=None, ge=128, le=32768, description="最大输出 tokens")
+    context_token_limit: int | None = Field(default=None, ge=800, le=2000000, description="上下文压缩阈值 tokens")
     default_workflow_id: str | None = Field(default=None, description="默认 Workflow ID，空值表示自主模式")
 
 
@@ -52,6 +54,7 @@ class AgentResponse(BaseModel):
     system_prompt: str | None = None
     temperature: float | None = None
     max_tokens: int | None = None
+    context_token_limit: int | None = None
     default_workflow_id: str | None = None
     created_by: str
 
