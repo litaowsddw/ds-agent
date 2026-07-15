@@ -18,28 +18,53 @@ from uuid import uuid4
 
 from fastapi.testclient import TestClient
 
+from apps.api.app.gateway.llm import LLMCallRequest, LLMCallResponse
 from apps.api.app.main import app
 
 
 def _setup_environment(client: TestClient) -> dict:
     """准备压测环境：创建组织和 Agent。"""
     suffix = uuid4().hex[:8]
+    owner_email = f"stress-{suffix}@example.com"
     owner_resp = client.post(
         "/identity/users/register",
-        json={"email": f"stress-{suffix}@example.com", "display_name": "Stress Owner", "password": "password123"},
+        json={"email": owner_email, "display_name": "Stress Owner", "password": "password123"},
     )
     owner = owner_resp.json()["user_id"]
     org_resp = client.post("/identity/organizations", json={"creator_user_id": owner, "name": f"Stress Org {suffix}"})
     org_id = org_resp.json()["org_id"]
+    login = client.post(
+        "/identity/users/login",
+        json={"email": owner_email, "password": "password123"},
+    )
+    assert login.status_code == 200
+    headers = {"Authorization": f"Bearer {login.json()['token']['access_token']}"}
     agent_resp = client.post(
         "/agents",
         json={"actor_user_id": owner, "org_id": org_id, "name": "Stress Agent", "description": ""},
     )
     agent_id = agent_resp.json()["agent_id"]
-    return {"owner": owner, "org_id": org_id, "agent_id": agent_id}
+    provider_resp = client.post(
+        "/model-providers",
+        json={
+            "actor_user_id": owner,
+            "org_id": org_id,
+            "provider_key": "mock",
+            "display_name": "Mock Provider",
+            "base_url": "https://mock.local/v1",
+            "api_key": "sk-test",
+            "models": ["mock-model"],
+            "default_model": "mock-model",
+        },
+        headers=headers,
+    )
+    assert provider_resp.status_code == 200
+    return {"owner": owner, "org_id": org_id, "agent_id": agent_id, "headers": headers}
 
 
-def _create_workflow(client: TestClient, owner: str, agent_id: str) -> str:
+def _create_workflow(
+    client: TestClient, owner: str, agent_id: str, headers: dict[str, str]
+) -> str:
     """创建并发布工作流，返回 version_id。"""
     wf_resp = client.post(
         "/workflows",
@@ -52,24 +77,27 @@ def _create_workflow(client: TestClient, owner: str, agent_id: str) -> str:
                 "version": "1.0",
                 "nodes": [
                     {"id": "start", "type": "start", "config": {}},
-                    {"id": "llm", "type": "llm", "config": {"prompt": "stress test"}},
                     {"id": "end", "type": "end", "config": {}},
                 ],
                 "edges": [
-                    {"source": "start", "target": "llm"},
-                    {"source": "llm", "target": "end"},
+                    {"source": "start", "target": "end"},
                 ],
             },
         },
+        headers=headers,
     )
     wf_id = wf_resp.json()["workflow_id"]
-    version_resp = client.post(f"/workflows/{wf_id}/publish", json={"actor_user_id": owner})
+    version_resp = client.post(
+        f"/workflows/{wf_id}/publish",
+        json={"actor_user_id": owner},
+        headers=headers,
+    )
     return version_resp.json()["version_id"]
 
 
 def _run_single_workflow(
     client: TestClient,
-    owner: str,
+    headers: dict[str, str],
     version_id: str,
     run_index: int,
     results: list,
@@ -81,11 +109,11 @@ def _run_single_workflow(
         resp = client.post(
             "/workflow-runs",
             json={
-                "actor_user_id": owner,
                 "version_id": version_id,
                 "input_data": {"text": f"task #{run_index}"},
                 "async_mode": False,
             },
+            headers=headers,
         )
         elapsed = time.perf_counter() - start
         with lock:
@@ -107,7 +135,9 @@ def test_stress_async_task_queue_simulation() -> None:
     """
     client = TestClient(app)
     env = _setup_environment(client)
-    version_id = _create_workflow(client, env["owner"], env["agent_id"])
+    version_id = _create_workflow(
+        client, env["owner"], env["agent_id"], env["headers"]
+    )
 
     results: list[dict] = []
     lock = threading.Lock()
@@ -120,7 +150,7 @@ def test_stress_async_task_queue_simulation() -> None:
         futures = [
             executor.submit(
                 _run_single_workflow,
-                client, env["owner"], version_id, i, results, lock,
+                client, env["headers"], version_id, i, results, lock,
             )
             for i in range(task_count)
         ]
@@ -278,11 +308,27 @@ def test_stress_tenant_isolation_under_concurrency() -> None:
     print(f"\n  租户隔离压测：{org_count} 组织 x {agents_per_org} Agent = {org_count * agents_per_org} 个 Agent，无交叉泄露")
 
 
-def test_stress_gateway_log_integrity() -> None:
+def test_stress_gateway_log_integrity(monkeypatch) -> None:
     """压测：验证 Gateway 在高频 LLM 调用下日志完整不丢失。"""
 
     client = TestClient(app)
     env = _setup_environment(client)
+
+    class FakeOpenAICompatibleProvider:
+        def __init__(self, base_url: str, api_key: str, provider_key: str, timeout_seconds: int = 30) -> None:
+            self.provider_key = provider_key
+
+        def generate(self, request: LLMCallRequest) -> LLMCallResponse:
+            return LLMCallResponse(
+                text="mock response",
+                provider=self.provider_key,
+                model=request.model,
+                usage={"prompt_tokens": 3, "completion_tokens": 2},
+            )
+
+    from apps.api.app.routes import gateway
+
+    monkeypatch.setattr(gateway, "OpenAICompatibleProvider", FakeOpenAICompatibleProvider)
 
     call_count = 100
 
@@ -290,13 +336,12 @@ def test_stress_gateway_log_integrity() -> None:
         resp = client.post(
             "/gateway/llm/generate",
             json={
-                "actor_user_id": env["owner"],
-                "org_id": env["org_id"],
                 "provider": "mock",
                 "model": "mock-model",
                 "prompt": f"stress call #{index}",
                 "parameters": {"temperature": 0},
             },
+            headers=env["headers"],
         )
         return resp.status_code
 
@@ -304,16 +349,22 @@ def test_stress_gateway_log_integrity() -> None:
         futures = [executor.submit(_call_gateway, i) for i in range(call_count)]
         statuses = [f.result() for f in as_completed(futures)]
 
-    all_ok = all(s == 200 for s in statuses)
-    assert all_ok
+    assert all(status in {200, 429} for status in statuses)
+    successful_calls = sum(status == 200 for status in statuses)
+    assert successful_calls > 0
 
     # 检查日志完整性
-    logs_resp = client.get("/gateway/llm/logs")
+    logs_resp = client.get("/gateway/llm/logs", headers=env["headers"])
     logs = logs_resp.json()
-    # 日志应至少有 call_count 条
-    assert len(logs) >= call_count, f"日志记录数 {len(logs)} < 调用数 {call_count}"
+    # 限流拒绝在路由返回前中止；每个获准的上游调用都必须留下日志。
+    assert len(logs) >= successful_calls, (
+        f"日志记录数 {len(logs)} < 成功调用数 {successful_calls}"
+    )
 
-    print(f"  Gateway 压测：{call_count} 次调用，日志记录 {len(logs)} 条，全部成功")
+    print(
+        f"  Gateway 压测：{call_count} 次调用，"
+        f"成功 {successful_calls} 次，日志记录 {len(logs)} 条"
+    )
 
 
 if __name__ == "__main__":

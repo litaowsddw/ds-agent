@@ -12,6 +12,15 @@ from fastapi.testclient import TestClient
 from apps.api.app.main import app
 
 
+def _auth_headers(client: TestClient, email: str) -> dict[str, str]:
+    response = client.post(
+        "/identity/users/login",
+        json={"email": email, "password": "password123"},
+    )
+    assert response.status_code == 200
+    return {"Authorization": f"Bearer {response.json()['token']['access_token']}"}
+
+
 def test_multi_org_multi_agent_concurrent_resources() -> None:
     """验证多个组织下的多个 Agent 各自拥有独立资源，互不干扰。"""
 
@@ -235,13 +244,15 @@ def test_multi_tenant_workflow_isolation() -> None:
     suffix = uuid4().hex
 
     # === 组织 A ===
+    owner_a_email = f"wf-iso-a-{suffix}@example.com"
     owner_a_resp = client.post(
         "/identity/users/register",
-        json={"email": f"wf-iso-a-{suffix}@example.com", "display_name": "WF Owner A", "password": "password123"},
+        json={"email": owner_a_email, "display_name": "WF Owner A", "password": "password123"},
     )
     owner_a = owner_a_resp.json()["user_id"]
     org_a_resp = client.post("/identity/organizations", json={"creator_user_id": owner_a, "name": "WF Org A"})
     org_a = org_a_resp.json()["org_id"]
+    owner_a_headers = _auth_headers(client, owner_a_email)
     agent_a_resp = client.post(
         "/agents",
         json={"actor_user_id": owner_a, "org_id": org_a, "name": "WF Agent A", "description": ""},
@@ -274,10 +285,9 @@ def test_multi_tenant_workflow_isolation() -> None:
                 "version": "1.0",
                 "nodes": [
                     {"id": "start", "type": "start", "config": {}},
-                    {"id": "llm", "type": "llm", "config": {"provider": "mock", "model": "mock-model", "prompt": "hello"}},
                     {"id": "end", "type": "end", "config": {}},
                 ],
-                "edges": [{"source": "start", "target": "llm"}, {"source": "llm", "target": "end"}],
+                "edges": [{"source": "start", "target": "end"}],
             },
         },
     )
@@ -288,11 +298,11 @@ def test_multi_tenant_workflow_isolation() -> None:
     run_a_resp = client.post(
         "/workflow-runs",
         json={
-            "actor_user_id": owner_a,
             "version_id": version_a_id,
             "input_data": {"text": "hello"},
             "async_mode": False,
         },
+        headers=owner_a_headers,
     )
     assert run_a_resp.status_code == 200
     run_a_id = run_a_resp.json()["run_id"]

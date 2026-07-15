@@ -37,11 +37,12 @@ def _suffix(label: str) -> str:
     return f"{label}-{uuid4().hex[:8]}"
 
 
-def _create_owner_org_agent(client: TestClient, suffix: str) -> tuple[str, str, str]:
+def _create_owner_org_agent(client: TestClient, suffix: str) -> tuple[str, str, str, dict[str, str]]:
+    email = f"owner-{suffix}@example.com"
     owner_user_id = client.post(
         "/identity/users/register",
         json={
-            "email": f"owner-{suffix}@example.com",
+            "email": email,
             "display_name": "Owner",
             "password": "password123",
         },
@@ -59,7 +60,13 @@ def _create_owner_org_agent(client: TestClient, suffix: str) -> tuple[str, str, 
             "description": "",
         },
     ).json()["agent_id"]
-    return owner_user_id, org_id, agent_id
+    login = client.post(
+        "/identity/users/login",
+        json={"email": email, "password": "password123"},
+    )
+    assert login.status_code == 200
+    headers = {"Authorization": f"Bearer {login.json()['token']['access_token']}"}
+    return owner_user_id, org_id, agent_id, headers
 
 
 def _create_and_publish_workflow(
@@ -89,7 +96,7 @@ def _create_and_publish_workflow(
 
 def test_workflow_execution_service_persists_node_runs_for_success() -> None:
     with TestClient(app) as client:
-        actor_user_id, _org_id, agent_id = _create_owner_org_agent(
+        actor_user_id, _org_id, agent_id, owner_headers = _create_owner_org_agent(
             client, _suffix("wf-service-ok")
         )
         version_id = _create_and_publish_workflow(
@@ -109,11 +116,11 @@ def test_workflow_execution_service_persists_node_runs_for_success() -> None:
         run_response = client.post(
             "/workflow-runs",
             json={
-                "actor_user_id": actor_user_id,
                 "version_id": version_id,
                 "input_data": {"text": "hello"},
                 "async_mode": False,
             },
+            headers=owner_headers,
         )
 
         assert run_response.status_code == 200
@@ -133,7 +140,7 @@ def test_workflow_execution_service_persists_node_runs_for_success() -> None:
 
 def test_tool_arguments_must_be_object() -> None:
     with TestClient(app) as client:
-        actor_user_id, _org_id, agent_id = _create_owner_org_agent(
+        actor_user_id, _org_id, agent_id, owner_headers = _create_owner_org_agent(
             client, _suffix("wf-tool-args")
         )
         version_id = _create_and_publish_workflow(
@@ -164,11 +171,11 @@ def test_tool_arguments_must_be_object() -> None:
         run_response = client.post(
             "/workflow-runs",
             json={
-                "actor_user_id": actor_user_id,
                 "version_id": version_id,
                 "input_data": {"text": "hello"},
                 "async_mode": False,
             },
+            headers=owner_headers,
         )
 
         assert run_response.status_code == 200

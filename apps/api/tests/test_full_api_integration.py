@@ -38,10 +38,11 @@ def test_full_api_integration_chain() -> None:
     client = TestClient(app)
     suffix = uuid4().hex
 
+    owner_email = f"full-owner-{suffix}@example.com"
     owner_response = client.post(
         "/identity/users/register",
         json={
-            "email": f"full-owner-{suffix}@example.com",
+            "email": owner_email,
             "display_name": "Owner",
             "password": "password123",
         },
@@ -66,6 +67,14 @@ def test_full_api_integration_chain() -> None:
     )
     assert org_response.status_code == 200
     org_id = org_response.json()["org_id"]
+    owner_login = client.post(
+        "/identity/users/login",
+        json={"email": owner_email, "password": "password123"},
+    )
+    assert owner_login.status_code == 200
+    owner_headers = {
+        "Authorization": f"Bearer {owner_login.json()['token']['access_token']}"
+    }
 
     team_response = client.post(
         f"/identity/organizations/{org_id}/teams",
@@ -354,11 +363,11 @@ def test_full_api_integration_chain() -> None:
     run_response = client.post(
         "/workflow-runs",
         json={
-            "actor_user_id": owner_user_id,
             "version_id": version_id,
             "input_data": {"text": "hello"},
             "async_mode": False,
         },
+        headers=owner_headers,
     )
     assert run_response.status_code == 200
     assert run_response.json()["status"] == "succeeded"

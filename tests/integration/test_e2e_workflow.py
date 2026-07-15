@@ -58,19 +58,30 @@ def _create_mock_provider(client: TestClient, actor_user_id: str, org_id: str) -
     assert response.status_code == 200
 
 
+def _auth_headers(client: TestClient, email: str) -> dict[str, str]:
+    response = client.post(
+        "/identity/users/login",
+        json={"email": email, "password": "password123"},
+    )
+    assert response.status_code == 200
+    return {"Authorization": f"Bearer {response.json()['token']['access_token']}"}
+
+
 def test_e2e_sync_workflow_full_trace(client: TestClient) -> None:
     """验证同步工作流端到端执行轨迹完整性。"""
 
     suffix = uuid4().hex
 
     # === 准备环境 ===
+    owner_email = f"e2e-sync-{suffix}@example.com"
     owner_resp = client.post(
         "/identity/users/register",
-        json={"email": f"e2e-sync-{suffix}@example.com", "display_name": "E2E Owner", "password": "password123"},
+        json={"email": owner_email, "display_name": "E2E Owner", "password": "password123"},
     )
     owner = owner_resp.json()["user_id"]
     org_resp = client.post("/identity/organizations", json={"creator_user_id": owner, "name": "E2E Org"})
     org_id = org_resp.json()["org_id"]
+    owner_headers = _auth_headers(client, owner_email)
     _create_mock_provider(client, owner, org_id)
     agent_resp = client.post(
         "/agents",
@@ -108,11 +119,11 @@ def test_e2e_sync_workflow_full_trace(client: TestClient) -> None:
     run_resp = client.post(
         "/workflow-runs",
         json={
-            "actor_user_id": owner,
             "version_id": version_id,
             "input_data": {"text": "端到端测试"},
             "async_mode": False,
         },
+        headers=owner_headers,
     )
     assert run_resp.status_code == 200
     run_data = run_resp.json()
@@ -140,7 +151,7 @@ def test_e2e_sync_workflow_full_trace(client: TestClient) -> None:
     assert "prefix_hash" in llm_node["output_data"]
 
     # === 验证 Gateway 日志 ===
-    logs_resp = client.get("/gateway/llm/logs")
+    logs_resp = client.get("/gateway/llm/logs", headers=owner_headers)
     assert logs_resp.status_code == 200
     logs = logs_resp.json()
     assert any(
@@ -154,13 +165,15 @@ def test_e2e_async_workflow_queuing(client: TestClient) -> None:
 
     suffix = uuid4().hex
 
+    owner_email = f"e2e-async-{suffix}@example.com"
     owner_resp = client.post(
         "/identity/users/register",
-        json={"email": f"e2e-async-{suffix}@example.com", "display_name": "Async Owner", "password": "password123"},
+        json={"email": owner_email, "display_name": "Async Owner", "password": "password123"},
     )
     owner = owner_resp.json()["user_id"]
     org_resp = client.post("/identity/organizations", json={"creator_user_id": owner, "name": "Async Org"})
     org_id = org_resp.json()["org_id"]
+    owner_headers = _auth_headers(client, owner_email)
     _create_mock_provider(client, owner, org_id)
     agent_resp = client.post(
         "/agents",
@@ -197,11 +210,11 @@ def test_e2e_async_workflow_queuing(client: TestClient) -> None:
     run_resp = client.post(
         "/workflow-runs",
         json={
-            "actor_user_id": owner,
             "version_id": version_id,
             "input_data": {"text": "async"},
             "async_mode": True,
         },
+        headers=owner_headers,
     )
     assert run_resp.status_code == 200
     run_data = run_resp.json()
@@ -215,9 +228,10 @@ def test_e2e_workflow_error_recovery(client: TestClient) -> None:
     suffix = uuid4().hex
 
     # === 准备两个组织 ===
+    owner_a_email = f"e2e-err-a-{suffix}@example.com"
     owner_a_resp = client.post(
         "/identity/users/register",
-        json={"email": f"e2e-err-a-{suffix}@example.com", "display_name": "Err Owner A", "password": "password123"},
+        json={"email": owner_a_email, "display_name": "Err Owner A", "password": "password123"},
     )
     owner_a = owner_a_resp.json()["user_id"]
 
@@ -229,6 +243,7 @@ def test_e2e_workflow_error_recovery(client: TestClient) -> None:
 
     org_a_resp = client.post("/identity/organizations", json={"creator_user_id": owner_a, "name": "Err Org A"})
     org_a = org_a_resp.json()["org_id"]
+    owner_a_headers = _auth_headers(client, owner_a_email)
 
     org_b_resp = client.post("/identity/organizations", json={"creator_user_id": owner_b, "name": "Err Org B"})
     org_b = org_b_resp.json()["org_id"]
@@ -283,11 +298,11 @@ def test_e2e_workflow_error_recovery(client: TestClient) -> None:
     run_resp = client.post(
         "/workflow-runs",
         json={
-            "actor_user_id": owner_a,
             "version_id": version_id,
             "input_data": {"text": "私有"},
             "async_mode": False,
         },
+        headers=owner_a_headers,
     )
     assert run_resp.status_code == 200
     run_data = run_resp.json()
@@ -313,13 +328,15 @@ def test_e2e_workflow_retry_on_failure(client: TestClient) -> None:
 
     suffix = uuid4().hex
 
+    owner_email = f"e2e-retry-{suffix}@example.com"
     owner_resp = client.post(
         "/identity/users/register",
-        json={"email": f"e2e-retry-{suffix}@example.com", "display_name": "Retry Owner", "password": "password123"},
+        json={"email": owner_email, "display_name": "Retry Owner", "password": "password123"},
     )
     owner = owner_resp.json()["user_id"]
     org_resp = client.post("/identity/organizations", json={"creator_user_id": owner, "name": "Retry Org"})
     org_id = org_resp.json()["org_id"]
+    owner_headers = _auth_headers(client, owner_email)
     _create_mock_provider(client, owner, org_id)
     agent_resp = client.post(
         "/agents",
@@ -355,7 +372,8 @@ def test_e2e_workflow_retry_on_failure(client: TestClient) -> None:
     # === 执行第一次（成功）===
     run1_resp = client.post(
         "/workflow-runs",
-        json={"actor_user_id": owner, "version_id": version_id, "input_data": {"text": "first"}, "async_mode": False},
+        json={"version_id": version_id, "input_data": {"text": "first"}, "async_mode": False},
+        headers=owner_headers,
     )
     run1_id = run1_resp.json()["run_id"]
     assert run1_resp.json()["status"] == "succeeded"
@@ -363,7 +381,8 @@ def test_e2e_workflow_retry_on_failure(client: TestClient) -> None:
     # 同一版本可执行多次（retry 本质是新 Run）
     run2_resp = client.post(
         "/workflow-runs",
-        json={"actor_user_id": owner, "version_id": version_id, "input_data": {"text": "second"}, "async_mode": False},
+        json={"version_id": version_id, "input_data": {"text": "second"}, "async_mode": False},
+        headers=owner_headers,
     )
     run2_id = run2_resp.json()["run_id"]
     assert run2_resp.json()["status"] == "succeeded"
@@ -387,13 +406,15 @@ def test_e2e_workflow_output_consistency(client: TestClient) -> None:
 
     suffix = uuid4().hex
 
+    owner_email = f"e2e-cons-{suffix}@example.com"
     owner_resp = client.post(
         "/identity/users/register",
-        json={"email": f"e2e-cons-{suffix}@example.com", "display_name": "Cons Owner", "password": "password123"},
+        json={"email": owner_email, "display_name": "Cons Owner", "password": "password123"},
     )
     owner = owner_resp.json()["user_id"]
     org_resp = client.post("/identity/organizations", json={"creator_user_id": owner, "name": "Cons Org"})
     org_id = org_resp.json()["org_id"]
+    owner_headers = _auth_headers(client, owner_email)
     _create_mock_provider(client, owner, org_id)
     agent_resp = client.post(
         "/agents",
@@ -429,7 +450,8 @@ def test_e2e_workflow_output_consistency(client: TestClient) -> None:
     # === 第一次执行 ===
     run1_resp = client.post(
         "/workflow-runs",
-        json={"actor_user_id": owner, "version_id": version_id, "input_data": {"text": "same input"}, "async_mode": False},
+        json={"version_id": version_id, "input_data": {"text": "same input"}, "async_mode": False},
+        headers=owner_headers,
     )
     nodes1 = client.get(
         f"/workflow-runs/{run1_resp.json()['run_id']}/nodes",
@@ -440,7 +462,8 @@ def test_e2e_workflow_output_consistency(client: TestClient) -> None:
     # === 第二次执行（相同输入） ===
     run2_resp = client.post(
         "/workflow-runs",
-        json={"actor_user_id": owner, "version_id": version_id, "input_data": {"text": "same input"}, "async_mode": False},
+        json={"version_id": version_id, "input_data": {"text": "same input"}, "async_mode": False},
+        headers=owner_headers,
     )
     nodes2 = client.get(
         f"/workflow-runs/{run2_resp.json()['run_id']}/nodes",
@@ -457,13 +480,15 @@ def test_e2e_workflow_different_inputs_keep_same_prefix_hash(client: TestClient)
 
     suffix = uuid4().hex
 
+    owner_email = f"e2e-diff-{suffix}@example.com"
     owner_resp = client.post(
         "/identity/users/register",
-        json={"email": f"e2e-diff-{suffix}@example.com", "display_name": "Diff Owner", "password": "password123"},
+        json={"email": owner_email, "display_name": "Diff Owner", "password": "password123"},
     )
     owner = owner_resp.json()["user_id"]
     org_resp = client.post("/identity/organizations", json={"creator_user_id": owner, "name": "Diff Org"})
     org_id = org_resp.json()["org_id"]
+    owner_headers = _auth_headers(client, owner_email)
     _create_mock_provider(client, owner, org_id)
     agent_resp = client.post(
         "/agents",
@@ -499,7 +524,8 @@ def test_e2e_workflow_different_inputs_keep_same_prefix_hash(client: TestClient)
     # 不同输入
     run_a_resp = client.post(
         "/workflow-runs",
-        json={"actor_user_id": owner, "version_id": version_id, "input_data": {"text": "input A"}, "async_mode": False},
+        json={"version_id": version_id, "input_data": {"text": "input A"}, "async_mode": False},
+        headers=owner_headers,
     )
     nodes_a = client.get(
         f"/workflow-runs/{run_a_resp.json()['run_id']}/nodes",
@@ -509,7 +535,8 @@ def test_e2e_workflow_different_inputs_keep_same_prefix_hash(client: TestClient)
 
     run_b_resp = client.post(
         "/workflow-runs",
-        json={"actor_user_id": owner, "version_id": version_id, "input_data": {"text": "input B different"}, "async_mode": False},
+        json={"version_id": version_id, "input_data": {"text": "input B different"}, "async_mode": False},
+        headers=owner_headers,
     )
     nodes_b = client.get(
         f"/workflow-runs/{run_b_resp.json()['run_id']}/nodes",
