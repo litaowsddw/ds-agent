@@ -141,7 +141,7 @@ class MembershipDBService(BaseDBService[MembershipModel]):
             raise ValueError("无权访问该组织")
 
         if required_role is not None:
-            role_hierarchy = {"owner": 4, "admin": 3, "member": 2, "viewer": 1}
+            role_hierarchy = {"owner": 4, "admin": 3, "developer": 2, "member": 2, "viewer": 1}
             user_level = role_hierarchy.get(membership.role, 0)
             required_level = role_hierarchy.get(required_role, 0)
             if user_level < required_level:

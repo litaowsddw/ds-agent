@@ -32,9 +32,15 @@ async def create_agent(
     try:
         # 权限校验
         await membership_db.assert_org_access(
-            session, user_id=request.actor_user_id, org_id=request.org_id
+            session,
+            user_id=request.actor_user_id,
+            org_id=request.org_id,
+            required_role="developer",
         )
+    except ValueError as exc:
+        raise HTTPException(status_code=403, detail=str(exc)) from exc
 
+    try:
         agent = await agent_db.create_agent(
             session,
             agent_id=new_id("agt"),

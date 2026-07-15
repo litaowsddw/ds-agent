@@ -8,6 +8,7 @@ from uuid import uuid4
 
 from fastapi.testclient import TestClient
 
+from app.gateway.llm import LLMCallResponse, OpenAICompatibleProvider
 from apps.api.app.main import app
 
 VALID_WORKFLOW_DEFINITION = {
@@ -18,8 +19,8 @@ VALID_WORKFLOW_DEFINITION = {
             "id": "llm",
             "type": "llm",
             "config": {
-                "provider": "mock",
-                "model": "mock-model",
+                "provider": "deepseek",
+                "model": "deepseek-chat",
                 "prompt": "请总结输入，并给出下一步建议。",
             },
         },
@@ -32,8 +33,20 @@ VALID_WORKFLOW_DEFINITION = {
 }
 
 
-def test_full_api_integration_chain() -> None:
+def test_full_api_integration_chain(monkeypatch) -> None:
     """验证前端全模块联调依赖的 API 主链路。"""
+
+    def _generate_without_network(
+        _provider: OpenAICompatibleProvider, request
+    ) -> LLMCallResponse:
+        return LLMCallResponse(
+            text="[fake-llm] gateway response",
+            provider=request.provider,
+            model=request.model,
+            usage={"prompt_tokens": 1, "completion_tokens": 1, "total_tokens": 2},
+        )
+
+    monkeypatch.setattr(OpenAICompatibleProvider, "generate", _generate_without_network)
 
     client = TestClient(app)
     suffix = uuid4().hex
@@ -320,18 +333,17 @@ def test_full_api_integration_chain() -> None:
     gateway_response = client.post(
         "/gateway/llm/generate",
         json={
-            "actor_user_id": owner_user_id,
-            "org_id": org_id,
-            "provider": "mock",
-            "model": "mock-model",
+            "provider": "deepseek",
+            "model": "deepseek-chat",
             "prompt": "请用一句话总结全链路联调状态。",
             "parameters": {"temperature": 0},
         },
+        headers=owner_headers,
     )
     assert gateway_response.status_code == 200
-    assert gateway_response.json()["provider"] == "mock"
+    assert gateway_response.json()["provider"] == "deepseek"
 
-    gateway_logs_response = client.get("/gateway/llm/logs")
+    gateway_logs_response = client.get("/gateway/llm/logs", headers=owner_headers)
     assert gateway_logs_response.status_code == 200
     assert len(gateway_logs_response.json()) >= 1
 
