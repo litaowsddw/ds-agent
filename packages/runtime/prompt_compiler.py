@@ -60,6 +60,60 @@ class PromptContextCompiler:
             },
         }
 
+    def compile_messages(
+        self,
+        *,
+        immutable_prefix: list[dict[str, str]],
+        session_summary: str,
+        recent_messages: list[dict[str, str]],
+        long_term_context: str,
+        loaded_skill: str,
+        current_turn: str,
+    ) -> dict[str, object]:
+        """Build a native chat sequence without rewriting prior turns.
+
+        The immutable system messages are byte-stable.  A compacted session
+        summary replaces only the old head of the conversation, while the
+        recent tail remains in its original user/assistant order.  Retrieved
+        long-term memory is intentionally late in the sequence: it augments
+        the current request without mutating the durable session history.
+        """
+
+        messages = [dict(message) for message in immutable_prefix]
+        if session_summary.strip():
+            messages.append(
+                {
+                    "role": "user",
+                    "content": "[Session compaction summary]\n" + session_summary.strip(),
+                }
+            )
+        messages.extend(dict(message) for message in recent_messages)
+        if long_term_context.strip():
+            messages.append(
+                {
+                    "role": "user",
+                    "content": "[Relevant long-term memory; use only when applicable]\n"
+                    + long_term_context.strip(),
+                }
+            )
+        if loaded_skill.strip():
+            messages.append(
+                {
+                    "role": "user",
+                    "content": "[Loaded skill instructions]\n" + loaded_skill.strip(),
+                }
+            )
+        messages.append({"role": "user", "content": current_turn})
+
+        prefix_text = self._stable_json(immutable_prefix)
+        return {
+            "prefix_hash": hashlib.sha256(prefix_text.encode("utf-8")).hexdigest(),
+            # A stable serialization is retained only for diagnostics and
+            # fallback token estimation.  The gateway sends ``messages``.
+            "compiled_prompt": self._stable_json(messages),
+            "messages": messages,
+        }
+
     def _stable_json(self, value: Any) -> str:
         """把任意 JSON 兼容对象序列化为稳定字符串。"""
 

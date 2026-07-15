@@ -20,6 +20,7 @@ def test_deepseek_preflight_uses_official_tokenizer_for_final_prompt() -> None:
         model="deepseek-v4-pro",
         compiled_prompt=str(compiled["compiled_prompt"]),
         components=compiled["context_breakdown"],
+        messages=compiled["messages"],
     )
 
     assert result.status == "official_tokenizer"
@@ -28,6 +29,7 @@ def test_deepseek_preflight_uses_official_tokenizer_for_final_prompt() -> None:
     assert result.stable_prefix_tokens is not None and result.stable_prefix_tokens > 0
     assert sum(int(item["tokens"]) for item in result.breakdown) == result.input_tokens
     assert any(item["key"] == "current_user" for item in result.breakdown)
+    assert any(item["key"] == "system" for item in result.breakdown)
 
 
 def test_unknown_model_uses_explicit_characters_divided_by_four_estimate() -> None:

@@ -42,6 +42,11 @@ class LLMCallRequest:
     provider: str
     model: str
     prompt: str
+    # Chat callers may supply an already assembled OpenAI-compatible message
+    # sequence.  ``prompt`` remains required for existing runtime callers and
+    # for observability previews, while ``messages`` preserves role boundaries
+    # for providers that support native chat payloads.
+    messages: list[dict[str, str]] | None = None
     parameters: dict[str, Any] = field(default_factory=dict)
     metadata: dict[str, Any] = field(default_factory=dict)
     prefix_hash: str = ""
@@ -170,9 +175,10 @@ class OpenAICompatibleProvider:
             raise GatewayProviderError(f"Model provider network error: {exc.reason}") from exc
 
     def _build_payload(self, request: LLMCallRequest, stream: bool = False) -> dict[str, Any]:
+        messages = request.messages or [{"role": "user", "content": request.prompt}]
         payload = {
             "model": request.model,
-            "messages": [{"role": "user", "content": request.prompt}],
+            "messages": messages,
             **{key: value for key, value in request.parameters.items() if value is not None},
         }
         if stream:

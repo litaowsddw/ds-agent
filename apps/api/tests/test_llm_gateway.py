@@ -6,6 +6,7 @@ from apps.api.app.gateway.llm import (
     GatewayProviderError,
     LLMCallRequest,
     LLMGateway,
+    OpenAICompatibleProvider,
 )
 from apps.api.tests.fakes import FakeLLMProvider
 
@@ -83,3 +84,22 @@ async def test_llm_gateway_normalizes_missing_provider_error() -> None:
     logs = gateway.list_logs()
     assert logs[0].status == "failed"
     assert "未注册 LLM Provider" in logs[0].error_message
+
+
+def test_openai_provider_uses_native_messages_when_supplied() -> None:
+    provider = OpenAICompatibleProvider(
+        base_url="https://example.invalid",
+        api_key="test-key",
+        provider_key="test",
+    )
+    request = LLMCallRequest(
+        provider="test",
+        model="test-model",
+        prompt="diagnostic serialization only",
+        messages=[
+            {"role": "system", "content": "stable instructions"},
+            {"role": "user", "content": "current input"},
+        ],
+    )
+
+    assert provider._build_payload(request)["messages"] == request.messages

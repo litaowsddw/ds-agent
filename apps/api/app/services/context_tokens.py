@@ -10,6 +10,7 @@ from __future__ import annotations
 from collections.abc import Iterable
 from dataclasses import dataclass
 from functools import lru_cache
+import json
 from pathlib import Path
 from typing import Any
 
@@ -31,29 +32,27 @@ def preflight_chat_context(
     *,
     provider: str,
     model: str,
-    compiled_prompt: str,
+    compiled_prompt: str = "",
     components: Iterable[dict[str, object]],
+    messages: list[dict[str, str]] | None = None,
 ) -> ContextTokenPreflight:
-    """Count the exact outgoing DeepSeek chat payload before dispatch.
+    """Count the exact outgoing provider message sequence before dispatch."""
 
-    The gateway sends one OpenAI-compatible ``user`` message whose content is
-    ``compiled_prompt``.  Applying the official DeepSeek chat template to that
-    exact message makes the total independent of character-count heuristics.
-    """
+    outgoing_messages = messages or [{"role": "user", "content": compiled_prompt}]
+    fallback_text = compiled_prompt or _message_estimation_text(outgoing_messages)
 
     if not _supports_official_deepseek_tokenizer(provider, model):
-        return _characters_per_four_preflight(compiled_prompt, components)
+        return _characters_per_four_preflight(fallback_text, components)
 
     try:
         tokenizer = _deepseek_tokenizer()
-        messages = [{"role": "user", "content": compiled_prompt}]
         input_ids = tokenizer.apply_chat_template(
-            messages,
+            outgoing_messages,
             tokenize=True,
             add_generation_prompt=True,
         )
         rendered = tokenizer.apply_chat_template(
-            messages,
+            outgoing_messages,
             tokenize=False,
             add_generation_prompt=True,
         )
@@ -75,26 +74,14 @@ def preflight_chat_context(
                 breakdown=[],
             )
 
-        content_start = rendered.find(compiled_prompt)
-        if content_start < 0:
-            return ContextTokenPreflight(
-                input_tokens=len(input_ids),
-                stable_prefix_tokens=None,
-                status="official_total_only",
-                tokenizer=DEEPSEEK_TOKENIZER_NAME,
-                breakdown=[],
-            )
-
-        grouped = _count_component_tokens(
+        grouped, component_spans = _count_component_tokens(
             offsets=offsets,
-            content_start=content_start,
+            rendered=rendered,
             components=components,
         )
-        stable_boundary = compiled_prompt.find("[APPEND_ONLY_LOG]")
         stable_prefix_tokens = _count_stable_prefix_tokens(
             offsets=offsets,
-            content_start=content_start,
-            stable_boundary=stable_boundary,
+            component_spans=component_spans,
         )
         return ContextTokenPreflight(
             input_tokens=len(input_ids),
@@ -105,7 +92,7 @@ def preflight_chat_context(
         )
     except Exception:
         # A missing/corrupt optional tokenizer must not block the model request.
-        return _characters_per_four_preflight(compiled_prompt, components)
+        return _characters_per_four_preflight(fallback_text, components)
 
 
 def _supports_official_deepseek_tokenizer(provider: str, model: str) -> bool:
@@ -125,19 +112,41 @@ def _deepseek_tokenizer() -> Any:
 def _count_component_tokens(
     *,
     offsets: list[tuple[int, int]],
-    content_start: int,
+    rendered: str,
     components: Iterable[dict[str, object]],
-) -> list[dict[str, object]]:
-    spans = [
-        {
-            "key": str(component["key"]),
-            "label": str(component["label"]),
-            "start": content_start + int(component["start"]),
-            "end": content_start + int(component["end"]),
-        }
-        for component in components
-        if "start" in component and "end" in component
-    ]
+) -> tuple[list[dict[str, object]], list[dict[str, object]]]:
+    """Assign rendered chat-template tokens to the native message components."""
+
+    component_list = list(components)
+    spans: list[dict[str, object]] = []
+    cursor = 0
+    for component in component_list:
+        content = str(component.get("content", ""))
+        if not content:
+            continue
+        start = rendered.find(content, cursor)
+        if start < 0:
+            # Legacy single-prompt callers provide serialized spans.  Their
+            # content is located after the full prompt starts in the template.
+            if "start" not in component or "end" not in component:
+                continue
+            prompt_start = rendered.find(str(component.get("compiled_prompt", "")))
+            if prompt_start < 0:
+                continue
+            start = prompt_start + int(component["start"])
+            end = prompt_start + int(component["end"])
+        else:
+            end = start + len(content)
+            cursor = end
+        spans.append(
+            {
+                "key": str(component["key"]),
+                "label": str(component["label"]),
+                "start": start,
+                "end": end,
+                "stable_prefix": bool(component.get("stable_prefix", False)),
+            }
+        )
     counts: dict[str, dict[str, object]] = {}
     order: list[str] = []
     for span in spans:
@@ -158,15 +167,16 @@ def _count_component_tokens(
     ordered = [counts[key] for key in order if int(counts[key]["tokens"]) > 0]
     if int(counts["protocol"]["tokens"]) > 0:
         ordered.append(counts["protocol"])
-    return ordered
+    return ordered, spans
 
 
 def _count_stable_prefix_tokens(
-    *, offsets: list[tuple[int, int]], content_start: int, stable_boundary: int
+    *, offsets: list[tuple[int, int]], component_spans: list[dict[str, object]]
 ) -> int | None:
-    if stable_boundary < 0:
+    stable_ends = [int(span["end"]) for span in component_spans if span["stable_prefix"]]
+    if not stable_ends:
         return None
-    boundary = content_start + stable_boundary
+    boundary = max(stable_ends)
     return sum(1 for start, _ in offsets if start < boundary)
 
 
@@ -184,11 +194,12 @@ def _characters_per_four_preflight(
     counts: dict[str, dict[str, object]] = {}
     order: list[str] = []
     for component in component_list:
-        if "start" not in component or "end" not in component:
+        if "content" in component:
+            characters = len(str(component["content"]))
+        elif "start" in component and "end" in component:
+            characters = max(0, int(component["end"]) - int(component["start"]))
+        else:
             continue
-        start = int(component["start"])
-        end = int(component["end"])
-        characters = max(0, end - start)
         if characters:
             key = str(component["key"])
             if key not in counts:
@@ -208,10 +219,12 @@ def _characters_per_four_preflight(
                 "tokens": protocol_tokens,
             }
         )
-    stable_boundary = compiled_prompt.find("[APPEND_ONLY_LOG]")
-    stable_prefix_tokens = (
-        max(0, stable_boundary // 4) if stable_boundary >= 0 else None
+    stable_characters = sum(
+        len(str(component.get("content", "")))
+        for component in component_list
+        if bool(component.get("stable_prefix", False))
     )
+    stable_prefix_tokens = max(0, stable_characters // 4) if stable_characters else None
     return ContextTokenPreflight(
         input_tokens=total_tokens,
         stable_prefix_tokens=stable_prefix_tokens,
@@ -219,3 +232,9 @@ def _characters_per_four_preflight(
         tokenizer=None,
         breakdown=breakdown,
     )
+
+
+def _message_estimation_text(messages: list[dict[str, str]]) -> str:
+    """Deterministic fallback representation when no model tokenizer exists."""
+
+    return json.dumps(messages, ensure_ascii=False, sort_keys=True, separators=(",", ":"))
