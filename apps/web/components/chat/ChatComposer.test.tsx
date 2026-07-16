@@ -41,7 +41,8 @@ describe("ChatComposer", () => {
     );
 
     expect(container.textContent).toContain("1,330");
-    expect(container.textContent).toContain("输入 1,250 + 输出 80");
+    expect(container.textContent).toContain("上下文 1,330 / 2,400 · 55%");
+    expect(container.textContent).toContain("输入 1,250 · 输出 80");
     expect(container.textContent).toContain("640");
     expect(container.textContent).not.toContain("estimate");
   });

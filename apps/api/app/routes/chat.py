@@ -504,6 +504,51 @@ async def _chat_stream_events(
             token_threshold=_memory_compaction_threshold(agent.context_token_limit),
         )
 
+        # A Skill-router call is itself an LLM call.  Emit a complete baseline
+        # before that call so the composer never has to wait for a model
+        # response before it can display the assembled context.  If a Skill is
+        # selected later, the final preflight below replaces this baseline with
+        # the exact request that will be sent to the answering model.
+        skill_intent = detect_skill_creation_request(request.message)
+        allowed_skills = []
+        skill_catalog = ""
+        if not skill_intent.is_skill_request:
+            allowed_skills = await skill_db.list_agent_allowed_skills(
+                db,
+                agent_id=agent.agent_id,
+                org_id=org_id,
+            )
+            skill_catalog = format_skill_description_catalog(allowed_skills)
+            baseline_prompt = _compile_agent_chat_prompt(
+                agent,
+                request.message,
+                memory_context="",
+                skill_catalog=skill_catalog,
+                skill_context="",
+                recent_messages=recent_messages,
+                compact_summary=memory_context.compact_summary,
+                long_term_context=memory_context.long_term_context,
+            )
+            from app.services.context_tokens import preflight_chat_context
+
+            baseline_preflight = preflight_chat_context(
+                provider=model_provider,
+                model=model_name,
+                compiled_prompt=str(baseline_prompt["compiled_prompt"]),
+                components=baseline_prompt["context_breakdown"],
+                messages=baseline_prompt["messages"],
+            )
+            yield await emit(
+                "context_preflight",
+                input_tokens=baseline_preflight.input_tokens,
+                stable_prefix_tokens=baseline_preflight.stable_prefix_tokens,
+                tokenizer_status=baseline_preflight.status,
+                tokenizer=baseline_preflight.tokenizer,
+                token_limit=_memory_compaction_threshold(agent.context_token_limit),
+                prompt_breakdown=baseline_preflight.breakdown,
+                preflight_phase="baseline",
+            )
+
         supervisors = await agent_db.list_org_agents(db, org_id, kind="SUPERVISOR")
         supervisor = sorted(supervisors, key=lambda item: item.created_at, reverse=True)[0] if supervisors else None
         planner = supervisor or agent
@@ -516,7 +561,6 @@ async def _chat_stream_events(
             supervisor_name=planner.name,
             supervisor_kind=planner.kind,
         )
-        skill_intent = detect_skill_creation_request(request.message)
         planned_action = "create_skill" if skill_intent.is_skill_request else "chat"
         yield await emit(
             "node_finished",
@@ -597,12 +641,6 @@ async def _chat_stream_events(
                 agent_id=agent.agent_id,
                 agent_name=agent.name,
             )
-            allowed_skills = await skill_db.list_agent_allowed_skills(
-                db,
-                agent_id=agent.agent_id,
-                org_id=org_id,
-            )
-            skill_catalog = format_skill_description_catalog(allowed_skills)
             skill_selection = None
             if skill_catalog:
                 router_response = await adapter.call(
@@ -671,10 +709,7 @@ async def _chat_stream_events(
                 compact_summary=memory_context.compact_summary,
                 long_term_context=memory_context.long_term_context,
             )
-            from app.services.context_tokens import (
-                count_stream_output_tokens,
-                preflight_chat_context,
-            )
+            from app.services.context_tokens import count_stream_output_tokens, preflight_chat_context
 
             preflight = preflight_chat_context(
                 provider=model_provider,
@@ -695,6 +730,7 @@ async def _chat_stream_events(
                 tokenizer=preflight.tokenizer,
                 token_limit=_memory_compaction_threshold(agent.context_token_limit),
                 prompt_breakdown=preflight.breakdown,
+                preflight_phase="final",
             )
             llm_request = LLMCallRequest(
                 provider=model_provider,

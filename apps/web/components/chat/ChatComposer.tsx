@@ -2,6 +2,21 @@
 
 import { useState, type ReactNode } from "react";
 
+type ContextUsage = {
+  inputTokens: number | null;
+  outputTokens: number;
+  contextTokens: number | null;
+  outputTokenStatus: "official_tokenizer" | "characters_divided_by_4" | "provider_final" | "unavailable";
+  cacheReadInputTokens: number | null;
+  limitTokens: number;
+  usageStatus: "provider_final" | "unavailable";
+  preflightInputTokens: number | null;
+  stablePrefixTokens: number | null;
+  tokenizerStatus: "official_tokenizer" | "official_total_only" | "characters_divided_by_4";
+  tokenizer: string | null;
+  promptBreakdown: Array<{ key: string; label: string; tokens: number }>;
+};
+
 export default function ChatComposer({
   disabled,
   retryDisabled = disabled,
@@ -16,20 +31,7 @@ export default function ChatComposer({
   onSend: (message: string) => void | Promise<void>;
   onRetry?: () => void | Promise<void>;
   retryBlockedMessage?: string;
-  contextUsage?: {
-    inputTokens: number | null;
-    outputTokens: number;
-    contextTokens: number | null;
-    outputTokenStatus: "official_tokenizer" | "characters_divided_by_4" | "provider_final" | "unavailable";
-    cacheReadInputTokens: number | null;
-    limitTokens: number;
-    usageStatus: "provider_final" | "unavailable";
-    preflightInputTokens: number | null;
-    stablePrefixTokens: number | null;
-    tokenizerStatus: "official_tokenizer" | "official_total_only" | "characters_divided_by_4";
-    tokenizer: string | null;
-    promptBreakdown: Array<{ key: string; label: string; tokens: number }>;
-  };
+  contextUsage?: ContextUsage;
   children?: ReactNode;
 }) {
   const [input, setInput] = useState("");
@@ -44,6 +46,9 @@ export default function ChatComposer({
   const contextPercent = displayedTokens !== null && displayedTokens !== undefined && (contextUsage?.limitTokens ?? 0) > 0
     ? Math.round((displayedTokens / contextUsage!.limitTokens) * 100)
     : null;
+  const contextSummary = displayedTokens !== null
+    ? `${contextUsage?.tokenizerStatus === "characters_divided_by_4" ? "上下文估算" : "上下文"} ${displayedTokens.toLocaleString()} / ${contextUsage?.limitTokens.toLocaleString()} · ${contextPercent}%`
+    : "上下文：正在组装";
 
   const send = () => {
     const message = input.trim();
@@ -87,43 +92,53 @@ export default function ChatComposer({
         />
         <div className="flex shrink-0 items-center gap-2">
           {contextUsage ? (
-            <div className="relative whitespace-nowrap text-xs text-[#667085]">
+            <div className="relative flex shrink-0 items-center gap-2 whitespace-nowrap text-xs text-[#667085]">
               <span
                 aria-label="当前上下文占比"
-                title="请求前即可计算输入上下文；流式过程中会叠加已接收输出。结束后由供应商 usage 校准输入、输出和缓存命中。"
+                title="请求前会先计算已知完整上下文；Skill 路由完成后会自动校正。流式过程中实时累加输出，结束后以供应商 usage 校准。"
               >
-                {displayedTokens !== null
-                  ? `${contextUsage.tokenizerStatus === "characters_divided_by_4" ? "当前上下文估算（字符÷4）" : "当前上下文"} ${displayedTokens.toLocaleString()} / 压缩上限 ${contextUsage.limitTokens.toLocaleString()} · ${contextPercent}% · 输入 ${(inputContextTokens ?? 0).toLocaleString()} + 输出 ${contextUsage.outputTokens.toLocaleString()}${contextUsage.outputTokenStatus === "provider_final" ? "（供应商已校准）" : "（流式）"}${contextUsage.cacheReadInputTokens !== null ? ` · 实际缓存命中 ${contextUsage.cacheReadInputTokens.toLocaleString()}` : ""}`
-                  : "当前上下文：等待计算"}
+                {contextSummary}
               </span>
-              {contextUsage.stablePrefixTokens !== null && contextUsage.stablePrefixTokens !== undefined ? (
-                <span className="pl-2 text-[#667085]" title="这是稳定可复用前缀的 token 数，不等于供应商实际缓存命中。">
-                  · 稳定前缀候选 {contextUsage.stablePrefixTokens.toLocaleString()}
-                </span>
-              ) : null}
-              {inputContextTokens && contextUsage.promptBreakdown.length > 0 ? (
-                <details className="inline-block pl-2">
-                  <summary className="cursor-pointer text-[#2f6feb]">构成</summary>
+              {(displayedTokens !== null || contextUsage.promptBreakdown.length > 0) ? (
+                <details className="relative">
+                  <summary className="cursor-pointer text-[#2f6feb]">详情</summary>
                   <div className="absolute bottom-7 right-0 z-20 w-80 rounded-lg border border-[#dfe4ee] bg-white p-3 text-left shadow-lg">
                     <div className="mb-2 font-medium text-[#172033]">当前输入上下文构成</div>
-                    <div className="mb-2 text-[#667085]">{contextUsage.tokenizerStatus === "characters_divided_by_4" ? "该模型未接入 tokenizer，输入与流式输出均按字符÷4 估算；结束后仅以供应商 usage 做计费核对。" : "输入按最终 native messages 与 chat template 计算；流式输出实时累计，结束后由供应商 usage 校准。"}</div>
-                    <div className="mb-2 flex h-2 overflow-hidden rounded-full bg-[#eef2f6]">
-                      {contextUsage.promptBreakdown.map((section, index) => (
-                        <span
-                          key={section.key}
-                          className={["bg-[#2f6feb]", "bg-[#7c3aed]", "bg-[#0ea5e9]", "bg-[#f59e0b]", "bg-[#10b981]", "bg-[#64748b]"][index % 6]}
-                          style={{ width: `${Math.round((section.tokens / inputContextTokens) * 100)}%` }}
-                        />
-                      ))}
+                    <div className="mb-2 text-[#667085]">
+                      输入 {(inputContextTokens ?? 0).toLocaleString()} · 输出 {contextUsage.outputTokens.toLocaleString()}{contextUsage.outputTokenStatus === "provider_final" ? "（供应商已校准）" : "（流式累计）"}
                     </div>
-                    <div className="space-y-1">
-                      {contextUsage.promptBreakdown.map((section) => (
-                        <div key={section.key} className="flex items-center justify-between gap-3">
-                          <span className="truncate">{section.label}</span>
-                          <span>{section.tokens.toLocaleString()} · {Math.round((section.tokens / inputContextTokens) * 100)}%</span>
+                    {contextUsage.cacheReadInputTokens !== null ? (
+                      <div className="mb-2 text-[#667085]">供应商实际缓存命中 {contextUsage.cacheReadInputTokens.toLocaleString()}</div>
+                    ) : null}
+                    {contextUsage.stablePrefixTokens !== null ? (
+                      <div className="mb-2 text-[#667085]">稳定前缀候选 {contextUsage.stablePrefixTokens.toLocaleString()}（不等于实际命中）</div>
+                    ) : null}
+                    <div className="mb-2 text-[#667085]">
+                      {contextUsage.tokenizerStatus === "characters_divided_by_4"
+                        ? "该模型未接入 tokenizer，输入与流式输出按字符÷4 估算；结束后仅用供应商 usage 做计费核对。"
+                        : "输入按最终 native messages 与 chat template 计算；流式输出实时累计，结束后由供应商 usage 校准。"}
+                    </div>
+                    {inputContextTokens && contextUsage.promptBreakdown.length > 0 ? (
+                      <>
+                        <div className="mb-2 flex h-2 overflow-hidden rounded-full bg-[#eef2f6]">
+                          {contextUsage.promptBreakdown.map((section, index) => (
+                            <span
+                              key={section.key}
+                              className={["bg-[#2f6feb]", "bg-[#7c3aed]", "bg-[#0ea5e9]", "bg-[#f59e0b]", "bg-[#10b981]", "bg-[#64748b]"][index % 6]}
+                              style={{ width: `${Math.round((section.tokens / inputContextTokens) * 100)}%` }}
+                            />
+                          ))}
                         </div>
-                      ))}
-                    </div>
+                        <div className="space-y-1">
+                          {contextUsage.promptBreakdown.map((section) => (
+                            <div key={section.key} className="flex items-center justify-between gap-3">
+                              <span className="truncate">{section.label}</span>
+                              <span>{section.tokens.toLocaleString()} · {Math.round((section.tokens / inputContextTokens) * 100)}%</span>
+                            </div>
+                          ))}
+                        </div>
+                      </>
+                    ) : null}
                   </div>
                 </details>
               ) : null}
