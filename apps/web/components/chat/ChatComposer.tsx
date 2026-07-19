@@ -53,11 +53,12 @@ export default function ChatComposer({
   const contextSummary = displayedTokens !== null
     ? `${contextUsage?.tokenizerStatus === "characters_divided_by_4" ? "上下文估算" : "上下文"} ${displayedTokens.toLocaleString()} / ${contextUsage?.limitTokens.toLocaleString()} · ${contextPercent}%`
     : "上下文：正在组装";
+  const hasActualUsageEvent = contextUsage?.calibrationStatus !== undefined || liveContextUsage !== null;
   const calibrationStatus = contextUsage?.calibrationStatus
     ?? liveContextUsage?.calibrationStatus
     ?? (contextUsage?.usageStatus === "provider_final" ? "provider_final" : "unavailable");
   const activeWorkflowNodeId = contextUsage?.activeWorkflowNodeId ?? liveContextUsage?.activeWorkflowNodeId ?? null;
-  const qualityLabel = contextUsage ? {
+  const qualityLabel = contextUsage && hasActualUsageEvent ? {
     estimated: "实时估算",
     partially_calibrated: "部分已校准",
     provider_final: "Provider 已校准",

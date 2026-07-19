@@ -81,6 +81,33 @@ describe("ChatComposer", () => {
     expect(container.textContent).not.toContain("2,400 ·");
   });
 
+  it("keeps the idle placeholder neutral before any context usage event", () => {
+    useChatStore.setState({ actualContextUsage: null });
+
+    render(
+      <ChatComposer
+        disabled={false}
+        onSend={vi.fn()}
+        contextUsage={{
+          inputTokens: null,
+          outputTokens: 0,
+          contextTokens: null,
+          outputTokenStatus: "unavailable",
+          cacheReadInputTokens: null,
+          limitTokens: 2400,
+          usageStatus: "unavailable",
+          preflightInputTokens: null,
+          stablePrefixTokens: null,
+          tokenizerStatus: "characters_divided_by_4",
+          tokenizer: null,
+          promptBreakdown: [],
+        }}
+      />
+    );
+
+    expect(screen.queryByText("Provider 未提供用量")).not.toBeInTheDocument();
+  });
+
   it.each([
     ["estimated", "实时估算"],
     ["partially_calibrated", "部分已校准"],
