@@ -1,8 +1,13 @@
 import { fireEvent, render, screen } from "@testing-library/react";
-import { describe, expect, it, vi } from "vitest";
+import { afterEach, describe, expect, it, vi } from "vitest";
 import ChatComposer from "@/components/chat/ChatComposer";
+import { useChatStore } from "@/stores/chat";
 
 describe("ChatComposer", () => {
+  afterEach(() => {
+    useChatStore.setState({ actualContextUsage: null });
+  });
+
   it("sends with Enter and keeps a controlled Shift+Enter newline", () => {
     const onSend = vi.fn();
     render(<ChatComposer disabled={false} onSend={onSend} />);
@@ -36,6 +41,8 @@ describe("ChatComposer", () => {
             { key: "system", label: "System prompt", tokens: 250 },
             { key: "tools", label: "Tools / Skills", tokens: 998 },
           ],
+          calibrationStatus: "provider_final",
+          activeWorkflowNodeId: null,
         }}
       />
     );
@@ -65,10 +72,116 @@ describe("ChatComposer", () => {
           tokenizerStatus: "characters_divided_by_4",
           tokenizer: null,
           promptBreakdown: [],
+          calibrationStatus: "unavailable",
+          activeWorkflowNodeId: null,
         }}
       />
     );
 
     expect(container.textContent).not.toContain("2,400 ·");
+  });
+
+  it.each([
+    ["estimated", "实时估算"],
+    ["partially_calibrated", "部分已校准"],
+    ["provider_final", "Provider 已校准"],
+    ["unavailable", "Provider 未提供用量"],
+  ] as const)("shows the %s calibration label", (calibrationStatus, label) => {
+    render(
+      <ChatComposer
+        disabled={false}
+        onSend={vi.fn()}
+        contextUsage={{
+          inputTokens: calibrationStatus === "unavailable" ? null : 100,
+          outputTokens: calibrationStatus === "unavailable" ? 0 : 20,
+          contextTokens: calibrationStatus === "unavailable" ? null : 120,
+          outputTokenStatus: calibrationStatus === "provider_final" ? "provider_final" : "unavailable",
+          cacheReadInputTokens: null,
+          limitTokens: 2400,
+          usageStatus: calibrationStatus === "provider_final" ? "provider_final" : "unavailable",
+          preflightInputTokens: calibrationStatus === "unavailable" ? null : 100,
+          stablePrefixTokens: null,
+          tokenizerStatus: "characters_divided_by_4",
+          tokenizer: null,
+          promptBreakdown: [],
+          calibrationStatus,
+          activeWorkflowNodeId: calibrationStatus === "estimated" ? "llm-a" : null,
+        }}
+      />
+    );
+
+    expect(screen.getByText(label)).toBeInTheDocument();
+  });
+
+  it("shows the active Workflow node", () => {
+    render(
+      <ChatComposer
+        disabled={false}
+        onSend={vi.fn()}
+        contextUsage={{
+          inputTokens: 100,
+          outputTokens: 20,
+          contextTokens: 120,
+          outputTokenStatus: "characters_divided_by_4",
+          cacheReadInputTokens: null,
+          limitTokens: 2400,
+          usageStatus: "unavailable",
+          preflightInputTokens: 100,
+          stablePrefixTokens: null,
+          tokenizerStatus: "characters_divided_by_4",
+          tokenizer: null,
+          promptBreakdown: [],
+          calibrationStatus: "estimated",
+          activeWorkflowNodeId: "llm-a",
+        }}
+      />
+    );
+
+    expect(screen.getByText("当前节点：llm-a")).toBeInTheDocument();
+  });
+
+  it("uses live calibration metadata when the host passes legacy usage props", () => {
+    useChatStore.setState({
+      actualContextUsage: {
+        inputTokens: 100,
+        outputTokens: 20,
+        contextTokens: 120,
+        outputTokenStatus: "characters_divided_by_4",
+        cacheReadInputTokens: null,
+        tokenLimit: 2400,
+        usageStatus: "unavailable",
+        preflightInputTokens: 100,
+        stablePrefixTokens: null,
+        tokenizerStatus: "characters_divided_by_4",
+        tokenizer: null,
+        promptBreakdown: [],
+        calibrationStatus: "estimated",
+        activeWorkflowNodeId: "llm-a",
+      },
+    });
+
+    render(
+      <ChatComposer
+        disabled={false}
+        onSend={vi.fn()}
+        contextUsage={{
+          inputTokens: 100,
+          outputTokens: 20,
+          contextTokens: 120,
+          outputTokenStatus: "characters_divided_by_4",
+          cacheReadInputTokens: null,
+          limitTokens: 2400,
+          usageStatus: "unavailable",
+          preflightInputTokens: 100,
+          stablePrefixTokens: null,
+          tokenizerStatus: "characters_divided_by_4",
+          tokenizer: null,
+          promptBreakdown: [],
+        } as never}
+      />
+    );
+
+    expect(screen.getByText("实时估算")).toBeInTheDocument();
+    expect(screen.getByText("当前节点：llm-a")).toBeInTheDocument();
   });
 });

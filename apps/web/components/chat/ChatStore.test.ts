@@ -71,6 +71,7 @@ describe("chat store retry safety", () => {
       intent: "",
       subtaskCount: 0,
       failedSendSnapshot: null,
+      actualContextUsage: null,
     });
   });
 
@@ -278,5 +279,63 @@ describe("chat store retry safety", () => {
     expect(useChatStore.getState().messages.at(-1)?.content).toBe("对话失败");
     await useChatStore.getState().sendMessage("agent-a", "org-a", "第二次", "user-a");
     expect(useChatStore.getState().messages.at(-1)?.content).toBe("对话失败：provider detail");
+  });
+
+  it("aggregates workflow usage by call and keeps mixed calibration explicit", async () => {
+    const usageUpdates: Array<NonNullable<ReturnType<typeof useChatStore.getState>["actualContextUsage"]>> = [];
+    const unsubscribe = useChatStore.subscribe((state) => {
+      if (state.actualContextUsage) usageUpdates.push(state.actualContextUsage);
+    });
+    vi.stubGlobal(
+      "fetch",
+      vi.fn().mockResolvedValue(
+        streamWithFrames(
+          'event: context_preflight\ndata: {"usage_key":"run:llm-a","usage_scope":"workflow","workflow_node_id":"llm-a","input_tokens":100,"usage_phase":"preflight"}\n\n' +
+            'event: context_progress\ndata: {"usage_key":"run:llm-a","usage_scope":"workflow","workflow_node_id":"llm-a","output_tokens":20,"context_tokens":120,"usage_phase":"estimated"}\n\n' +
+            'event: context_usage\ndata: {"usage_key":"run:llm-a","usage_scope":"workflow","workflow_node_id":"llm-a","input_tokens":110,"output_tokens":22,"usage_phase":"provider_final","usage_status":"provider_final"}\n\n' +
+            'event: context_preflight\ndata: {"usage_key":"run:llm-b","usage_scope":"workflow","workflow_node_id":"llm-b","input_tokens":200,"usage_phase":"preflight"}\n\n' +
+            'event: context_progress\ndata: {"usage_key":"run:llm-b","usage_scope":"workflow","workflow_node_id":"llm-b","output_tokens":10,"usage_phase":"estimated"}\n\n'
+        )
+      )
+    );
+
+    await useChatStore.getState().sendMessage("agent-a", "org-a", "你好", "user-a");
+    unsubscribe();
+
+    expect(usageUpdates).toContainEqual(expect.objectContaining({
+      contextTokens: 120,
+      calibrationStatus: "estimated",
+      activeWorkflowNodeId: "llm-a",
+    }));
+    expect(usageUpdates).toContainEqual(expect.objectContaining({
+      contextTokens: 132,
+      calibrationStatus: "provider_final",
+      activeWorkflowNodeId: null,
+    }));
+    expect(useChatStore.getState().actualContextUsage).toMatchObject({
+      inputTokens: 310,
+      outputTokens: 32,
+      contextTokens: 342,
+      calibrationStatus: "partially_calibrated",
+      activeWorkflowNodeId: "llm-b",
+    });
+  });
+
+  it("keeps the most recently progressed Workflow node active", async () => {
+    vi.stubGlobal(
+      "fetch",
+      vi.fn().mockResolvedValue(
+        streamWithFrames(
+          'event: context_progress\ndata: {"usage_key":"run:llm-a","usage_scope":"workflow","workflow_node_id":"llm-a","input_tokens":100,"output_tokens":20,"usage_phase":"estimated"}\n\n' +
+            'event: context_preflight\ndata: {"usage_key":"run:llm-b","usage_scope":"workflow","workflow_node_id":"llm-b","input_tokens":200,"usage_phase":"preflight"}\n\n'
+        )
+      )
+    );
+
+    await useChatStore.getState().sendMessage("agent-a", "org-a", "你好", "user-a");
+
+    expect(useChatStore.getState().actualContextUsage).toMatchObject({
+      activeWorkflowNodeId: "llm-a",
+    });
   });
 });

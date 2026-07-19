@@ -43,6 +43,35 @@ export interface ActualContextUsage {
   tokenizerStatus: "official_tokenizer" | "official_total_only" | "characters_divided_by_4";
   tokenizer: string | null;
   promptBreakdown: Array<{ key: string; label: string; tokens: number }>;
+  calibrationStatus: CalibrationStatus;
+  activeWorkflowNodeId: string | null;
+}
+
+export type CalibrationStatus =
+  | "estimated"
+  | "partially_calibrated"
+  | "provider_final"
+  | "unavailable";
+
+type UsageScope = "chat" | "skill_create" | "workflow";
+type UsagePhase = "preflight" | "estimated" | "provider_final" | "unavailable";
+
+interface UsageCallState {
+  key: string;
+  scope: UsageScope;
+  workflowNodeId: string | null;
+  estimatedInputTokens: number | null;
+  estimatedOutputTokens: number;
+  finalInputTokens: number | null;
+  finalOutputTokens: number | null;
+  tokenLimit: number;
+  phase: UsagePhase;
+  hasProgress: boolean;
+  cacheReadInputTokens: number | null;
+  stablePrefixTokens: number | null;
+  tokenizerStatus: "official_tokenizer" | "official_total_only" | "characters_divided_by_4";
+  tokenizer: string | null;
+  promptBreakdown: Array<{ key: string; label: string; tokens: number }>;
 }
 
 export type ChatExecutionMode = "autonomous" | "workflow";
@@ -71,6 +100,7 @@ interface ChatState {
   subtaskCount: number;
   failedSendSnapshot: FailedSendSnapshot | null;
   actualContextUsage: ActualContextUsage | null;
+  usageCalls: Record<string, UsageCallState>;
 
   sendMessage: (
     agentId: string,
@@ -100,6 +130,7 @@ export const useChatStore = create<ChatState>((set, get) => ({
   subtaskCount: 0,
   failedSendSnapshot: null,
   actualContextUsage: null,
+  usageCalls: {},
 
   sendMessage: async (agentId, orgId, message, actorUserId, options) => {
     const generation = ++activeChatGeneration;
@@ -115,7 +146,14 @@ export const useChatStore = create<ChatState>((set, get) => ({
       },
     };
     let streamFailed = false;
-    set({ isGenerating: true, agentId, traceEvents: [], failedSendSnapshot: null, actualContextUsage: null });
+    set({
+      isGenerating: true,
+      agentId,
+      traceEvents: [],
+      failedSendSnapshot: null,
+      actualContextUsage: null,
+      usageCalls: {},
+    });
 
     const userMsg: Message = {
       message_id: `temp_${Date.now()}`,
@@ -175,54 +213,51 @@ export const useChatStore = create<ChatState>((set, get) => ({
           }
 
           if (event === "context_preflight" || event === "context_progress" || event === "context_usage") {
-            const inputTokens = typeof data.input_tokens === "number" ? data.input_tokens : null;
-            const outputTokens = typeof data.output_tokens === "number" ? data.output_tokens : null;
-            const contextTokens = typeof data.context_tokens === "number" ? data.context_tokens : null;
-            const cacheReadInputTokens = typeof data.cache_read_input_tokens === "number"
-              ? data.cache_read_input_tokens
-              : null;
-            const tokenLimit = typeof data.token_limit === "number" ? data.token_limit : 2400;
-            const previous = get().actualContextUsage;
-            const preflightInputTokens = typeof data.preflight_input_tokens === "number"
-              ? data.preflight_input_tokens
-              : (event === "context_preflight" || event === "context_progress") && typeof data.input_tokens === "number"
-                ? data.input_tokens
-                : previous?.preflightInputTokens ?? null;
-            const stablePrefixTokens = typeof data.stable_prefix_tokens === "number"
-              ? data.stable_prefix_tokens
-              : previous?.stablePrefixTokens ?? null;
-            const promptBreakdown = Array.isArray(data.prompt_breakdown)
-              ? data.prompt_breakdown.flatMap((item) => {
-                  if (!item || typeof item !== "object") return [];
-                  const value = item as Record<string, unknown>;
-                  return typeof value.key === "string" && typeof value.label === "string" && typeof value.tokens === "number"
-                    ? [{ key: value.key, label: value.label, tokens: value.tokens }]
-                    : [];
-                })
-              : previous?.promptBreakdown ?? [];
-            set({
-              actualContextUsage: {
-                inputTokens: event === "context_usage" ? inputTokens : previous?.inputTokens ?? null,
-                outputTokens: outputTokens ?? previous?.outputTokens ?? 0,
-                contextTokens: contextTokens ?? (
-                  preflightInputTokens !== null
-                    ? preflightInputTokens + (outputTokens ?? previous?.outputTokens ?? 0)
-                    : null
-                ),
-                outputTokenStatus: data.output_token_status === "official_tokenizer" || data.output_token_status === "characters_divided_by_4" || data.output_token_status === "provider_final"
-                  ? data.output_token_status
-                  : previous?.outputTokenStatus ?? "unavailable",
-                cacheReadInputTokens: event === "context_usage" ? cacheReadInputTokens : previous?.cacheReadInputTokens ?? null,
-                tokenLimit,
-                usageStatus: event === "context_usage" && data.usage_status === "provider_final" ? "provider_final" : previous?.usageStatus ?? "unavailable",
-                preflightInputTokens,
-                stablePrefixTokens,
-                tokenizerStatus: data.tokenizer_status === "official_tokenizer" || data.tokenizer_status === "official_total_only" || data.tokenizer_status === "characters_divided_by_4"
-                  ? data.tokenizer_status
-                  : "characters_divided_by_4",
-                tokenizer: typeof data.tokenizer === "string" ? data.tokenizer : previous?.tokenizer ?? null,
-                promptBreakdown,
-              },
+            set((state) => {
+              const usageKey = typeof data.usage_key === "string" && data.usage_key
+                ? data.usage_key
+                : "chat:default";
+              const previousCall = state.usageCalls[usageKey];
+              const phase = getUsagePhase(event, data);
+              const inputTokens = typeof data.input_tokens === "number" ? data.input_tokens : null;
+              const outputTokens = typeof data.output_tokens === "number" ? data.output_tokens : null;
+              const usageCall: UsageCallState = {
+                key: usageKey,
+                scope: getUsageScope(data.usage_scope, previousCall?.scope),
+                workflowNodeId: typeof data.workflow_node_id === "string"
+                  ? data.workflow_node_id
+                  : previousCall?.workflowNodeId ?? null,
+                estimatedInputTokens: phase === "provider_final" || phase === "unavailable"
+                  ? previousCall?.estimatedInputTokens ?? null
+                  : inputTokens ?? previousCall?.estimatedInputTokens ?? null,
+                estimatedOutputTokens: phase === "provider_final"
+                  ? previousCall?.estimatedOutputTokens ?? 0
+                  : outputTokens ?? previousCall?.estimatedOutputTokens ?? 0,
+                finalInputTokens: phase === "provider_final"
+                  ? inputTokens
+                  : previousCall?.finalInputTokens ?? null,
+                finalOutputTokens: phase === "provider_final"
+                  ? outputTokens
+                  : previousCall?.finalOutputTokens ?? null,
+                tokenLimit: typeof data.token_limit === "number"
+                  ? data.token_limit
+                  : previousCall?.tokenLimit ?? 2400,
+                phase,
+                hasProgress: event === "context_progress" || previousCall?.hasProgress === true,
+                cacheReadInputTokens: typeof data.cache_read_input_tokens === "number"
+                  ? data.cache_read_input_tokens
+                  : previousCall?.cacheReadInputTokens ?? null,
+                stablePrefixTokens: typeof data.stable_prefix_tokens === "number"
+                  ? data.stable_prefix_tokens
+                  : previousCall?.stablePrefixTokens ?? null,
+                tokenizerStatus: getTokenizerStatus(data.tokenizer_status, previousCall?.tokenizerStatus),
+                tokenizer: typeof data.tokenizer === "string" ? data.tokenizer : previousCall?.tokenizer ?? null,
+                promptBreakdown: getPromptBreakdown(data.prompt_breakdown) ?? previousCall?.promptBreakdown ?? [],
+              };
+              const usageCalls = { ...state.usageCalls };
+              if (event === "context_progress" && previousCall) delete usageCalls[usageKey];
+              usageCalls[usageKey] = usageCall;
+              return { usageCalls, actualContextUsage: aggregateUsage(usageCalls) };
             });
           }
 
@@ -288,6 +323,7 @@ export const useChatStore = create<ChatState>((set, get) => ({
       intent: "",
       subtaskCount: 0,
       actualContextUsage: null,
+      usageCalls: {},
     });
     try {
       const result = await apiRequest<{ session_id: string | null; messages: Message[] }>(
@@ -322,7 +358,7 @@ export const useChatStore = create<ChatState>((set, get) => ({
   loadMessages: async (sessionId) => {
     try {
       const result = await apiRequest<{ messages: Message[] }>(`/chat/sessions/${sessionId}/messages`);
-      set({ sessionId, messages: result.messages || [] });
+      set({ sessionId, messages: result.messages || [], actualContextUsage: null, usageCalls: {} });
     } catch {
       // Keep the current local messages when history loading fails.
     }
@@ -338,6 +374,7 @@ export const useChatStore = create<ChatState>((set, get) => ({
       intent: "",
       subtaskCount: 0,
       actualContextUsage: null,
+      usageCalls: {},
       failedSendSnapshot: null,
       isGenerating: false,
     });
@@ -350,6 +387,96 @@ export const useChatStore = create<ChatState>((set, get) => ({
     });
   },
 }));
+
+function getUsageScope(value: unknown, fallback: UsageScope | undefined): UsageScope {
+  return value === "chat" || value === "skill_create" || value === "workflow"
+    ? value
+    : fallback ?? "chat";
+}
+
+function getUsagePhase(event: string, data: Record<string, unknown>): UsagePhase {
+  if (
+    data.usage_phase === "preflight" ||
+    data.usage_phase === "estimated" ||
+    data.usage_phase === "provider_final" ||
+    data.usage_phase === "unavailable"
+  ) {
+    return data.usage_phase;
+  }
+  if (data.usage_status === "provider_final") return "provider_final";
+  if (data.usage_status === "unavailable") return "unavailable";
+  if (event === "context_preflight") return "preflight";
+  if (event === "context_progress") return "estimated";
+  return "unavailable";
+}
+
+function getTokenizerStatus(
+  value: unknown,
+  fallback: UsageCallState["tokenizerStatus"] | undefined
+): UsageCallState["tokenizerStatus"] {
+  return value === "official_tokenizer" || value === "official_total_only" || value === "characters_divided_by_4"
+    ? value
+    : fallback ?? "characters_divided_by_4";
+}
+
+function getPromptBreakdown(value: unknown): Array<{ key: string; label: string; tokens: number }> | null {
+  if (!Array.isArray(value)) return null;
+  return value.flatMap((item) => {
+    if (!item || typeof item !== "object") return [];
+    const section = item as Record<string, unknown>;
+    return typeof section.key === "string" && typeof section.label === "string" && typeof section.tokens === "number"
+      ? [{ key: section.key, label: section.label, tokens: section.tokens }]
+      : [];
+  });
+}
+
+function aggregateUsage(calls: Record<string, UsageCallState>): ActualContextUsage {
+  const entries = Object.values(calls);
+  const isFinal = (entry: UsageCallState) => entry.phase === "provider_final";
+  const inputTokens = entries.reduce<number | null>((total, entry) => {
+    const value = isFinal(entry) ? entry.finalInputTokens : entry.estimatedInputTokens;
+    return value === null || total === null ? null : total + value;
+  }, 0);
+  const outputTokens = entries.reduce(
+    (total, entry) => total + (isFinal(entry)
+      ? entry.finalOutputTokens ?? entry.estimatedOutputTokens
+      : entry.estimatedOutputTokens),
+    0,
+  );
+  const finalCount = entries.filter(isFinal).length;
+  const calibrationStatus: CalibrationStatus =
+    finalCount === entries.length && entries.length > 0 ? "provider_final" :
+    finalCount > 0 ? "partially_calibrated" :
+    entries.every((entry) => entry.phase === "unavailable") ? "unavailable" :
+    "estimated";
+  const activeWorkflow = [...entries].reverse().find(
+    (entry) => entry.scope === "workflow" && entry.hasProgress && !isFinal(entry) && entry.phase !== "unavailable",
+  );
+  const cacheReadInputTokens = entries.length > 0 && entries.every((entry) => entry.cacheReadInputTokens !== null)
+    ? entries.reduce((total, entry) => total + (entry.cacheReadInputTokens ?? 0), 0)
+    : null;
+  const lastEntry = entries.at(-1);
+
+  return {
+    inputTokens,
+    outputTokens,
+    contextTokens: inputTokens === null ? null : inputTokens + outputTokens,
+    outputTokenStatus: calibrationStatus === "provider_final" ? "provider_final" : "characters_divided_by_4",
+    cacheReadInputTokens,
+    tokenLimit: lastEntry?.tokenLimit ?? 2400,
+    usageStatus: calibrationStatus === "provider_final" ? "provider_final" : "unavailable",
+    preflightInputTokens: inputTokens,
+    stablePrefixTokens: lastEntry?.stablePrefixTokens ?? null,
+    tokenizerStatus: lastEntry?.tokenizerStatus ?? "characters_divided_by_4",
+    tokenizer: lastEntry?.tokenizer ?? null,
+    promptBreakdown: entries.flatMap((entry) => entry.promptBreakdown.map((section) => ({
+      ...section,
+      key: `${entry.key}:${section.key}`,
+    }))),
+    calibrationStatus,
+    activeWorkflowNodeId: activeWorkflow?.workflowNodeId ?? null,
+  };
+}
 
 async function streamChat({
   agentId,

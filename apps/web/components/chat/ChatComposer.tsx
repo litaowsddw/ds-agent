@@ -1,6 +1,7 @@
 "use client";
 
 import { useState, type ReactNode } from "react";
+import { useChatStore } from "@/stores/chat";
 
 type ContextUsage = {
   inputTokens: number | null;
@@ -15,6 +16,8 @@ type ContextUsage = {
   tokenizerStatus: "official_tokenizer" | "official_total_only" | "characters_divided_by_4";
   tokenizer: string | null;
   promptBreakdown: Array<{ key: string; label: string; tokens: number }>;
+  calibrationStatus?: "estimated" | "partially_calibrated" | "provider_final" | "unavailable";
+  activeWorkflowNodeId?: string | null;
 };
 
 export default function ChatComposer({
@@ -35,6 +38,7 @@ export default function ChatComposer({
   children?: ReactNode;
 }) {
   const [input, setInput] = useState("");
+  const liveContextUsage = useChatStore((state) => state.actualContextUsage);
   const inputContextTokens = contextUsage?.usageStatus === "provider_final" && contextUsage.inputTokens !== null
     ? contextUsage.inputTokens
     : contextUsage?.preflightInputTokens ?? null;
@@ -49,6 +53,22 @@ export default function ChatComposer({
   const contextSummary = displayedTokens !== null
     ? `${contextUsage?.tokenizerStatus === "characters_divided_by_4" ? "上下文估算" : "上下文"} ${displayedTokens.toLocaleString()} / ${contextUsage?.limitTokens.toLocaleString()} · ${contextPercent}%`
     : "上下文：正在组装";
+  const calibrationStatus = contextUsage?.calibrationStatus
+    ?? liveContextUsage?.calibrationStatus
+    ?? (contextUsage?.usageStatus === "provider_final" ? "provider_final" : "unavailable");
+  const activeWorkflowNodeId = contextUsage?.activeWorkflowNodeId ?? liveContextUsage?.activeWorkflowNodeId ?? null;
+  const qualityLabel = contextUsage ? {
+    estimated: "实时估算",
+    partially_calibrated: "部分已校准",
+    provider_final: "Provider 已校准",
+    unavailable: "Provider 未提供用量",
+  }[calibrationStatus] : null;
+  const inputDetail = inputContextTokens === null || inputContextTokens === undefined
+    ? "未提供"
+    : inputContextTokens.toLocaleString();
+  const outputDetail = calibrationStatus === "unavailable"
+    ? "未提供"
+    : contextUsage?.outputTokens.toLocaleString();
 
   const send = () => {
     const message = input.trim();
@@ -99,13 +119,15 @@ export default function ChatComposer({
               >
                 {contextSummary}
               </span>
-              {(displayedTokens !== null || contextUsage.promptBreakdown.length > 0) ? (
+              <span>{qualityLabel}</span>
+              {activeWorkflowNodeId ? <span>当前节点：{activeWorkflowNodeId}</span> : null}
+              {(displayedTokens !== null || contextUsage.promptBreakdown.length > 0 || contextUsage.cacheReadInputTokens !== null) ? (
                 <details className="relative">
                   <summary className="cursor-pointer text-[#2f6feb]">详情</summary>
                   <div className="absolute bottom-7 right-0 z-20 w-80 rounded-lg border border-[#dfe4ee] bg-white p-3 text-left shadow-lg">
                     <div className="mb-2 font-medium text-[#172033]">当前输入上下文构成</div>
                     <div className="mb-2 text-[#667085]">
-                      输入 {(inputContextTokens ?? 0).toLocaleString()} · 输出 {contextUsage.outputTokens.toLocaleString()}{contextUsage.outputTokenStatus === "provider_final" ? "（供应商已校准）" : "（流式累计）"}
+                      输入 {inputDetail} · 输出 {outputDetail}{contextUsage.outputTokenStatus === "provider_final" ? "（供应商已校准）" : "（流式累计）"}
                     </div>
                     {contextUsage.cacheReadInputTokens !== null ? (
                       <div className="mb-2 text-[#667085]">供应商实际缓存命中 {contextUsage.cacheReadInputTokens.toLocaleString()}</div>
