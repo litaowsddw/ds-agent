@@ -6,6 +6,7 @@
 """
 
 import json
+from collections.abc import Awaitable, Callable
 from dataclasses import dataclass, field
 from datetime import datetime
 from typing import Any, AsyncIterator, Protocol
@@ -223,6 +224,7 @@ class LLMGateway:
         # the chat route. Keep only provider-reported facts, never a derived
         # count from prompt text.
         self.last_normalized_usage: NormalizedUsage | None = None
+        self.last_raw_usage: dict[str, object] = {}
 
     async def generate(self, request: LLMCallRequest) -> LLMCallResponse:
         """执行一次 LLM 调用并记录日志（异步版本，支持 Redis 限流）。"""
@@ -278,6 +280,7 @@ class LLMGateway:
         await self._record_terminal(
             usage_context, dispatch_status="succeeded", raw_usage=response.usage
         )
+        self.last_raw_usage = dict(response.usage)
         self.last_normalized_usage = normalize_usage(response.usage)
         self._append_log(
             request=request,
@@ -373,6 +376,7 @@ class LLMGateway:
             raise GatewayProviderError(error_message) from exc
 
         else:
+            self.last_raw_usage = dict(usage)
             self.last_normalized_usage = normalize_usage(usage) if usage else unavailable_usage()
             await record_terminal_once(dispatch_status="succeeded", raw_usage=usage)
             self._append_log(
@@ -402,18 +406,32 @@ class LLMGateway:
     ) -> dict[str, Any]:
         """为 Workflow LLM 节点提供调用入口。"""
 
+        request, compiled = self.build_workflow_request(config, node_input)
+        response = await self.generate(request)
+        return {
+            "text": response.text,
+            "provider": response.provider,
+            "model": response.model,
+            "usage": response.usage,
+            "upstream": node_input.get("upstream", {}),
+            "prefix_hash": str(compiled["prefix_hash"]),
+        }
+
+    def build_workflow_request(
+        self, config: dict[str, Any], node_input: dict[str, Any]
+    ) -> tuple[LLMCallRequest, dict[str, object]]:
+        """Build the shared LLM request for Workflow nodes."""
+
         provider = str(config.get("provider") or "")
         model = str(config.get("model") or "")
         if not provider or not model:
             raise GatewayProviderError("LLM 节点缺少真实模型供应商或模型配置")
-        compiled_prompt = self._compile_workflow_prompt(config=config, node_input=node_input)
-        prompt = str(compiled_prompt["compiled_prompt"])
-        prefix_hash = str(compiled_prompt["prefix_hash"])
+        compiled = self._compile_workflow_prompt(config=config, node_input=node_input)
 
         request = LLMCallRequest(
             provider=provider,
             model=model,
-            prompt=prompt,
+            prompt=str(compiled["compiled_prompt"]),
             parameters={
                 "temperature": config.get("temperature", 0),
                 "max_tokens": config.get("max_tokens"),
@@ -430,16 +448,34 @@ class LLMGateway:
                 "api_name": "chat.completions",
                 "upstream_node_count": len(node_input.get("upstream", {})),
             },
-            prefix_hash=prefix_hash,
+            prefix_hash=str(compiled["prefix_hash"]),
         )
-        response = await self.generate(request)
+        return request, compiled
+
+    async def stream_generate_from_workflow_node(
+        self,
+        config: dict[str, Any],
+        node_input: dict[str, Any],
+        on_text: Callable[[str], Awaitable[None]],
+    ) -> dict[str, Any]:
+        """Stream Workflow LLM text to a callback and return the node output."""
+
+        request, compiled = self.build_workflow_request(config, node_input)
+        parts: list[str] = []
+        stream = self.stream_generate(request)
+        try:
+            async for text in stream:
+                parts.append(text)
+                await on_text(text)
+        finally:
+            await stream.aclose()
         return {
-            "text": response.text,
-            "provider": response.provider,
-            "model": response.model,
-            "usage": response.usage,
+            "text": "".join(parts),
+            "provider": request.provider,
+            "model": request.model,
+            "usage": dict(self.last_raw_usage),
             "upstream": node_input.get("upstream", {}),
-            "prefix_hash": prefix_hash,
+            "prefix_hash": str(compiled["prefix_hash"]),
         }
 
     def list_logs(self) -> list[LLMCallLog]:
