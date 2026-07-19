@@ -372,6 +372,80 @@ def test_invalid_skill_markdown_ends_with_error_without_provider_final_or_skill_
     assert not any(event["event"] == "skill_created" for event in events)
 
 
+@pytest.mark.parametrize(
+    ("failing_stage", "expected_persistence_calls"),
+    [
+        ("write", ["write"]),
+        ("create", ["write", "create"]),
+        ("policy", ["write", "create", "policy"]),
+    ],
+)
+def test_skill_persistence_failures_emit_unavailable_usage_before_error(
+    client: TestClient,
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
+    failing_stage: str,
+    expected_persistence_calls: list[str],
+) -> None:
+    agent_id, headers = _create_streaming_agent(client)
+    persistence_calls: list[str] = []
+
+    async def _stream_generate(self: LLMGateway, _request: object):
+        yield (
+            "---\nname: release-notes\ndescription: Draft release notes.\n---\n# Release Notes\n"
+        )
+        yield "\n## Steps\n1. Summarize the changes.\n"
+        self.last_normalized_usage = normalize_usage(
+            {"prompt_tokens": 41, "completion_tokens": 12, "total_tokens": 53}
+        )
+
+    def _write_skill_file(*_args: object, **_kwargs: object) -> Path:
+        persistence_calls.append("write")
+        if failing_stage == "write":
+            raise RuntimeError("write failed")
+        return tmp_path / "release-notes" / "SKILL.md"
+
+    async def _create_skill(*_args: object, **_kwargs: object) -> SimpleNamespace:
+        persistence_calls.append("create")
+        if failing_stage == "create":
+            raise RuntimeError("create failed")
+        return SimpleNamespace(skill_id="skl-test", name="release-notes")
+
+    async def _set_policy(*_args: object, **_kwargs: object) -> None:
+        persistence_calls.append("policy")
+        if failing_stage == "policy":
+            raise RuntimeError("policy failed")
+
+    monkeypatch.setattr(LLMGateway, "stream_generate", _stream_generate)
+    monkeypatch.setattr(chat_route, "write_skill_file", _write_skill_file)
+    monkeypatch.setattr(skill_db, "create_skill", _create_skill)
+    monkeypatch.setattr(agent_skill_policy_db, "set_policy", _set_policy)
+
+    with client.stream(
+        "POST",
+        "/chat/stream",
+        json={"agent_id": agent_id, "message": "create a skill for release-note summaries"},
+        headers=headers,
+    ) as response:
+        assert response.status_code == 200
+        events = _parse_sse_events("".join(response.iter_text()))
+
+    context_events = [event for event in events if event["event"].startswith("context_")]
+    assert [event["event"] for event in context_events] == [
+        "context_preflight",
+        "context_progress",
+        "context_progress",
+        "context_usage",
+    ]
+    assert context_events[-1]["usage_phase"] == "unavailable"
+    assert persistence_calls == expected_persistence_calls
+    assert events[-1]["event"] == "error"
+    assert events[-1]["error"] == f"{failing_stage} failed"
+    assert not any(event.get("usage_phase") == "provider_final" for event in events)
+    assert not any(event["event"] == "skill_created" for event in events)
+    assert not any(event["event"] == "run_finished" for event in events)
+
+
 def test_extract_skill_markdown_from_fenced_llm_output() -> None:
     markdown = extract_skill_markdown(
         """Here is the skill:
