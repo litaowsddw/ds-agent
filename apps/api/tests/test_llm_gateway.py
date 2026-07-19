@@ -23,6 +23,35 @@ class StreamingFakeLLMProvider(FakeLLMProvider):
         )
 
 
+class UnavailableUsageStreamingProvider(FakeLLMProvider):
+    """Provider double that completes a text stream without usage metadata."""
+
+    def stream_generate(self, request: LLMCallRequest):
+        yield LLMStreamChunk(text="fresh")
+
+
+class FailingStreamingProvider(FakeLLMProvider):
+    """Provider double that raises while the Gateway consumes its stream."""
+
+    def stream_generate(self, request: LLMCallRequest):
+        raise RuntimeError("stream provider failed")
+        yield LLMStreamChunk(text="unreachable")
+
+
+class ClosableStreamingProvider(FakeLLMProvider):
+    """Provider double that records whether Gateway closes an early-exited stream."""
+
+    def __init__(self) -> None:
+        self.closed = False
+
+    def stream_generate(self, request: LLMCallRequest):
+        try:
+            yield LLMStreamChunk(text="partial")
+            yield LLMStreamChunk(text="unreachable")
+        finally:
+            self.closed = True
+
+
 @pytest.mark.asyncio
 async def test_llm_gateway_records_success_log() -> None:
     """Gateway 成功调用后应该记录日志。"""
@@ -107,6 +136,71 @@ async def test_stream_workflow_node_reports_chunks_and_returns_existing_shape() 
     assert result["usage"]["prompt_tokens"] == 10
     assert gateway.last_normalized_usage is not None
     assert gateway.last_normalized_usage.input_tokens == 10
+
+
+@pytest.mark.asyncio
+async def test_stream_workflow_node_clears_prior_usage_before_callback_and_when_unavailable() -> None:
+    """A usage-less stream must not expose facts from a prior completed call."""
+
+    gateway = LLMGateway(providers={"mock": UnavailableUsageStreamingProvider()})
+    await gateway.generate(
+        LLMCallRequest(provider="mock", model="mock-model", prompt="seed prior usage")
+    )
+    seen_usage: list[tuple[dict[str, object], object]] = []
+
+    async def on_text(text: str) -> None:
+        seen_usage.append((dict(gateway.last_raw_usage), gateway.last_normalized_usage))
+
+    result = await gateway.stream_generate_from_workflow_node(
+        config={"provider": "mock", "model": "mock-model", "prompt": "stream input"},
+        node_input={"workflow_input": {"text": "hi"}, "upstream": {}},
+        on_text=on_text,
+    )
+
+    assert seen_usage == [({}, None)]
+    assert result["usage"] == {}
+    assert gateway.last_raw_usage == {}
+    assert gateway.last_normalized_usage is None
+
+
+@pytest.mark.asyncio
+async def test_stream_generate_clears_prior_usage_after_provider_error() -> None:
+    """A failed stream must not retain usage from a previously completed call."""
+
+    gateway = LLMGateway(providers={"mock": FailingStreamingProvider()})
+    await gateway.generate(
+        LLMCallRequest(provider="mock", model="mock-model", prompt="seed prior usage")
+    )
+
+    with pytest.raises(GatewayProviderError, match="stream provider failed"):
+        async for _ in gateway.stream_generate(
+            LLMCallRequest(provider="mock", model="mock-model", prompt="failing stream")
+        ):
+            pass
+
+    assert gateway.last_raw_usage == {}
+    assert gateway.last_normalized_usage is None
+
+
+@pytest.mark.asyncio
+async def test_stream_generate_clears_prior_usage_and_closes_provider_stream_on_cancellation() -> None:
+    """Early consumer exit clears stale usage and closes the provider generator."""
+
+    provider = ClosableStreamingProvider()
+    gateway = LLMGateway(providers={"mock": provider})
+    await gateway.generate(
+        LLMCallRequest(provider="mock", model="mock-model", prompt="seed prior usage")
+    )
+
+    stream = gateway.stream_generate(
+        LLMCallRequest(provider="mock", model="mock-model", prompt="partial stream")
+    )
+    assert await anext(stream) == "partial"
+    await stream.aclose()
+
+    assert provider.closed is True
+    assert gateway.last_raw_usage == {}
+    assert gateway.last_normalized_usage is None
 
 
 @pytest.mark.asyncio

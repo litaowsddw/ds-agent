@@ -294,6 +294,8 @@ class LLMGateway:
     async def stream_generate(self, request: LLMCallRequest) -> AsyncIterator[str]:
         """Stream an LLM response through the configured provider."""
 
+        self.last_raw_usage = {}
+        self.last_normalized_usage = None
         usage_context = await self._record_started(request)
         terminal_recorded = False
 
@@ -377,7 +379,7 @@ class LLMGateway:
 
         else:
             self.last_raw_usage = dict(usage)
-            self.last_normalized_usage = normalize_usage(usage) if usage else unavailable_usage()
+            self.last_normalized_usage = normalize_usage(usage) if usage else None
             await record_terminal_once(dispatch_status="succeeded", raw_usage=usage)
             self._append_log(
                 request=request,
