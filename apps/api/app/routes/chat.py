@@ -946,7 +946,7 @@ async def _chat_stream_events(
         yield await emit("run_finished", session_id=session_id, response=response_text)
     except asyncio.CancelledError:
         await db.rollback()
-        yield await emit("error", error="stream cancelled")
+        raise
     except Exception as exc:
         await db.rollback()
         detail = exc.detail if isinstance(exc, HTTPException) else str(exc)

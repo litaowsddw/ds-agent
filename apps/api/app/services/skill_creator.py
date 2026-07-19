@@ -23,6 +23,10 @@ class SkillIntent:
 
 _SKILL_OBJECT = r"(?:skill|技能)"
 _CONSULTATION_PREFIX = re.compile(r"^(?:请)?\s*(?:解释|介绍|说明|如何|怎么|能否|是否)", re.IGNORECASE)
+_CONSULTATION_SUFFIX = re.compile(
+    r"(?:[?？]\s*$|(?:有什么用|怎么样|如何|怎么|为什么|为何|能否|是否)\s*$)",
+    re.IGNORECASE,
+)
 _CHINESE_CREATE = re.compile(
     rf"^(?:请|帮我|请帮我)?\s*(?:创建|生成|新建)\s*(?:一个)?\s*{_SKILL_OBJECT}\s*(?:[:：]|用于|用来|关于)?\s*(?P<topic>.+)$",
     re.IGNORECASE,
@@ -41,7 +45,11 @@ def detect_skill_creation_request(message: str) -> SkillIntent:
     """Detect whether a user is asking the Agent to create a new skill."""
 
     normalized = message.strip()
-    if not normalized or _CONSULTATION_PREFIX.search(normalized):
+    if (
+        not normalized
+        or _CONSULTATION_PREFIX.search(normalized)
+        or _CONSULTATION_SUFFIX.search(normalized)
+    ):
         return SkillIntent(is_skill_request=False)
     match = (
         _CHINESE_CREATE.match(normalized)

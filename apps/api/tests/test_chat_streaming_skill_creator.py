@@ -7,6 +7,9 @@ from uuid import uuid4
 import pytest
 from fastapi.testclient import TestClient
 
+from app.core.auth import AuthContext
+from app.core.security import verify_access_token
+from app.database import async_session_factory
 from app.services.metering import normalize_usage
 from apps.api.app.gateway.llm import OpenAICompatibleProvider
 from apps.api.app.gateway.llm import LLMGateway
@@ -120,6 +123,8 @@ def _parse_sse_events(body: str) -> list[dict[str, object]]:
         "新建一个 API 接口",
         "请解释如何创建一个 Skill",
         "是否能生成技能说明？",
+        "创建一个 Skill 有什么用？",
+        "创建一个 Skill 怎么样？",
     ],
 )
 def test_rejects_non_imperative_or_non_skill_creation(message: str) -> None:
@@ -141,8 +146,15 @@ def test_accepts_explicit_skill_creation(message: str, topic: str) -> None:
     assert topic in result.topic
 
 
-def test_non_explicit_workflow_request_uses_agent_without_creating_skill(
-    client: TestClient, monkeypatch: pytest.MonkeyPatch
+@pytest.mark.parametrize(
+    "message",
+    [
+        "创建一个 Skill 有什么用？",
+        "创建一个 Skill 怎么样？",
+    ],
+)
+def test_skill_creation_consultation_uses_agent_without_creating_skill(
+    client: TestClient, monkeypatch: pytest.MonkeyPatch, message: str
 ) -> None:
     agent_id, headers = _create_streaming_agent(client)
 
@@ -163,7 +175,7 @@ def test_non_explicit_workflow_request_uses_agent_without_creating_skill(
     with client.stream(
         "POST",
         "/chat/stream",
-        json={"agent_id": agent_id, "message": "创建一个工作流"},
+        json={"agent_id": agent_id, "message": message},
         headers=headers,
     ) as response:
         assert response.status_code == 200
@@ -316,7 +328,7 @@ def test_autonomous_stream_marks_missing_provider_usage_unavailable(
     assert not any(event.get("usage_phase") == "provider_final" for event in usage_events)
 
 
-def test_autonomous_stream_cancellation_ends_with_error_without_provider_final(
+async def test_autonomous_stream_cancellation_propagates_without_error_event(
     client: TestClient, monkeypatch: pytest.MonkeyPatch
 ) -> None:
     agent_id, headers = _create_streaming_agent(client)
@@ -324,6 +336,45 @@ def test_autonomous_stream_cancellation_ends_with_error_without_provider_final(
     async def _stream_generate(_self: LLMGateway, _request: object):
         yield "partial"
         raise asyncio.CancelledError("fake stream cancellation")
+
+    monkeypatch.setattr(LLMGateway, "stream_generate", _stream_generate)
+
+    token = headers["Authorization"].removeprefix("Bearer ")
+    payload = verify_access_token(token)
+    assert payload is not None
+    events: list[str] = []
+    rollback_calls: list[str] = []
+
+    async with async_session_factory() as db:
+        original_rollback = db.rollback
+
+        async def _track_rollback() -> None:
+            rollback_calls.append("rollback")
+            await original_rollback()
+
+        monkeypatch.setattr(db, "rollback", _track_rollback)
+        stream = chat_route._chat_stream_events(
+            request=chat_route.ChatRequest(agent_id=agent_id, message="Explain the release plan"),
+            auth=AuthContext.from_jwt(payload),
+            db=db,
+        )
+        with pytest.raises(asyncio.CancelledError, match="fake stream cancellation"):
+            async for event in stream:
+                events.append(event)
+
+    assert any(event.startswith("event: token\n") for event in events)
+    assert not any(event.startswith("event: error\n") for event in events)
+    assert rollback_calls == ["rollback"]
+
+
+def test_autonomous_stream_provider_error_emits_error_event(
+    client: TestClient, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    agent_id, headers = _create_streaming_agent(client)
+
+    async def _stream_generate(_self: LLMGateway, _request: object):
+        yield "partial"
+        raise RuntimeError("provider unavailable")
 
     monkeypatch.setattr(LLMGateway, "stream_generate", _stream_generate)
 
@@ -337,7 +388,7 @@ def test_autonomous_stream_cancellation_ends_with_error_without_provider_final(
         events = _parse_sse_events("".join(response.iter_text()))
 
     assert events[-1]["event"] == "error"
-    assert not any(event.get("usage_phase") == "provider_final" for event in events)
+    assert events[-1]["error"] == "provider unavailable"
     assert not any(event["event"] == "run_finished" for event in events)
 
 
