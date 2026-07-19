@@ -21,30 +21,37 @@ class SkillIntent:
     topic: str = ""
 
 
+_SKILL_OBJECT = r"(?:skill|技能)"
+_CONSULTATION_PREFIX = re.compile(r"^(?:请)?\s*(?:解释|介绍|说明|如何|怎么|能否|是否)", re.IGNORECASE)
+_CHINESE_CREATE = re.compile(
+    rf"^(?:请|帮我|请帮我)?\s*(?:创建|生成|新建)\s*(?:一个)?\s*{_SKILL_OBJECT}\s*(?:[:：]|用于|用来|关于)?\s*(?P<topic>.+)$",
+    re.IGNORECASE,
+)
+_CHINESE_SUFFIX_CREATE = re.compile(
+    rf"^(?:请|帮我|请帮我)?\s*(?:创建|生成|新建)\s*(?:一个)?\s*(?:用于|用来|关于)?\s*(?P<topic>.+?)\s*(?:的)?\s*{_SKILL_OBJECT}$",
+    re.IGNORECASE,
+)
+_ENGLISH_CREATE = re.compile(
+    r"^(?:please\s+)?(?:create|generate|new)\s+(?:a\s+)?skill\s+(?:for|about)?\s*(?P<topic>.+)$",
+    re.IGNORECASE,
+)
+
+
 def detect_skill_creation_request(message: str) -> SkillIntent:
     """Detect whether a user is asking the Agent to create a new skill."""
 
     normalized = message.strip()
-    lowered = normalized.lower()
-    triggers = (
-        "创建一个",
-        "创建 skill",
-        "创建skill",
-        "生成一个",
-        "生成 skill",
-        "新建一个",
-        "new skill",
-        "create a skill",
-        "generate a skill",
-    )
-    if not any(trigger in lowered for trigger in triggers):
+    if not normalized or _CONSULTATION_PREFIX.search(normalized):
         return SkillIntent(is_skill_request=False)
-
-    topic = normalized
-    topic = re.sub(r"^(请|帮我|请帮我)?\s*(创建|生成|新建)\s*(一个)?\s*", "", topic)
-    topic = re.sub(r"\s*(skill|Skill|技能)\s*", " ", topic).strip()
-    topic = re.sub(r"^(用于|用来|关于)\s*", "", topic).strip()
-    return SkillIntent(is_skill_request=True, topic=topic or normalized)
+    match = (
+        _CHINESE_CREATE.match(normalized)
+        or _CHINESE_SUFFIX_CREATE.match(normalized)
+        or _ENGLISH_CREATE.match(normalized)
+    )
+    if match is None:
+        return SkillIntent(is_skill_request=False)
+    topic = match.group("topic").strip(" ：:-")
+    return SkillIntent(is_skill_request=bool(topic), topic=topic)
 
 
 def extract_skill_markdown(text: str) -> str:
