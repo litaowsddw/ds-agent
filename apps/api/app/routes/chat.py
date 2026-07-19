@@ -1,9 +1,11 @@
 """Chat API routes."""
 
+import asyncio
 import json
 import os
+from dataclasses import dataclass
 from pathlib import Path
-from typing import Any, AsyncIterator, Literal
+from typing import TYPE_CHECKING, Any, AsyncIterator, Literal
 
 from fastapi import APIRouter, Depends, HTTPException, Query
 from pydantic import BaseModel, ConfigDict
@@ -22,8 +24,42 @@ from app.services.skill_creator import (
     extract_skill_markdown,
     write_skill_file,
 )
+from app.services.stream_usage import StreamUsageReporter
+
+if TYPE_CHECKING:
+    from apps.api.app.gateway.llm import LLMCallRequest, LLMGateway
 
 router = APIRouter()
+
+
+@dataclass(frozen=True, slots=True)
+class StreamCallUpdate:
+    """One client-visible update produced while one LLM call is streamed."""
+
+    kind: Literal["preflight", "chunk", "final"]
+    payload: dict[str, object]
+    text: str = ""
+
+
+async def _iterate_call_with_usage(
+    gateway: "LLMGateway",
+    request: "LLMCallRequest",
+    reporter: StreamUsageReporter,
+) -> AsyncIterator[StreamCallUpdate]:
+    """Stream text with local progress followed by terminal provider usage."""
+
+    yield StreamCallUpdate("preflight", reporter.preflight_event())
+    stream = gateway.stream_generate(request)
+    try:
+        async for chunk in stream:
+            yield StreamCallUpdate("chunk", reporter.append_text(chunk), text=chunk)
+    finally:
+        await stream.aclose()
+    usage = gateway.last_normalized_usage
+    payload = (
+        reporter.final_event(usage) if usage is not None else reporter.unavailable_final_event()
+    )
+    yield StreamCallUpdate("final", payload)
 
 
 class ChatRequest(BaseModel):
@@ -504,11 +540,6 @@ async def _chat_stream_events(
             token_threshold=_memory_compaction_threshold(agent.context_token_limit),
         )
 
-        # A Skill-router call is itself an LLM call.  Emit a complete baseline
-        # before that call so the composer never has to wait for a model
-        # response before it can display the assembled context.  If a Skill is
-        # selected later, the final preflight below replaces this baseline with
-        # the exact request that will be sent to the answering model.
         skill_intent = detect_skill_creation_request(request.message)
         allowed_skills = []
         skill_catalog = ""
@@ -519,35 +550,6 @@ async def _chat_stream_events(
                 org_id=org_id,
             )
             skill_catalog = format_skill_description_catalog(allowed_skills)
-            baseline_prompt = _compile_agent_chat_prompt(
-                agent,
-                request.message,
-                memory_context="",
-                skill_catalog=skill_catalog,
-                skill_context="",
-                recent_messages=recent_messages,
-                compact_summary=memory_context.compact_summary,
-                long_term_context=memory_context.long_term_context,
-            )
-            from app.services.context_tokens import preflight_chat_context
-
-            baseline_preflight = preflight_chat_context(
-                provider=model_provider,
-                model=model_name,
-                compiled_prompt=str(baseline_prompt["compiled_prompt"]),
-                components=baseline_prompt["context_breakdown"],
-                messages=baseline_prompt["messages"],
-            )
-            yield await emit(
-                "context_preflight",
-                input_tokens=baseline_preflight.input_tokens,
-                stable_prefix_tokens=baseline_preflight.stable_prefix_tokens,
-                tokenizer_status=baseline_preflight.status,
-                tokenizer=baseline_preflight.tokenizer,
-                token_limit=_memory_compaction_threshold(agent.context_token_limit),
-                prompt_breakdown=baseline_preflight.breakdown,
-                preflight_phase="baseline",
-            )
 
         supervisors = await agent_db.list_org_agents(db, org_id, kind="SUPERVISOR")
         supervisor = sorted(supervisors, key=lambda item: item.created_at, reverse=True)[0] if supervisors else None
@@ -573,6 +575,7 @@ async def _chat_stream_events(
         )
 
         selected_skill_context = None
+        actual_usage = None
 
         if skill_intent.is_skill_request:
             yield await emit(
@@ -584,39 +587,111 @@ async def _chat_stream_events(
                 skill_topic=skill_intent.topic,
             )
             skill_prompt = _build_skill_prompt(skill_intent.topic)
-            raw_skill = await adapter.call(
-                prompt=skill_prompt,
-                system_prompt="You are a Skill Creator Agent. Output only a complete SKILL.md document.",
-                temperature=0.2,
-                max_tokens=4096,
+            skill_system_prompt = (
+                "You are a Skill Creator Agent. Output only a complete SKILL.md document."
             )
-            skill_markdown = extract_skill_markdown(raw_skill)
-            metadata = _parse_skill_markdown(skill_markdown)
-            skill_root = Path(
-                os.getenv(
-                    "AGENTFLOW_USER_SKILLS_DIR",
-                    str(Path.home() / ".codex" / "skills" / "agentflow-user"),
+            skill_messages = [
+                {"role": "system", "content": skill_system_prompt},
+                {"role": "user", "content": skill_prompt},
+            ]
+            skill_compiled_prompt = f"[System]\n{skill_system_prompt}\n\n[User]\n{skill_prompt}"
+            skill_components = [
+                {
+                    "key": "system",
+                    "label": "System prompt",
+                    "content": skill_system_prompt,
+                    "stable_prefix": True,
+                },
+                {
+                    "key": "current_user",
+                    "label": "Current user message",
+                    "content": skill_prompt,
+                },
+            ]
+            from app.services.context_tokens import preflight_chat_context
+
+            skill_preflight = preflight_chat_context(
+                provider=model_provider,
+                model=model_name,
+                compiled_prompt=skill_compiled_prompt,
+                components=skill_components,
+                messages=skill_messages,
+            )
+            skill_reporter = StreamUsageReporter(
+                provider=model_provider,
+                model=model_name,
+                preflight=skill_preflight,
+                usage_scope="skill_create",
+                usage_key=f"{run_id}:skill_creator",
+                token_limit=_memory_compaction_threshold(agent.context_token_limit),
+            )
+            skill_request = LLMCallRequest(
+                provider=model_provider,
+                model=model_name,
+                prompt=skill_compiled_prompt,
+                messages=skill_messages,
+                parameters={"temperature": 0.2, "max_tokens": 4096},
+                metadata={
+                    "source": "chat_skill_create",
+                    "org_id": org_id,
+                    "actor_user_id": actor_user_id,
+                    "agent_id": agent.agent_id,
+                    "session_id": session_id,
+                },
+            )
+            raw_skill_parts: list[str] = []
+            skill_final_payload: dict[str, object] | None = None
+            try:
+                async for update in _iterate_call_with_usage(
+                    gateway, skill_request, skill_reporter
+                ):
+                    if update.kind == "preflight":
+                        yield await emit("context_preflight", **update.payload)
+                    elif update.kind == "chunk":
+                        raw_skill_parts.append(update.text)
+                        yield await emit("context_progress", **update.payload)
+                    else:
+                        skill_final_payload = update.payload
+                actual_usage = gateway.last_normalized_usage
+                skill_markdown = extract_skill_markdown("".join(raw_skill_parts))
+                metadata = _parse_skill_markdown(skill_markdown)
+                skill_root = Path(
+                    os.getenv(
+                        "AGENTFLOW_USER_SKILLS_DIR",
+                        str(Path.home() / ".codex" / "skills" / "agentflow-user"),
+                    )
                 )
-            )
-            skill_path = write_skill_file(skill_root, metadata["name"], skill_markdown)
-            skill = await skill_db.create_skill(
-                db,
-                skill_id=new_id("skl"),
-                org_id=org_id,
-                team_id=agent.team_id,
-                agent_id=agent.agent_id,
-                scope="agent",
-                name=metadata["name"],
-                description=metadata["description"],
-                content=skill_markdown,
-                file_path=str(skill_path),
-                created_by=actor_user_id,
-            )
-            await agent_skill_policy_db.set_policy(
-                db,
-                agent_id=agent.agent_id,
-                skill_id=skill.skill_id,
-                allowed=True,
+                skill_path = write_skill_file(skill_root, metadata["name"], skill_markdown)
+                skill = await skill_db.create_skill(
+                    db,
+                    skill_id=new_id("skl"),
+                    org_id=org_id,
+                    team_id=agent.team_id,
+                    agent_id=agent.agent_id,
+                    scope="agent",
+                    name=metadata["name"],
+                    description=metadata["description"],
+                    content=skill_markdown,
+                    file_path=str(skill_path),
+                    created_by=actor_user_id,
+                )
+                await agent_skill_policy_db.set_policy(
+                    db,
+                    agent_id=agent.agent_id,
+                    skill_id=skill.skill_id,
+                    allowed=True,
+                )
+            except Exception:
+                if skill_final_payload is not None:
+                    yield await emit("context_usage", **skill_reporter.unavailable_final_event())
+                raise
+            yield await emit(
+                "context_usage",
+                **(
+                    skill_final_payload
+                    if skill_final_payload is not None
+                    else skill_reporter.unavailable_final_event()
+                ),
             )
             response_text = f"已创建 Skill：{skill.name}\n路径：{skill_path}"
             yield await emit(
@@ -709,7 +784,7 @@ async def _chat_stream_events(
                 compact_summary=memory_context.compact_summary,
                 long_term_context=memory_context.long_term_context,
             )
-            from app.services.context_tokens import count_stream_output_tokens, preflight_chat_context
+            from app.services.context_tokens import preflight_chat_context
 
             preflight = preflight_chat_context(
                 provider=model_provider,
@@ -717,20 +792,6 @@ async def _chat_stream_events(
                 compiled_prompt=str(compiled_prompt["compiled_prompt"]),
                 components=compiled_prompt["context_breakdown"],
                 messages=compiled_prompt["messages"],
-            )
-            # This happens after all prompt assembly (memory, selected Skill and
-            # protocol wrappers) but before the main Agent LLM request starts.
-            # It is therefore useful for an immediate UI context meter without
-            # presenting a provider cache prediction as an actual cache hit.
-            yield await emit(
-                "context_preflight",
-                input_tokens=preflight.input_tokens,
-                stable_prefix_tokens=preflight.stable_prefix_tokens,
-                tokenizer_status=preflight.status,
-                tokenizer=preflight.tokenizer,
-                token_limit=_memory_compaction_threshold(agent.context_token_limit),
-                prompt_breakdown=preflight.breakdown,
-                preflight_phase="final",
             )
             llm_request = LLMCallRequest(
                 provider=model_provider,
@@ -750,62 +811,24 @@ async def _chat_stream_events(
                 },
                 prefix_hash=str(compiled_prompt["prefix_hash"]),
             )
-            llm_stream = gateway.stream_generate(llm_request)
-            try:
-                async for chunk in llm_stream:
-                    response_parts.append(chunk)
-                    yield await emit("token", text=chunk, session_id=session_id)
-                    streamed_output_tokens = count_stream_output_tokens(
-                        provider=model_provider,
-                        model=model_name,
-                        text="".join(response_parts),
-                    )
-                    yield await emit(
-                        "context_progress",
-                        input_tokens=preflight.input_tokens,
-                        output_tokens=streamed_output_tokens,
-                        context_tokens=(
-                            preflight.input_tokens + streamed_output_tokens
-                            if preflight.input_tokens is not None
-                            else None
-                        ),
-                        output_token_status=(
-                            "official_tokenizer"
-                            if preflight.status == "official_tokenizer"
-                            else "characters_divided_by_4"
-                        ),
-                    )
-            finally:
-                await llm_stream.aclose()
-            actual_usage = gateway.last_normalized_usage
-            yield await emit(
-                "context_usage",
-                input_tokens=(actual_usage.input_tokens if actual_usage else None),
-                output_tokens=(actual_usage.output_tokens if actual_usage else None),
-                total_tokens=(actual_usage.total_tokens if actual_usage else None),
-                context_tokens=(
-                    actual_usage.input_tokens + actual_usage.output_tokens
-                    if actual_usage
-                    and actual_usage.input_tokens is not None
-                    and actual_usage.output_tokens is not None
-                    else None
-                ),
-                cache_read_input_tokens=(
-                    actual_usage.cache_read_input_tokens if actual_usage else None
-                ),
-                usage_status=(actual_usage.usage_status if actual_usage else "unavailable"),
-                output_token_status=(
-                    "provider_final"
-                    if actual_usage and actual_usage.output_tokens is not None
-                    else "unavailable"
-                ),
+            reporter = StreamUsageReporter(
+                provider=model_provider,
+                model=model_name,
+                preflight=preflight,
+                usage_scope="chat",
+                usage_key=f"{run_id}:agent_call",
                 token_limit=_memory_compaction_threshold(agent.context_token_limit),
-                preflight_input_tokens=preflight.input_tokens,
-                stable_prefix_tokens=preflight.stable_prefix_tokens,
-                tokenizer_status=preflight.status,
-                tokenizer=preflight.tokenizer,
-                prompt_breakdown=preflight.breakdown,
             )
+            async for update in _iterate_call_with_usage(gateway, llm_request, reporter):
+                if update.kind == "preflight":
+                    yield await emit("context_preflight", **update.payload)
+                elif update.kind == "chunk":
+                    response_parts.append(update.text)
+                    yield await emit("token", text=update.text, session_id=session_id)
+                    yield await emit("context_progress", **update.payload)
+                else:
+                    actual_usage = gateway.last_normalized_usage
+                    yield await emit("context_usage", **update.payload)
             response_text = "".join(response_parts)
             yield await emit(
                 "node_finished",
@@ -816,9 +839,6 @@ async def _chat_stream_events(
             )
 
         yield await emit("node_started", node="final_answer", label="汇总结果")
-        if skill_intent.is_skill_request:
-            for chunk in _chunk_text(response_text):
-                yield await emit("token", text=chunk, session_id=session_id)
         yield await emit("node_finished", node="final_answer", label="汇总结果")
 
         if response_text:
@@ -916,6 +936,9 @@ async def _chat_stream_events(
                     )
         await db.commit()
         yield await emit("run_finished", session_id=session_id, response=response_text)
+    except asyncio.CancelledError:
+        await db.rollback()
+        yield await emit("error", error="stream cancelled")
     except Exception as exc:
         await db.rollback()
         detail = exc.detail if isinstance(exc, HTTPException) else str(exc)

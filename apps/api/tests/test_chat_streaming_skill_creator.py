@@ -1,10 +1,13 @@
+import asyncio
 import json
 from pathlib import Path
+from types import SimpleNamespace
 from uuid import uuid4
 
 import pytest
 from fastapi.testclient import TestClient
 
+from app.services.metering import normalize_usage
 from apps.api.app.gateway.llm import OpenAICompatibleProvider
 from apps.api.app.gateway.llm import LLMGateway
 from apps.api.app.main import app
@@ -171,6 +174,202 @@ def test_non_explicit_workflow_request_uses_agent_without_creating_skill(
     assert any(
         event["event"] == "node_started" and event.get("node") == "agent_call" for event in events
     )
+
+
+def test_autonomous_stream_emits_estimates_then_provider_final_usage(
+    client: TestClient, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    agent_id, headers = _create_streaming_agent(client)
+
+    async def _stream_generate(self: LLMGateway, _request: object):
+        yield "abcd"
+        yield "efgh"
+        self.last_normalized_usage = normalize_usage(
+            {"prompt_tokens": 31, "completion_tokens": 9, "total_tokens": 40}
+        )
+
+    monkeypatch.setattr(LLMGateway, "stream_generate", _stream_generate)
+
+    with client.stream(
+        "POST",
+        "/chat/stream",
+        json={"agent_id": agent_id, "message": "Explain the release plan"},
+        headers=headers,
+    ) as response:
+        assert response.status_code == 200
+        events = _parse_sse_events("".join(response.iter_text()))
+
+    usage_events = [event for event in events if event["event"].startswith("context_")]
+    assert [event["event"] for event in usage_events] == [
+        "context_preflight",
+        "context_progress",
+        "context_progress",
+        "context_usage",
+    ]
+    assert usage_events[1]["output_tokens"] < usage_events[2]["output_tokens"]
+    assert [event["usage_phase"] for event in usage_events] == [
+        "preflight",
+        "estimated",
+        "estimated",
+        "provider_final",
+    ]
+    assert usage_events[-1]["usage_scope"] == "chat"
+    assert usage_events[-1]["usage_key"]
+    assert len({event["usage_key"] for event in usage_events}) == 1
+    assert usage_events[-1]["output_tokens"] == 9
+    assert [event["text"] for event in events if event["event"] == "token"] == ["abcd", "efgh"]
+
+
+def test_explicit_skill_stream_reports_usage_without_emitting_tokens(
+    client: TestClient, monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
+    agent_id, headers = _create_streaming_agent(client)
+    lifecycle: list[str] = []
+
+    async def _stream_generate(self: LLMGateway, _request: object):
+        yield "---\nname: release-notes\ndescription: Draft release notes.\n---\n# Release Notes\n"
+        yield "\n## Steps\n1. Summarize the changes.\n"
+        self.last_normalized_usage = normalize_usage(
+            {"prompt_tokens": 41, "completion_tokens": 12, "total_tokens": 53}
+        )
+
+    def _write_skill_file(*_args: object, **_kwargs: object) -> Path:
+        lifecycle.append("write")
+        return tmp_path / "release-notes" / "SKILL.md"
+
+    async def _create_skill(*_args: object, **_kwargs: object) -> SimpleNamespace:
+        lifecycle.append("create")
+        return SimpleNamespace(skill_id="skl-test", name="release-notes")
+
+    async def _set_policy(*_args: object, **_kwargs: object) -> None:
+        lifecycle.append("policy")
+
+    monkeypatch.setattr(LLMGateway, "stream_generate", _stream_generate)
+    monkeypatch.setattr(chat_route, "write_skill_file", _write_skill_file)
+    monkeypatch.setattr(skill_db, "create_skill", _create_skill)
+    monkeypatch.setattr(agent_skill_policy_db, "set_policy", _set_policy)
+
+    with client.stream(
+        "POST",
+        "/chat/stream",
+        json={"agent_id": agent_id, "message": "create a skill for release-note summaries"},
+        headers=headers,
+    ) as response:
+        assert response.status_code == 200
+        events = _parse_sse_events("".join(response.iter_text()))
+
+    usage_events = [event for event in events if event["event"].startswith("context_")]
+    assert [event["event"] for event in usage_events] == [
+        "context_preflight",
+        "context_progress",
+        "context_progress",
+        "context_usage",
+    ]
+    assert usage_events[1]["output_tokens"] < usage_events[2]["output_tokens"]
+    assert [event["usage_phase"] for event in usage_events] == [
+        "preflight",
+        "estimated",
+        "estimated",
+        "provider_final",
+    ]
+    assert usage_events[-1]["usage_scope"] == "skill_create"
+    assert len({event["usage_key"] for event in usage_events}) == 1
+    assert not [event for event in events if event["event"] == "token"]
+    assert lifecycle == ["write", "create", "policy"]
+    context_usage_index = next(
+        index for index, event in enumerate(events) if event["event"] == "context_usage"
+    )
+    skill_created_index = next(
+        index for index, event in enumerate(events) if event["event"] == "skill_created"
+    )
+    assert context_usage_index < skill_created_index
+
+
+def test_autonomous_stream_marks_missing_provider_usage_unavailable(
+    client: TestClient, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    agent_id, headers = _create_streaming_agent(client)
+
+    async def _stream_generate(_self: LLMGateway, _request: object):
+        yield "abcd"
+        yield "efgh"
+
+    monkeypatch.setattr(LLMGateway, "stream_generate", _stream_generate)
+
+    with client.stream(
+        "POST",
+        "/chat/stream",
+        json={"agent_id": agent_id, "message": "Explain the release plan"},
+        headers=headers,
+    ) as response:
+        assert response.status_code == 200
+        events = _parse_sse_events("".join(response.iter_text()))
+
+    usage_events = [event for event in events if event["event"].startswith("context_")]
+    assert [event["event"] for event in usage_events] == [
+        "context_preflight",
+        "context_progress",
+        "context_progress",
+        "context_usage",
+    ]
+    assert usage_events[-1]["usage_phase"] == "unavailable"
+    assert not any(event.get("usage_phase") == "provider_final" for event in usage_events)
+
+
+def test_autonomous_stream_cancellation_ends_with_error_without_provider_final(
+    client: TestClient, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    agent_id, headers = _create_streaming_agent(client)
+
+    async def _stream_generate(_self: LLMGateway, _request: object):
+        yield "partial"
+        raise asyncio.CancelledError("fake stream cancellation")
+
+    monkeypatch.setattr(LLMGateway, "stream_generate", _stream_generate)
+
+    with client.stream(
+        "POST",
+        "/chat/stream",
+        json={"agent_id": agent_id, "message": "Explain the release plan"},
+        headers=headers,
+    ) as response:
+        assert response.status_code == 200
+        events = _parse_sse_events("".join(response.iter_text()))
+
+    assert events[-1]["event"] == "error"
+    assert not any(event.get("usage_phase") == "provider_final" for event in events)
+    assert not any(event["event"] == "run_finished" for event in events)
+
+
+def test_invalid_skill_markdown_ends_with_error_without_provider_final_or_skill_created(
+    client: TestClient, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    agent_id, headers = _create_streaming_agent(client)
+
+    async def _stream_generate(self: LLMGateway, _request: object):
+        yield "This is not a SKILL.md document."
+        self.last_normalized_usage = normalize_usage(
+            {"prompt_tokens": 21, "completion_tokens": 7, "total_tokens": 28}
+        )
+
+    def _unexpected_write(*_args: object, **_kwargs: object) -> None:
+        raise AssertionError("invalid Markdown must not write a skill file")
+
+    monkeypatch.setattr(LLMGateway, "stream_generate", _stream_generate)
+    monkeypatch.setattr(chat_route, "write_skill_file", _unexpected_write)
+
+    with client.stream(
+        "POST",
+        "/chat/stream",
+        json={"agent_id": agent_id, "message": "create a skill for release-note summaries"},
+        headers=headers,
+    ) as response:
+        assert response.status_code == 200
+        events = _parse_sse_events("".join(response.iter_text()))
+
+    assert events[-1]["event"] == "error"
+    assert not any(event.get("usage_phase") == "provider_final" for event in events)
+    assert not any(event["event"] == "skill_created" for event in events)
 
 
 def test_extract_skill_markdown_from_fenced_llm_output() -> None:
