@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import json
+from collections.abc import Awaitable, Callable
 from typing import Any
 
 from sqlalchemy import select
@@ -15,6 +16,7 @@ from app.models.runtime import AgentMCPPolicyModel, MCPServerModel, MCPToolModel
 from app.models.workflow import WorkflowRunModel
 from app.routes.knowledge import search_knowledge_base
 from app.schemas.knowledge import SearchRequest
+from app.services.context_tokens import preflight_chat_context
 from app.services.db.identity_db import membership_db
 from app.services.db.runtime_db import model_provider_db
 from app.services.db.workflow_db import (
@@ -25,7 +27,11 @@ from app.services.db.workflow_db import (
     workflow_version_db,
 )
 from app.services.metering import SessionUsageRecorder
+from app.services.stream_usage import StreamUsageReporter
 from packages.workflow.executor import ExecutedNode, WorkflowExecutor
+
+
+UsageEventCallback = Callable[[dict[str, object]], Awaitable[None]]
 
 
 class WorkflowExecutionService:
@@ -38,6 +44,7 @@ class WorkflowExecutionService:
         version_id: str,
         input_data: dict[str, Any],
         actor_user_id: str,
+        on_usage_event: UsageEventCallback | None = None,
     ) -> WorkflowRunModel:
         version = await workflow_version_db.get_by_id_required(session, version_id, "version_id")
         workflow = await workflow_db.get_workflow_required(session, version.workflow_id)
@@ -59,6 +66,7 @@ class WorkflowExecutionService:
             definition=json.loads(version.definition),
             input_data=input_data,
             actor_user_id=actor_user_id,
+            on_usage_event=on_usage_event,
         )
 
     async def execute_existing_run(
@@ -69,8 +77,26 @@ class WorkflowExecutionService:
         definition: dict[str, Any],
         input_data: dict[str, Any],
         actor_user_id: str,
+        on_usage_event: UsageEventCallback | None = None,
     ) -> WorkflowRunModel:
         await workflow_run_db.update_run_status(session, run.run_id, "running")
+        execution_definition = definition
+        if on_usage_event is not None:
+            execution_definition = {
+                **definition,
+                "nodes": [
+                    {
+                        **node,
+                        "config": {
+                            **dict(node.get("config", {})),
+                            "id": str(node["id"]),
+                        },
+                    }
+                    if str(node.get("type")) == "llm"
+                    else dict(node)
+                    for node in definition.get("nodes", [])
+                ],
+            }
         executor = WorkflowExecutor(
             llm_gateway=lambda config, node_input: self._execute_llm_node(
                 session=session,
@@ -79,6 +105,7 @@ class WorkflowExecutionService:
                 actor_user_id=actor_user_id,
                 org_id=run.org_id,
                 run=run,
+                on_usage_event=on_usage_event,
             ),
             rag_search=lambda config, node_input: self._execute_rag_node(
                 session=session,
@@ -96,7 +123,7 @@ class WorkflowExecutionService:
                 agent_id=run.agent_id,
             ),
         )
-        result = await executor.execute_async(definition=definition, input_data=input_data)
+        result = await executor.execute_async(definition=execution_definition, input_data=input_data)
         for index, executed_node in enumerate(result.node_runs):
             await self._persist_executed_node(session, run.run_id, executed_node, index)
         await workflow_run_db.update_run_status(
@@ -117,6 +144,7 @@ class WorkflowExecutionService:
         actor_user_id: str,
         org_id: str,
         run: WorkflowRunModel,
+        on_usage_event: UsageEventCallback | None = None,
     ) -> dict[str, Any]:
         provider_key = str(config.get("provider") or "")
         if not provider_key:
@@ -146,7 +174,36 @@ class WorkflowExecutionService:
             "_workflow_node_id": str(config.get("id") or ""),
         }
         try:
-            return await gateway.generate_from_workflow_node(enriched_config, node_input)
+            if on_usage_event is None:
+                return await gateway.generate_from_workflow_node(enriched_config, node_input)
+            request, _compiled = gateway.build_workflow_request(enriched_config, node_input)
+            reporter = StreamUsageReporter(
+                provider=request.provider,
+                model=request.model,
+                preflight=preflight_chat_context(
+                    provider=request.provider,
+                    model=request.model,
+                    compiled_prompt=request.prompt,
+                    components=[],
+                ),
+                usage_scope="workflow",
+                usage_key=f"{run.run_id}:{config['id']}",
+                workflow_node_id=str(config["id"]),
+                token_limit=2400,
+            )
+            await on_usage_event(reporter.preflight_event())
+            result = await gateway.stream_generate_from_workflow_node(
+                enriched_config,
+                node_input,
+                on_text=lambda text: on_usage_event(reporter.append_text(text)),
+            )
+            usage = gateway.last_normalized_usage
+            await on_usage_event(
+                reporter.final_event(usage)
+                if usage is not None
+                else reporter.unavailable_final_event()
+            )
+            return result
         finally:
             llm_gateway.call_logs.extend(gateway.list_logs())
 

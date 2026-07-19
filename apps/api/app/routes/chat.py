@@ -418,7 +418,7 @@ async def _chat_stream_events(
         )
 
         if request.execution_mode == "workflow":
-            from apps.api.app.routes.workflow_runs import execute_workflow_version_for_chat
+            from apps.api.app.routes.workflow_runs import stream_workflow_version_for_chat
 
             workflow = await _resolve_workflow_for_chat(db, agent=agent, request=request)
 
@@ -429,43 +429,51 @@ async def _chat_stream_events(
                 workflow_id=workflow.workflow_id,
                 workflow_name=workflow.name,
             )
-            run = await execute_workflow_version_for_chat(
+            async for update in stream_workflow_version_for_chat(
                 db,
                 version_id=workflow.published_version_id,
                 input_data={"text": request.message},
                 actor_user_id=actor_user_id,
-            )
-            response_text = json.dumps(json.loads(run.output_data), ensure_ascii=False, sort_keys=True)
-            await session_message_db.append_message(
-                db,
-                message_id=new_id("msg"),
-                session_id=session_id,
-                org_id=org_id,
-                agent_id=request.agent_id,
-                role="assistant",
-                content=response_text,
-                estimated_tokens=max(1, len(response_text) // 4),
-                meta_info=_workflow_message_metadata(workflow.workflow_id, run.run_id),
-            )
-            yield await emit(
-                "node_finished",
-                node="workflow",
-                label="执行 Workflow",
-                workflow_id=workflow.workflow_id,
-                workflow_run_id=run.run_id,
-            )
-            for chunk in _chunk_text(response_text):
-                yield await emit("token", text=chunk, session_id=session_id)
-            await db.commit()
-            yield await emit(
-                "run_finished",
-                session_id=session_id,
-                response=response_text,
-                mode="workflow",
-                workflow_id=workflow.workflow_id,
-                workflow_run_id=run.run_id,
-            )
-            return
+                token_limit=_memory_compaction_threshold(agent.context_token_limit),
+            ):
+                if update.kind == "usage":
+                    yield await emit(update.event_name, **update.payload)
+                    continue
+
+                run = update.run
+                if run is None:
+                    raise RuntimeError("Workflow chat stream completed without a run")
+                response_text = json.dumps(
+                    json.loads(run.output_data), ensure_ascii=False, sort_keys=True
+                )
+                await session_message_db.append_message(
+                    db,
+                    message_id=new_id("msg"),
+                    session_id=session_id,
+                    org_id=org_id,
+                    agent_id=request.agent_id,
+                    role="assistant",
+                    content=response_text,
+                    estimated_tokens=max(1, len(response_text) // 4),
+                    meta_info=_workflow_message_metadata(workflow.workflow_id, run.run_id),
+                )
+                yield await emit(
+                    "node_finished",
+                    node="workflow",
+                    label="执行 Workflow",
+                    workflow_id=workflow.workflow_id,
+                    workflow_run_id=run.run_id,
+                )
+                await db.commit()
+                yield await emit(
+                    "run_finished",
+                    session_id=session_id,
+                    response=response_text,
+                    mode="workflow",
+                    workflow_id=workflow.workflow_id,
+                    workflow_run_id=run.run_id,
+                )
+                return
 
         model_provider = agent.model_provider or ""
         model_name = agent.model_name or ""

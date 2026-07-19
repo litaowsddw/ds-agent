@@ -5,7 +5,40 @@ from uuid import uuid4
 import pytest
 from fastapi.testclient import TestClient
 
+from apps.api.app.gateway.llm import LLMCallRequest, LLMCallResponse, LLMStreamChunk
 from apps.api.app.main import app
+from apps.api.app.routes import workflow_runs as workflow_runs_route
+
+
+class _ChunkedWorkflowProvider:
+    """Workflow-provider double that emits two chunks and terminal usage."""
+
+    def __init__(self, **_kwargs: object) -> None:
+        pass
+
+    def generate(self, request: LLMCallRequest) -> LLMCallResponse:
+        return LLMCallResponse(
+            text="fallback response",
+            provider=request.provider,
+            model=request.model,
+            usage={"prompt_tokens": 3, "completion_tokens": 2, "total_tokens": 5},
+            raw={},
+        )
+
+    def stream_generate(self, _request: LLMCallRequest):
+        yield LLMStreamChunk(text="first ")
+        yield LLMStreamChunk(text="second")
+        yield LLMStreamChunk(
+            usage={"prompt_tokens": 12, "completion_tokens": 4, "total_tokens": 16}
+        )
+
+
+class _UnavailableUsageWorkflowProvider(_ChunkedWorkflowProvider):
+    """Workflow-provider double that completes without terminal usage data."""
+
+    def stream_generate(self, _request: LLMCallRequest):
+        yield LLMStreamChunk(text="first ")
+        yield LLMStreamChunk(text="second")
 
 
 @pytest.fixture()
@@ -74,6 +107,68 @@ def _create_published_passthrough_workflow(client: TestClient, owner_user_id: st
     publish = client.post(f"/workflows/{workflow['workflow_id']}/publish", json={"actor_user_id": owner_user_id})
     assert publish.status_code == 200
     return workflow["workflow_id"]
+
+
+def _create_published_llm_workflow(
+    client: TestClient,
+    owner_user_id: str,
+    agent_id: str,
+) -> str:
+    workflow = client.post(
+        "/workflows",
+        json={
+            "actor_user_id": owner_user_id,
+            "agent_id": agent_id,
+            "name": "LLM Workflow",
+            "description": "",
+            "draft_definition": {
+                "version": "1.0",
+                "nodes": [
+                    {"id": "start", "type": "start", "config": {}},
+                    {
+                        "id": "llm",
+                        "type": "llm",
+                        "config": {
+                            "provider": "workflow-test-provider",
+                            "model": "workflow-test-model",
+                            "prompt": "summarize workflow input",
+                        },
+                    },
+                    {"id": "end", "type": "end", "config": {}},
+                ],
+                "edges": [
+                    {"source": "start", "target": "llm"},
+                    {"source": "llm", "target": "end"},
+                ],
+            },
+        },
+    ).json()
+    publish = client.post(f"/workflows/{workflow['workflow_id']}/publish", json={"actor_user_id": owner_user_id})
+    assert publish.status_code == 200
+    return workflow["workflow_id"]
+
+
+def _create_model_provider(
+    client: TestClient,
+    owner_user_id: str,
+    org_id: str,
+    headers: dict[str, str],
+) -> None:
+    response = client.post(
+        "/model-providers",
+        json={
+            "actor_user_id": owner_user_id,
+            "org_id": org_id,
+            "provider_key": "workflow-test-provider",
+            "display_name": "Workflow Test Provider",
+            "base_url": "https://example.test/v1",
+            "api_key": "test-key",
+            "models": ["workflow-test-model"],
+            "default_model": "workflow-test-model",
+        },
+        headers=headers,
+    )
+    assert response.status_code == 200
 
 
 def _parse_sse_events(body: str) -> list[dict[str, object]]:
@@ -191,6 +286,72 @@ def test_streaming_workflow_mode_saves_metadata_in_history(client: TestClient) -
     assert assistant_message["meta_info"]["execution_mode"] == "workflow"
     assert assistant_message["meta_info"]["workflow_id"] == workflow_id
     assert assistant_message["meta_info"]["workflow_run_id"] == workflow_run_id
+
+
+def test_streaming_workflow_emits_llm_usage_before_run_finished(
+    client: TestClient, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    suffix = _suffix("stream-wf-usage")
+    owner_user_id, org_id, agent_id, headers = _create_owner_org_agent(client, suffix)
+    _create_model_provider(client, owner_user_id, org_id, headers)
+    workflow_id = _create_published_llm_workflow(client, owner_user_id, agent_id)
+    monkeypatch.setattr(workflow_runs_route, "OpenAICompatibleProvider", _ChunkedWorkflowProvider)
+
+    with client.stream(
+        "POST",
+        "/chat/stream",
+        json={
+            "agent_id": agent_id,
+            "message": "stream workflow usage",
+            "execution_mode": "workflow",
+            "workflow_id": workflow_id,
+        },
+        headers=headers,
+    ) as response:
+        assert response.status_code == 200
+        events = _parse_sse_events("".join(response.iter_text()))
+
+    workflow_progress = [event for event in events if event["event"] == "context_progress"]
+    run_finished = next(event for event in events if event["event"] == "run_finished")
+    assert len(workflow_progress) >= 2
+    assert all(item["usage_scope"] == "workflow" for item in workflow_progress)
+    assert all(item["workflow_node_id"] == "llm" for item in workflow_progress)
+    assert events.index(workflow_progress[-1]) < events.index(run_finished)
+
+    persisted_run = client.get(
+        f"/workflow-runs/{run_finished['workflow_run_id']}",
+        params={"actor_user_id": owner_user_id},
+    ).json()
+    assert persisted_run["status"] == "succeeded"
+
+
+def test_streaming_workflow_reports_unavailable_usage_when_provider_omits_usage(
+    client: TestClient, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    suffix = _suffix("stream-wf-usage-unavailable")
+    owner_user_id, org_id, agent_id, headers = _create_owner_org_agent(client, suffix)
+    _create_model_provider(client, owner_user_id, org_id, headers)
+    workflow_id = _create_published_llm_workflow(client, owner_user_id, agent_id)
+    monkeypatch.setattr(
+        workflow_runs_route, "OpenAICompatibleProvider", _UnavailableUsageWorkflowProvider
+    )
+
+    with client.stream(
+        "POST",
+        "/chat/stream",
+        json={
+            "agent_id": agent_id,
+            "message": "stream unavailable usage",
+            "execution_mode": "workflow",
+            "workflow_id": workflow_id,
+        },
+        headers=headers,
+    ) as response:
+        assert response.status_code == 200
+        events = _parse_sse_events("".join(response.iter_text()))
+
+    context_usage = [event for event in events if event["event"] == "context_usage"]
+    assert context_usage[-1]["usage_phase"] == "unavailable"
 
 
 def test_normal_and_stream_workflow_mode_emit_matching_metadata(client: TestClient) -> None:

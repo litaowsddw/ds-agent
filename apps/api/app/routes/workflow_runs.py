@@ -6,8 +6,11 @@
 
 from __future__ import annotations
 
+import asyncio
 import json
-from typing import Any
+from contextlib import suppress
+from dataclasses import dataclass, field
+from typing import Any, AsyncIterator, Literal
 
 from fastapi import APIRouter, Depends, HTTPException, Query
 from sqlalchemy.ext.asyncio import AsyncSession
@@ -33,6 +36,16 @@ from app.services import workflow_execution as workflow_execution_module
 from app.services.workflow_execution import workflow_execution_service
 
 router = APIRouter()
+
+
+@dataclass(frozen=True, slots=True)
+class WorkflowChatStreamUpdate:
+    """One chat-only Workflow execution update."""
+
+    kind: Literal["usage", "completed"]
+    event_name: str = ""
+    payload: dict[str, object] = field(default_factory=dict)
+    run: WorkflowRunModel | None = None
 
 
 def _require_server_authenticated_identity(auth: AuthenticatedUser) -> None:
@@ -104,6 +117,62 @@ async def execute_workflow_version_for_chat(
         input_data=input_data,
         actor_user_id=actor_user_id,
     )
+
+
+async def stream_workflow_version_for_chat(
+    session: AsyncSession,
+    *,
+    version_id: str,
+    input_data: dict[str, Any],
+    actor_user_id: str,
+    token_limit: int,
+) -> AsyncIterator[WorkflowChatStreamUpdate]:
+    """Execute a Workflow while forwarding its LLM usage to chat only."""
+
+    queue: asyncio.Queue[dict[str, object] | None] = asyncio.Queue()
+
+    async def on_usage_event(payload: dict[str, object]) -> None:
+        payload["token_limit"] = token_limit
+        await queue.put(payload)
+
+    workflow_execution_module.OpenAICompatibleProvider = OpenAICompatibleProvider
+    task = asyncio.create_task(
+        workflow_execution_service.create_and_execute(
+            session,
+            version_id=version_id,
+            input_data=input_data,
+            actor_user_id=actor_user_id,
+            on_usage_event=on_usage_event,
+        )
+    )
+    try:
+        while not task.done() or not queue.empty():
+            next_payload = asyncio.create_task(queue.get())
+            done, _pending = await asyncio.wait(
+                {task, next_payload},
+                return_when=asyncio.FIRST_COMPLETED,
+            )
+            if next_payload not in done:
+                next_payload.cancel()
+                with suppress(asyncio.CancelledError):
+                    await next_payload
+                continue
+            payload = next_payload.result()
+            phase = str(payload["usage_phase"])
+            event_name = (
+                "context_preflight"
+                if phase == "preflight"
+                else "context_progress"
+                if phase == "estimated"
+                else "context_usage"
+            )
+            yield WorkflowChatStreamUpdate("usage", event_name, payload)
+        yield WorkflowChatStreamUpdate("completed", run=await task)
+    finally:
+        if not task.done():
+            task.cancel()
+        with suppress(asyncio.CancelledError):
+            await task
 
 
 @router.get("", response_model=list[WorkflowRunResponse])
