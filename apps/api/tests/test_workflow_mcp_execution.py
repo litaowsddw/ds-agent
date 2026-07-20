@@ -292,13 +292,14 @@ def test_workflow_tool_refuses_unapproved_high_risk_snapshot(monkeypatch) -> Non
 
         assert response.status_code == 200
         run = response.json()
-        assert run["status"] == "failed"
+        assert run["status"] == "waiting_approval"
         nodes = client.get(
             f"/workflow-runs/{run['run_id']}/nodes",
             params={"actor_user_id": actor_user_id},
         ).json()
         tool_node = next(node for node in nodes if node["node_id"] == "tool")
-        assert tool_node["status"] == "failed"
+        assert tool_node["status"] == "waiting_approval"
+        assert tool_node["output_data"]["requires_approval"] is True
         assert "需要人工审批" in tool_node["error_message"]
 
         audit_logs = client.get(
@@ -312,6 +313,123 @@ def test_workflow_tool_refuses_unapproved_high_risk_snapshot(monkeypatch) -> Non
         ]
         assert len(approval_events) == 1
         assert approval_events[0]["detail"]["arguments"] == {"id": "record-1"}
+        approval_id = client.get(
+            f"/workflow-runs/{run['run_id']}/approvals", headers=owner_headers
+        ).json()[0]["approval_id"]
+        outsider_email = f"outsider-{_suffix('approval')}@example.com"
+        client.post(
+            "/identity/users/register",
+            json={
+                "email": outsider_email,
+                "display_name": "Outsider",
+                "password": "password123",
+            },
+        )
+        outsider_login = client.post(
+            "/identity/users/login",
+            json={"email": outsider_email, "password": "password123"},
+        )
+        outsider_headers = {"Authorization": f"Bearer {outsider_login.json()['token']['access_token']}"}
+        forbidden = client.post(
+            f"/workflow-runs/{run['run_id']}/approvals/{approval_id}/decision",
+            json={"decision": "reject"},
+            headers=outsider_headers,
+        )
+        assert forbidden.status_code == 403
+        rejected = client.post(
+            f"/workflow-runs/{run['run_id']}/approvals/{approval_id}/decision",
+            json={"decision": "reject"},
+            headers=owner_headers,
+        )
+        assert rejected.status_code == 200
+        assert rejected.json()["status"] == "rejected"
+        canceled = client.get(
+            f"/workflow-runs/{run['run_id']}",
+            params={"actor_user_id": actor_user_id},
+        )
+        assert canceled.json()["status"] == "canceled"
+
+
+def test_workflow_high_risk_approval_executes_exactly_one_new_tool_step(monkeypatch) -> None:
+    calls: list[dict[str, object]] = []
+
+    def fake_tool_call(url, headers, *, tool_name, arguments):
+        calls.append({"url": url, "headers": headers, "tool_name": tool_name, "arguments": arguments})
+        return {"content": [{"type": "text", "text": "approved result"}]}
+
+    monkeypatch.setattr(workflow_execution_module, "invoke_streamable_http_tool", fake_tool_call)
+
+    with TestClient(app) as client:
+        actor_user_id, org_id, agent_id, owner_headers = _create_owner_org_agent(
+            client, _suffix("wf-mcp-approval-step")
+        )
+        tool_id = _bind_mcp_tool(
+            client,
+            monkeypatch=monkeypatch,
+            actor_user_id=actor_user_id,
+            org_id=org_id,
+            agent_id=agent_id,
+            risk_level="high",
+        )
+        version_id = _publish_tool_workflow(
+            client,
+            actor_user_id=actor_user_id,
+            agent_id=agent_id,
+            tool_id=tool_id,
+            config={"arguments": {"id": "{{input.id}}", "secret": "{{input.secret}}"}},
+        )
+        created = client.post(
+            "/workflow-runs",
+            json={"version_id": version_id, "input_data": {"id": "record-9", "secret": "keep-me-private"}},
+            headers=owner_headers,
+        )
+        assert created.status_code == 200
+        run = created.json()
+        assert run["status"] == "waiting_approval"
+        assert calls == []
+
+        approvals = client.get(
+            f"/workflow-runs/{run['run_id']}/approvals", headers=owner_headers
+        )
+        assert approvals.status_code == 200
+        assert approvals.json()[0]["arguments"] == {"id": "record-9", "secret": "[redacted]"}
+        approval_id = approvals.json()[0]["approval_id"]
+        decision = client.post(
+            f"/workflow-runs/{run['run_id']}/approvals/{approval_id}/decision",
+            json={"decision": "approve"},
+            headers=owner_headers,
+        )
+        assert decision.status_code == 200, decision.text
+        assert decision.json()["status"] == "approved"
+        assert decision.json()["execution_node_run_id"]
+        assert calls == [
+            {
+                "url": "https://mcp.example.com/mcp",
+                "headers": {},
+                "tool_name": "search_docs",
+                "arguments": {"id": "record-9", "secret": "keep-me-private"},
+            }
+        ]
+
+        repeated = client.post(
+            f"/workflow-runs/{run['run_id']}/approvals/{approval_id}/decision",
+            json={"decision": "approve"},
+            headers=owner_headers,
+        )
+        assert repeated.status_code == 409
+        assert len(calls) == 1
+        updated = client.get(
+            f"/workflow-runs/{run['run_id']}",
+            params={"actor_user_id": actor_user_id},
+        )
+        assert updated.json()["status"] == "awaiting_manual_resume"
+        nodes = client.get(
+            f"/workflow-runs/{run['run_id']}/nodes",
+            params={"actor_user_id": actor_user_id},
+        ).json()
+        tool_nodes = [node for node in nodes if node["node_id"] == "tool"]
+        assert [node["status"] for node in tool_nodes] == ["waiting_approval", "succeeded"]
+        assert tool_nodes[-1]["output_data"]["arguments"]["secret"] == "[redacted]"
 
 
 def test_workflow_tool_rejects_arguments_that_violate_imported_schema(monkeypatch) -> None:

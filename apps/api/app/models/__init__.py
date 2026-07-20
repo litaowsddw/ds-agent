@@ -28,10 +28,12 @@ from app.models.workflow import (
     WorkflowVersionModel,
     WorkflowRunModel,
     NodeRunModel,
+    WorkflowApprovalRequestModel,
     KnowledgeBaseModel,
     DocumentModel,
     ChunkModel,
 )
+from app.models.workflow_trigger import WorkflowWebhookDeliveryModel, WorkflowWebhookTriggerModel
 from app.models.metering import LLMUsageEventModel, ModelPriceModel
 
 __all__ = [
@@ -57,9 +59,12 @@ __all__ = [
     "WorkflowVersionModel",
     "WorkflowRunModel",
     "NodeRunModel",
+    "WorkflowApprovalRequestModel",
     "KnowledgeBaseModel",
     "DocumentModel",
     "ChunkModel",
+    "WorkflowWebhookTriggerModel",
+    "WorkflowWebhookDeliveryModel",
     "LLMUsageEventModel",
     "ModelPriceModel",
 ]

@@ -1,7 +1,7 @@
 """Workflow run API schemas."""
 
 from datetime import datetime
-from typing import Any
+from typing import Any, Literal
 
 from pydantic import BaseModel, ConfigDict, Field
 
@@ -51,3 +51,31 @@ class NodeRunResponse(BaseModel):
     error_message: str
     elapsed_ms: int
     sequence: int
+
+
+class WorkflowApprovalDecisionRequest(BaseModel):
+    """A privileged organization's explicit decision for one MCP action."""
+
+    model_config = ConfigDict(extra="forbid")
+
+    decision: Literal["approve", "reject"]
+
+
+class WorkflowApprovalResponse(BaseModel):
+    """Public, redacted representation of an approval request."""
+
+    approval_id: str
+    run_id: str
+    node_id: str
+    tool_id: str
+    server_id: str
+    tool_name: str
+    risk_level: str
+    arguments: dict[str, Any]
+    status: str
+    requested_by: str
+    decided_by: str | None
+    decided_at: datetime | None
+    execution_node_run_id: str | None
+    error_message: str
+    created_at: datetime

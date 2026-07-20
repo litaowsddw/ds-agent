@@ -17,6 +17,7 @@ from app.models.workflow import (
     WorkflowVersionModel,
     WorkflowRunModel,
     NodeRunModel,
+    WorkflowApprovalRequestModel,
     KnowledgeBaseModel,
     DocumentModel,
     ChunkModel,
@@ -359,6 +360,77 @@ class NodeRunDBService(BaseDBService[NodeRunModel]):
         return list(result.scalars().all())
 
 
+class WorkflowApprovalDBService(BaseDBService[WorkflowApprovalRequestModel]):
+    """Persistence and state transitions for high-risk Tool approvals."""
+
+    def __init__(self) -> None:
+        super().__init__(WorkflowApprovalRequestModel)
+
+    async def create_pending(
+        self,
+        session: AsyncSession,
+        *,
+        approval_id: str,
+        run_id: str,
+        org_id: str,
+        node_id: str,
+        tool_id: str,
+        server_id: str,
+        tool_name: str,
+        risk_level: str,
+        arguments_redacted: dict[str, Any],
+        arguments_encrypted: str,
+        requested_by: str,
+    ) -> WorkflowApprovalRequestModel:
+        approval = WorkflowApprovalRequestModel(
+            approval_id=approval_id,
+            run_id=run_id,
+            org_id=org_id,
+            node_id=node_id,
+            tool_id=tool_id,
+            server_id=server_id,
+            tool_name=tool_name,
+            risk_level=risk_level,
+            arguments_redacted=json.dumps(arguments_redacted, ensure_ascii=False),
+            arguments_encrypted=arguments_encrypted,
+            status="pending",
+            requested_by=requested_by,
+        )
+        session.add(approval)
+        await session.flush()
+        return approval
+
+    async def list_run_approvals(
+        self, session: AsyncSession, run_id: str
+    ) -> list[WorkflowApprovalRequestModel]:
+        result = await session.execute(
+            select(WorkflowApprovalRequestModel)
+            .where(WorkflowApprovalRequestModel.run_id == run_id)
+            .order_by(WorkflowApprovalRequestModel.created_at)
+        )
+        return list(result.scalars().all())
+
+    async def get_run_approval_required(
+        self,
+        session: AsyncSession,
+        *,
+        run_id: str,
+        approval_id: str,
+        for_update: bool = False,
+    ) -> WorkflowApprovalRequestModel:
+        statement = select(WorkflowApprovalRequestModel).where(
+            WorkflowApprovalRequestModel.approval_id == approval_id,
+            WorkflowApprovalRequestModel.run_id == run_id,
+        )
+        if for_update:
+            statement = statement.with_for_update()
+        result = await session.execute(statement)
+        approval = result.scalar_one_or_none()
+        if approval is None:
+            raise ValueError("审批请求不存在")
+        return approval
+
+
 class KnowledgeBaseDBService(BaseDBService[KnowledgeBaseModel]):
     """知识库数据库服务。"""
 
@@ -520,6 +592,7 @@ workflow_db = WorkflowDBService()
 workflow_version_db = WorkflowVersionDBService()
 workflow_run_db = WorkflowRunDBService()
 node_run_db = NodeRunDBService()
+workflow_approval_db = WorkflowApprovalDBService()
 knowledge_base_db = KnowledgeBaseDBService()
 document_db = DocumentDBService()
 chunk_db = ChunkDBService()

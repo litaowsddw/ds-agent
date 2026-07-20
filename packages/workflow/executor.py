@@ -6,6 +6,7 @@ LLM、RAG、Tool 节点的真实能力由上层注入，因此生产链路不会
 
 from __future__ import annotations
 
+import asyncio
 import inspect
 from contextvars import ContextVar
 from collections.abc import Awaitable, Callable
@@ -19,6 +20,14 @@ from packages.workflow.conditions import evaluate_condition, normalize_condition
 from packages.workflow.budget import (
     WorkflowBudgetGuard,
     execution_limits_from_definition,
+)
+from packages.workflow.reliability import (
+    NodeReliabilityPolicy,
+    WorkflowNodeTimeout,
+    WorkflowSyncTimeoutUnsupported,
+    is_retryable_node_error,
+    reliability_policy_for_node,
+    strip_reliability_policy,
 )
 from packages.workflow.templates import resolve_template_value
 
@@ -73,6 +82,28 @@ RAGNodeCall = Callable[[dict[str, Any], dict[str, Any]], NodeCallResult]
 ToolNodeCall = Callable[[dict[str, Any], dict[str, Any]], NodeCallResult]
 
 
+class WorkflowApprovalRequired(Exception):
+    """A reviewed Tool invocation was persisted and is awaiting a decision.
+
+    This is an execution control signal, not an error.  Keeping it in the
+    workflow package lets application integrations pause a graph without
+    importing API/database code into the generic executor.
+    """
+
+    def __init__(self, approval_id: str, message: str) -> None:
+        super().__init__(message)
+        self.approval_id = approval_id
+
+
+class _NodeAttemptFailure(Exception):
+    """Carry an external callback's terminal error and real attempt count."""
+
+    def __init__(self, cause: Exception, attempt_count: int) -> None:
+        super().__init__(str(cause))
+        self.cause = cause
+        self.attempt_count = attempt_count
+
+
 class WorkflowGraphState(TypedDict, total=False):
     """LangGraph 执行状态。"""
 
@@ -83,6 +114,7 @@ class WorkflowGraphState(TypedDict, total=False):
     node_runs: Annotated[list["ExecutedNode"], _append_node_runs]
     failed: Annotated[bool, _any_failed]
     error_message: Annotated[str, _first_error]
+    waiting_approval: bool
 
 
 @dataclass(slots=True)
@@ -109,6 +141,13 @@ class ExecutedNode:
 
     # elapsed_ms 是节点耗时毫秒数。
     elapsed_ms: int = 0
+
+    # Actual provider attempts. This remains zero when a pre-call budget or
+    # configuration check rejects an external node before it is invoked.
+    attempt_count: int = 1
+
+    # The terminal callback error without retry decoration, for trace viewers.
+    last_error: str = ""
 
 
 @dataclass(slots=True)
@@ -278,7 +317,7 @@ class WorkflowExecutor:
         config = dict(node.get("config", {}))
 
         def run_node(state: WorkflowGraphState) -> dict[str, Any]:
-            if state.get("failed"):
+            if state.get("failed") or state.get("waiting_approval"):
                 return {}
             return self._run_sync_node(
                 state=state,
@@ -302,7 +341,7 @@ class WorkflowExecutor:
         config = dict(node.get("config", {}))
 
         async def run_node(state: WorkflowGraphState) -> dict[str, Any]:
-            if state.get("failed"):
+            if state.get("failed") or state.get("waiting_approval"):
                 return {}
             return await self._run_async_node(
                 state=state,
@@ -369,15 +408,61 @@ class WorkflowExecutor:
         """同步执行单个节点。"""
 
         started_at = perf_counter()
+        policy = NodeReliabilityPolicy()
+        attempt_count = 0 if node_type in {"llm", "rag"} else 1
         try:
             self._consume_execution_budget(node_type)
+            policy = reliability_policy_for_node(node_type, config)
             if node_type == "condition":
                 config = normalize_condition_config(config)
             resolved_config = self._resolve_node_config(node_id, config, node_input)
-            output_data = self._resolve_sync_output(node_type, resolved_config, node_input)
-            return self._succeeded_node(node_id, node_type, node_input, output_data, started_at)
+            callback_config = strip_reliability_policy(resolved_config)
+            if node_type in {"llm", "rag"}:
+                if policy.timeout_seconds is not None:
+                    raise WorkflowSyncTimeoutUnsupported(
+                        "同步 execute 无法安全终止阻塞的外部调用；"
+                        "配置 reliability.timeout_seconds 时请使用 execute_async"
+                    )
+                output_data, attempt_count = self._resolve_retrying_sync_output(
+                    node_type,
+                    callback_config,
+                    node_input,
+                    policy,
+                )
+            else:
+                output_data = self._resolve_sync_output(
+                    node_type, callback_config, node_input
+                )
+            return self._succeeded_node(
+                node_id,
+                node_type,
+                node_input,
+                output_data,
+                started_at,
+                attempt_count=attempt_count,
+            )
+        except _NodeAttemptFailure as failure:
+            return self._failed_node(
+                node_id,
+                node_type,
+                node_input,
+                failure.cause,
+                started_at,
+                attempt_count=failure.attempt_count,
+                max_attempts=policy.max_attempts,
+            )
+        except WorkflowApprovalRequired as exc:
+            return self._waiting_approval_node(node_id, node_type, node_input, exc, started_at)
         except Exception as exc:
-            return self._failed_node(node_id, node_type, node_input, exc, started_at)
+            return self._failed_node(
+                node_id,
+                node_type,
+                node_input,
+                exc,
+                started_at,
+                attempt_count=attempt_count,
+                max_attempts=policy.max_attempts,
+            )
 
     async def _execute_node_async(
         self,
@@ -389,15 +474,56 @@ class WorkflowExecutor:
         """异步执行单个节点。"""
 
         started_at = perf_counter()
+        policy = NodeReliabilityPolicy()
+        attempt_count = 0 if node_type in {"llm", "rag"} else 1
         try:
             self._consume_execution_budget(node_type)
+            policy = reliability_policy_for_node(node_type, config)
             if node_type == "condition":
                 config = normalize_condition_config(config)
             resolved_config = self._resolve_node_config(node_id, config, node_input)
-            output_data = await self._resolve_async_output(node_type, resolved_config, node_input)
-            return self._succeeded_node(node_id, node_type, node_input, output_data, started_at)
+            callback_config = strip_reliability_policy(resolved_config)
+            if node_type in {"llm", "rag"}:
+                output_data, attempt_count = await self._resolve_retrying_async_output(
+                    node_type,
+                    callback_config,
+                    node_input,
+                    policy,
+                )
+            else:
+                output_data = await self._resolve_async_output(
+                    node_type, callback_config, node_input
+                )
+            return self._succeeded_node(
+                node_id,
+                node_type,
+                node_input,
+                output_data,
+                started_at,
+                attempt_count=attempt_count,
+            )
+        except _NodeAttemptFailure as failure:
+            return self._failed_node(
+                node_id,
+                node_type,
+                node_input,
+                failure.cause,
+                started_at,
+                attempt_count=failure.attempt_count,
+                max_attempts=policy.max_attempts,
+            )
+        except WorkflowApprovalRequired as exc:
+            return self._waiting_approval_node(node_id, node_type, node_input, exc, started_at)
         except Exception as exc:
-            return self._failed_node(node_id, node_type, node_input, exc, started_at)
+            return self._failed_node(
+                node_id,
+                node_type,
+                node_input,
+                exc,
+                started_at,
+                attempt_count=attempt_count,
+                max_attempts=policy.max_attempts,
+            )
 
     def _consume_execution_budget(self, node_type: str) -> None:
         """Reserve this node before resolving config or invoking an external service."""
@@ -405,6 +531,84 @@ class WorkflowExecutor:
         guard = self._budget_guard.get()
         if guard is not None:
             guard.before_node(node_type)
+
+    def _consume_external_attempt_budget(self, node_type: str) -> None:
+        """Reserve every actual LLM provider attempt, including retries."""
+
+        guard = self._budget_guard.get()
+        if guard is not None and node_type == "llm":
+            guard.before_llm_attempt()
+
+    def _resolve_retrying_sync_output(
+        self,
+        node_type: str,
+        config: dict[str, Any],
+        node_input: dict[str, Any],
+        policy: NodeReliabilityPolicy,
+    ) -> tuple[dict[str, Any], int]:
+        """Retry completed retryable LLM/RAG failures in the sync test path.
+
+        A synchronous Python callback cannot be forcibly and safely stopped.
+        Callers with an explicit timeout policy are rejected before reaching
+        this method; production integrations use ``execute_async`` instead.
+        """
+
+        attempt_count = 0
+        while attempt_count < policy.max_attempts:
+            try:
+                self._consume_external_attempt_budget(node_type)
+            except Exception as exc:
+                raise _NodeAttemptFailure(exc, attempt_count) from exc
+            attempt_count += 1
+            try:
+                return (
+                    self._resolve_sync_output(node_type, config, node_input),
+                    attempt_count,
+                )
+            except WorkflowApprovalRequired:
+                raise
+            except Exception as exc:
+                if attempt_count >= policy.max_attempts or not is_retryable_node_error(exc):
+                    raise _NodeAttemptFailure(exc, attempt_count) from exc
+        raise AssertionError("retry loop must return or raise")  # pragma: no cover
+
+    async def _resolve_retrying_async_output(
+        self,
+        node_type: str,
+        config: dict[str, Any],
+        node_input: dict[str, Any],
+        policy: NodeReliabilityPolicy,
+    ) -> tuple[dict[str, Any], int]:
+        """Run bounded async retries without retrying client-side timeouts."""
+
+        timeout_seconds = policy.async_timeout_seconds()
+        attempt_count = 0
+        while attempt_count < policy.max_attempts:
+            try:
+                self._consume_external_attempt_budget(node_type)
+            except Exception as exc:
+                raise _NodeAttemptFailure(exc, attempt_count) from exc
+            attempt_count += 1
+            try:
+                output_data = await asyncio.wait_for(
+                    self._resolve_async_output(node_type, config, node_input),
+                    timeout=timeout_seconds,
+                )
+                return output_data, attempt_count
+            except TimeoutError as exc:
+                # ``wait_for`` stops this workflow from waiting. A blocking
+                # synchronous integration may itself finish later, so retrying
+                # here could duplicate provider work and token charges.
+                timeout_error = WorkflowNodeTimeout(
+                    f"{node_type} 节点等待外部服务超过 {timeout_seconds} 秒，已停止等待"
+                )
+                raise _NodeAttemptFailure(timeout_error, attempt_count) from exc
+            except WorkflowApprovalRequired:
+                raise
+            except Exception as exc:
+                if attempt_count >= policy.max_attempts or not is_retryable_node_error(exc):
+                    raise _NodeAttemptFailure(exc, attempt_count) from exc
+        raise AssertionError("retry loop must return or raise")  # pragma: no cover
 
     def _resolve_sync_output(
         self, node_type: str, config: dict[str, Any], node_input: dict[str, Any]
@@ -437,7 +641,10 @@ class WorkflowExecutor:
             matched = evaluate_condition(config)
             return {"result": matched, "branch": "true" if matched else "false"}
         call = self._required_call(node_type)
-        output = call(config, node_input)
+        # The callback construction runs off the event loop so the enclosing
+        # ``asyncio.wait_for`` can stop waiting on a blocking synchronous
+        # integration. A returned coroutine is awaited on this event loop.
+        output = await asyncio.to_thread(call, config, node_input)
         if inspect.isawaitable(output):
             output = await output
         return dict(output)
@@ -518,6 +725,11 @@ class WorkflowExecutor:
                 "failed": True,
                 "error_message": executed_node.error_message,
             }
+        if executed_node.status == "waiting_approval":
+            return {
+                "node_runs": [executed_node],
+                "waiting_approval": True,
+            }
         return {
             "context_by_node": {node_id: executed_node.output_data},
             "node_runs": [executed_node],
@@ -554,6 +766,7 @@ class WorkflowExecutor:
             "node_runs": [],
             "failed": False,
             "error_message": "",
+            "waiting_approval": False,
         }
 
     def _to_result(self, final_state: WorkflowGraphState) -> WorkflowExecutionResult:
@@ -561,6 +774,16 @@ class WorkflowExecutor:
 
         node_runs = list(final_state.get("node_runs", []))
         error_message = str(final_state.get("error_message", ""))
+        if final_state.get("waiting_approval"):
+            waiting_node = next(
+                (node for node in reversed(node_runs) if node.status == "waiting_approval"),
+                None,
+            )
+            return WorkflowExecutionResult(
+                status="waiting_approval",
+                output_data=dict(waiting_node.output_data) if waiting_node else {},
+                node_runs=node_runs,
+            )
         if final_state.get("failed"):
             return WorkflowExecutionResult(
                 status="failed",
@@ -581,6 +804,8 @@ class WorkflowExecutor:
         node_input: dict[str, Any],
         output_data: dict[str, Any],
         started_at: float,
+        *,
+        attempt_count: int = 1,
     ) -> ExecutedNode:
         """创建成功节点记录。"""
 
@@ -591,6 +816,7 @@ class WorkflowExecutor:
             input_data=node_input,
             output_data=output_data,
             elapsed_ms=int((perf_counter() - started_at) * 1000),
+            attempt_count=attempt_count,
         )
 
     def _failed_node(
@@ -600,6 +826,9 @@ class WorkflowExecutor:
         node_input: dict[str, Any],
         exc: Exception,
         started_at: float,
+        *,
+        attempt_count: int = 1,
+        max_attempts: int = 1,
     ) -> ExecutedNode:
         """创建失败节点记录。"""
 
@@ -608,6 +837,51 @@ class WorkflowExecutor:
             node_type=node_type,
             status="failed",
             input_data=node_input,
-            error_message=str(exc),
+            error_message=self._format_retry_error(
+                exc,
+                attempt_count=attempt_count,
+                max_attempts=max_attempts,
+            ),
+            elapsed_ms=int((perf_counter() - started_at) * 1000),
+            attempt_count=attempt_count,
+            last_error=str(exc),
+        )
+
+    def _format_retry_error(
+        self,
+        exc: Exception,
+        *,
+        attempt_count: int,
+        max_attempts: int,
+    ) -> str:
+        """Make terminal callback failures clear in durable node traces."""
+
+        if max_attempts <= 1:
+            return str(exc)
+        return (
+            f"节点调用失败（已尝试 {attempt_count} 次，最多允许 {max_attempts} 次；"
+            f"最后错误：{exc}）"
+        )
+
+    def _waiting_approval_node(
+        self,
+        node_id: str,
+        node_type: str,
+        node_input: dict[str, Any],
+        approval: WorkflowApprovalRequired,
+        started_at: float,
+    ) -> ExecutedNode:
+        """Persist a pause point instead of turning an approval into a failure."""
+
+        return ExecutedNode(
+            node_id=node_id,
+            node_type=node_type,
+            status="waiting_approval",
+            input_data=node_input,
+            output_data={
+                "approval_id": approval.approval_id,
+                "requires_approval": True,
+            },
+            error_message=str(approval),
             elapsed_ms=int((perf_counter() - started_at) * 1000),
         )

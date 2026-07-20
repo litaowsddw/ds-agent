@@ -52,7 +52,9 @@ class WorkflowRunModel(Base):
     version_id: Mapped[str] = mapped_column(String(64), ForeignKey("workflow_versions.version_id"), nullable=False)
     org_id: Mapped[str] = mapped_column(String(64), nullable=False, index=True)
     agent_id: Mapped[str] = mapped_column(String(64), nullable=False)
-    status: Mapped[str] = mapped_column(String(16), default="pending")  # pending/running/succeeded/failed/cancelled
+    # Approval can leave a run in ``awaiting_manual_resume``; keep enough
+    # room for explicit lifecycle states instead of truncating them in MySQL.
+    status: Mapped[str] = mapped_column(String(32), default="pending")
     input_data: Mapped[str] = mapped_column(Text, default="{}")  # JSON
     output_data: Mapped[str] = mapped_column(Text, default="{}")  # JSON
     error_message: Mapped[str] = mapped_column(Text, default="")
@@ -84,6 +86,37 @@ class NodeRunModel(Base):
 
     # 关系
     run: Mapped["WorkflowRunModel"] = relationship(back_populates="node_runs")
+
+
+class WorkflowApprovalRequestModel(Base):
+    """Durable approval gate for a high-risk Workflow MCP tool invocation.
+
+    ``arguments_encrypted`` is deliberately never returned by an API.  The
+    operator sees ``arguments_redacted`` while the reviewed execution service
+    can decrypt the exact, already-resolved invocation only after approval.
+    """
+
+    __tablename__ = "workflow_approval_requests"
+
+    approval_id: Mapped[str] = mapped_column(String(64), primary_key=True)
+    run_id: Mapped[str] = mapped_column(
+        String(64), ForeignKey("workflow_runs.run_id"), nullable=False, index=True
+    )
+    org_id: Mapped[str] = mapped_column(String(64), nullable=False, index=True)
+    node_id: Mapped[str] = mapped_column(String(64), nullable=False)
+    tool_id: Mapped[str] = mapped_column(String(64), nullable=False)
+    server_id: Mapped[str] = mapped_column(String(64), nullable=False)
+    tool_name: Mapped[str] = mapped_column(String(255), nullable=False)
+    risk_level: Mapped[str] = mapped_column(String(16), nullable=False)
+    arguments_redacted: Mapped[str] = mapped_column(Text, default="{}")
+    arguments_encrypted: Mapped[str] = mapped_column(Text, nullable=False)
+    status: Mapped[str] = mapped_column(String(32), default="pending", index=True)
+    requested_by: Mapped[str] = mapped_column(String(64), nullable=False)
+    decided_by: Mapped[str | None] = mapped_column(String(64), nullable=True)
+    decided_at: Mapped[datetime | None] = mapped_column(DateTime, nullable=True)
+    execution_node_run_id: Mapped[str | None] = mapped_column(String(64), nullable=True)
+    error_message: Mapped[str] = mapped_column(Text, default="")
+    created_at: Mapped[datetime] = mapped_column(DateTime, default=datetime.utcnow)
 
 
 class KnowledgeBaseModel(Base):

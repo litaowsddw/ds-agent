@@ -19,15 +19,18 @@ from app.core.auth import AuthenticatedUser
 from app.database import get_db_session
 from app.domain.identity import new_id
 from app.gateway.llm import OpenAICompatibleProvider
-from app.models.workflow import NodeRunModel, WorkflowRunModel
+from app.models.workflow import NodeRunModel, WorkflowApprovalRequestModel, WorkflowRunModel
 from app.schemas.workflow_run import (
     NodeRunResponse,
+    WorkflowApprovalDecisionRequest,
+    WorkflowApprovalResponse,
     WorkflowRunCreateRequest,
     WorkflowRunResponse,
 )
 from app.services.db.identity_db import membership_db
 from app.services.db.workflow_db import (
     node_run_db,
+    workflow_approval_db,
     workflow_db,
     workflow_run_db,
     workflow_version_db,
@@ -254,6 +257,65 @@ async def list_node_runs(
     return [_to_node_run_response(nr, sequence=index) for index, nr in enumerate(node_runs)]
 
 
+@router.get("/{run_id}/approvals", response_model=list[WorkflowApprovalResponse])
+async def list_run_approvals(
+    run_id: str,
+    auth: AuthenticatedUser,
+    session: AsyncSession = Depends(get_db_session),
+) -> list[WorkflowApprovalResponse]:
+    """List redacted high-risk Tool approval requests for organization operators."""
+
+    try:
+        _require_server_authenticated_identity(auth)
+        run = await workflow_run_db.get_run_required(session, run_id)
+        await membership_db.assert_org_access(
+            session, user_id=auth.user_id, org_id=run.org_id, required_role="admin"
+        )
+        approvals = await workflow_approval_db.list_run_approvals(session, run_id)
+    except ValueError as exc:
+        raise HTTPException(status_code=403, detail="Forbidden") from exc
+    return [_to_approval_response(approval) for approval in approvals]
+
+
+@router.post(
+    "/{run_id}/approvals/{approval_id}/decision",
+    response_model=WorkflowApprovalResponse,
+)
+async def decide_run_approval(
+    run_id: str,
+    approval_id: str,
+    request: WorkflowApprovalDecisionRequest,
+    auth: AuthenticatedUser,
+    session: AsyncSession = Depends(get_db_session),
+) -> WorkflowApprovalResponse:
+    """Approve or reject exactly one durable high-risk MCP Tool action."""
+
+    try:
+        _require_server_authenticated_identity(auth)
+        run = await workflow_run_db.get_run_required(session, run_id)
+    except ValueError as exc:
+        raise HTTPException(status_code=404, detail="Workflow run not found") from exc
+    try:
+        await membership_db.assert_org_access(
+            session, user_id=auth.user_id, org_id=run.org_id, required_role="admin"
+        )
+    except ValueError as exc:
+        raise HTTPException(status_code=403, detail="Forbidden") from exc
+    try:
+        approval = await workflow_execution_service.decide_high_risk_tool_approval(
+            session,
+            run=run,
+            approval_id=approval_id,
+            decision=request.decision,
+            actor_user_id=auth.user_id,
+        )
+    except ValueError as exc:
+        await session.rollback()
+        raise HTTPException(status_code=409, detail=str(exc)) from exc
+    await session.commit()
+    return _to_approval_response(approval)
+
+
 async def _submit_async_run(
     run: WorkflowRunModel,
 ) -> None:
@@ -320,4 +382,26 @@ def _to_node_run_response(nr: NodeRunModel, sequence: int = 0) -> NodeRunRespons
         error_message=nr.error_message or "",
         elapsed_ms=nr.elapsed_ms,
         sequence=sequence,
+    )
+
+
+def _to_approval_response(approval: WorkflowApprovalRequestModel) -> WorkflowApprovalResponse:
+    """Never serialize the encrypted executable parameter envelope."""
+
+    return WorkflowApprovalResponse(
+        approval_id=approval.approval_id,
+        run_id=approval.run_id,
+        node_id=approval.node_id,
+        tool_id=approval.tool_id,
+        server_id=approval.server_id,
+        tool_name=approval.tool_name,
+        risk_level=approval.risk_level,
+        arguments=json.loads(approval.arguments_redacted),
+        status=approval.status,
+        requested_by=approval.requested_by,
+        decided_by=approval.decided_by,
+        decided_at=approval.decided_at,
+        execution_node_run_id=approval.execution_node_run_id,
+        error_message=approval.error_message or "",
+        created_at=approval.created_at,
     )

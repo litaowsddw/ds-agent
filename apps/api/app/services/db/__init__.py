@@ -14,9 +14,14 @@ from app.services.db.workflow_db import (
     workflow_version_db,
     workflow_run_db,
     node_run_db,
+    workflow_approval_db,
     knowledge_base_db,
     document_db,
     chunk_db,
+)
+from app.services.db.workflow_trigger_db import (
+    workflow_webhook_delivery_db,
+    workflow_webhook_trigger_db,
 )
 from app.services.db.runtime_db import (
     skill_db,
@@ -43,9 +48,12 @@ __all__ = [
     "workflow_version_db",
     "workflow_run_db",
     "node_run_db",
+    "workflow_approval_db",
     "knowledge_base_db",
     "document_db",
     "chunk_db",
+    "workflow_webhook_trigger_db",
+    "workflow_webhook_delivery_db",
     "skill_db",
     "agent_skill_policy_db",
     "mcp_server_db",

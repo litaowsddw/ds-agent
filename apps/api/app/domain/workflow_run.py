@@ -17,6 +17,8 @@ class RunStatus(StrEnum):
 
     PENDING = "pending"
     RUNNING = "running"
+    WAITING_APPROVAL = "waiting_approval"
+    AWAITING_MANUAL_RESUME = "awaiting_manual_resume"
     SUCCEEDED = "succeeded"
     FAILED = "failed"
     CANCELED = "canceled"
@@ -31,6 +33,7 @@ class NodeRunStatus(StrEnum):
     SUCCEEDED = "succeeded"
     FAILED = "failed"
     SKIPPED = "skipped"
+    WAITING_APPROVAL = "waiting_approval"
 
 
 @dataclass(slots=True)

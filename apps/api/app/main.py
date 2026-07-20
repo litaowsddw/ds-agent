@@ -31,6 +31,10 @@ from apps.api.app.routes.skills import router as skills_router
 from apps.api.app.routes.skill_evaluations import router as skill_evaluations_router
 from apps.api.app.routes.workflow_runs import router as workflow_runs_router
 from apps.api.app.routes.workflows import router as workflows_router
+from apps.api.app.routes.workflow_triggers import (
+    public_router as workflow_webhooks_router,
+    router as workflow_triggers_router,
+)
 from packages.a2a.routes import router as a2a_router
 from apps.api.app.routes.ws import router as ws_router
 from apps.api.app.routes.chat import router as chat_router
@@ -124,6 +128,8 @@ def create_app() -> FastAPI:
     app.include_router(mcp_router, prefix="/mcp", tags=["mcp"])
     app.include_router(memory_router, prefix="/memory", tags=["memory"])
     app.include_router(workflows_router, prefix="/workflows", tags=["workflows"])
+    app.include_router(workflow_triggers_router, prefix="/workflow-triggers", tags=["workflow-triggers"])
+    app.include_router(workflow_webhooks_router, prefix="/webhooks", tags=["webhooks"])
     app.include_router(workflow_runs_router, prefix="/workflow-runs", tags=["workflow-runs"])
     app.include_router(gateway_router, prefix="/gateway", tags=["gateway"])
     app.include_router(model_providers_router, prefix="/model-providers", tags=["model-providers"])

@@ -5,6 +5,7 @@ from __future__ import annotations
 import asyncio
 import json
 from collections.abc import Awaitable, Callable, Mapping
+from datetime import datetime
 from typing import Any
 
 from jsonschema import FormatChecker
@@ -13,11 +14,11 @@ from jsonschema.validators import validator_for
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from app.core.security import decrypt_api_key
+from app.core.security import decrypt_api_key, encrypt_api_key
 from app.domain.identity import new_id
 from app.gateway.llm import LLMGateway, OpenAICompatibleProvider, llm_gateway
 from app.models.runtime import AgentMCPPolicyModel, MCPServerModel, MCPToolModel
-from app.models.workflow import WorkflowRunModel
+from app.models.workflow import WorkflowApprovalRequestModel, WorkflowRunModel
 from app.routes.knowledge import search_knowledge_base
 from app.schemas.knowledge import SearchRequest
 from app.services.context_tokens import preflight_chat_context
@@ -26,6 +27,7 @@ from app.services.db.runtime_db import model_provider_db
 from app.services.db.workflow_db import (
     knowledge_base_db,
     node_run_db,
+    workflow_approval_db,
     workflow_db,
     workflow_run_db,
     workflow_version_db,
@@ -33,7 +35,11 @@ from app.services.db.workflow_db import (
 from app.services.metering import SessionUsageRecorder
 from app.services.stream_usage import StreamUsageReporter
 from app.services.external_import import ExternalImportError, invoke_streamable_http_tool
-from packages.workflow.executor import ExecutedNode, WorkflowExecutor
+from packages.workflow.executor import (
+    ExecutedNode,
+    WorkflowApprovalRequired,
+    WorkflowExecutor,
+)
 
 
 UsageEventCallback = Callable[[dict[str, object]], Awaitable[None]]
@@ -285,7 +291,38 @@ class WorkflowExecutionService:
         risk_level = str(tool.risk_level or "").strip().lower()
         run_id = str(config.get("_workflow_run_id") or "")
         node_id = str(config.get("id") or "")
+        try:
+            _validate_mcp_tool_arguments(tool.input_schema, arguments)
+        except ValueError as exc:
+            await self._append_tool_audit(
+                session=session,
+                org_id=org_id,
+                actor_user_id=actor_user_id,
+                run_id=run_id,
+                node_id=node_id,
+                tool=tool,
+                status="rejected",
+                arguments=arguments,
+                detail={"reason": "MCP Tool input schema validation failed", "error": str(exc)},
+            )
+            raise
         if risk_level != "low":
+            if not run_id or not node_id:
+                raise ValueError("High-risk MCP Tool may only run as a persisted Workflow node")
+            approval = await workflow_approval_db.create_pending(
+                session,
+                approval_id=new_id("wfa"),
+                run_id=run_id,
+                org_id=org_id,
+                node_id=node_id,
+                tool_id=tool.tool_id,
+                server_id=server.server_id,
+                tool_name=tool.name,
+                risk_level=risk_level or "unknown",
+                arguments_redacted=_audit_safe_payload(arguments),
+                arguments_encrypted=encrypt_api_key(json.dumps(arguments, ensure_ascii=False)),
+                requested_by=actor_user_id,
+            )
             await self._append_tool_audit(
                 session=session,
                 org_id=org_id,
@@ -296,9 +333,14 @@ class WorkflowExecutionService:
                 status="approval_required",
                 arguments=arguments,
                 detail={
+                    "approval_id": approval.approval_id,
                     "risk_level": risk_level or "unknown",
                     "reason": "该运行时没有可验证、持久化的人类审批记录",
                 },
+            )
+            raise WorkflowApprovalRequired(
+                approval.approval_id,
+                f"MCP Tool '{tool.name}' requires human approval (需要人工审批) before its external action runs",
             )
             raise ValueError(
                 f"MCP Tool '{tool.name}' 风险等级为 {risk_level or 'unknown'}，"
@@ -432,6 +474,224 @@ class WorkflowExecutionService:
         )
         return result
 
+    async def decide_high_risk_tool_approval(
+        self,
+        session: AsyncSession,
+        *,
+        run: WorkflowRunModel,
+        approval_id: str,
+        decision: str,
+        actor_user_id: str,
+    ) -> WorkflowApprovalRequestModel:
+        """Make one durable approval decision and, on approval, execute one Tool step.
+
+        The generic DAG executor has no durable LangGraph checkpoint.  Replaying
+        the complete graph after approval could repeat successful external
+        actions, so this method only creates a new execution record for the
+        paused Tool node.  It intentionally leaves the run in
+        ``awaiting_manual_resume`` rather than falsely claiming the entire DAG
+        completed.
+        """
+
+        if decision not in {"approve", "reject"}:
+            raise ValueError("Unsupported approval decision")
+        approval = await workflow_approval_db.get_run_approval_required(
+            session,
+            run_id=run.run_id,
+            approval_id=approval_id,
+            for_update=True,
+        )
+        if approval.status != "pending":
+            raise ValueError("This approval request has already been decided or claimed")
+
+        if decision == "reject":
+            approval.status = "rejected"
+            approval.decided_by = actor_user_id
+            approval.decided_at = _utcnow()
+            await workflow_run_db.update_run_status(
+                session,
+                run.run_id,
+                "canceled",
+                output_data={"approval_id": approval.approval_id, "decision": "rejected"},
+                error_message="High-risk MCP Tool was rejected by an authorized operator",
+            )
+            await self._append_approval_audit(
+                session=session,
+                approval=approval,
+                actor_user_id=actor_user_id,
+                action="rejected",
+                detail={},
+            )
+            await session.flush()
+            return approval
+
+        # Persist the one-time execution claim before the remote side effect.
+        # A duplicate request seeing ``executing`` is rejected instead of
+        # risking a second side effect.  A process crash therefore requires
+        # explicit operational reconciliation, never an automatic replay.
+        approval.status = "executing"
+        approval.decided_by = actor_user_id
+        approval.decided_at = _utcnow()
+        await self._append_approval_audit(
+            session=session,
+            approval=approval,
+            actor_user_id=actor_user_id,
+            action="execution_claimed",
+            detail={},
+        )
+        await session.commit()
+
+        try:
+            tool, server = await self._get_current_authorized_tool(
+                session=session,
+                run=run,
+                approval=approval,
+            )
+            arguments = _decrypt_approval_arguments(approval.arguments_encrypted)
+            _validate_mcp_tool_arguments(tool.input_schema, arguments)
+            if str(server.transport) != "streamable_http":
+                raise ValueError("Approved MCP Tool is no longer a controlled streamable HTTP import")
+            credential_headers = _load_mcp_credential_headers(server.credentials_encrypted)
+            await self._append_approval_audit(
+                session=session,
+                approval=approval,
+                actor_user_id=actor_user_id,
+                action="execution_started",
+                detail={"server_id": server.server_id},
+            )
+            # Make the intent visible and durable before contacting the remote
+            # server, which is vital when later transport status is uncertain.
+            await session.commit()
+            mcp_result = await asyncio.to_thread(
+                invoke_streamable_http_tool,
+                server.url,
+                credential_headers,
+                tool_name=tool.name,
+                arguments=arguments,
+            )
+        except Exception as exc:
+            # Do not make an automatic retry available after any ambiguous
+            # transport error: a remote system might have completed the action.
+            approval.status = "execution_failed"
+            approval.error_message = "Approved MCP Tool did not produce a confirmed result; reconcile it before retrying."
+            await self._append_approval_audit(
+                session=session,
+                approval=approval,
+                actor_user_id=actor_user_id,
+                action="execution_failed",
+                detail={"error": _safe_approval_error(exc)},
+            )
+            await session.commit()
+            return approval
+
+        existing_node_runs = await node_run_db.list_run_node_runs(session, run.run_id)
+        node_run = await node_run_db.create_node_run(
+            session,
+            node_run_id=f"{new_id('nr')}_{len(existing_node_runs):04d}",
+            run_id=run.run_id,
+            node_id=approval.node_id,
+            node_type="tool",
+            input_data={
+                "approval_id": approval.approval_id,
+                "arguments": json.loads(approval.arguments_redacted),
+                "execution_mode": "approved_retry_step",
+            },
+        )
+        safe_result = _audit_safe_payload(mcp_result)
+        await node_run_db.update_node_run(
+            session,
+            node_run.node_run_id,
+            status="succeeded",
+            output_data={
+                "approval_id": approval.approval_id,
+                "tool_id": tool.tool_id,
+                "tool_name": tool.name,
+                "arguments": json.loads(approval.arguments_redacted),
+                "result": safe_result,
+                "execution_mode": "approved_retry_step",
+            },
+        )
+        approval.status = "approved"
+        approval.execution_node_run_id = node_run.node_run_id
+        approval.error_message = ""
+        await workflow_run_db.update_run_status(
+            session,
+            run.run_id,
+            "awaiting_manual_resume",
+            output_data={
+                "approval_id": approval.approval_id,
+                "approved_node_run_id": node_run.node_run_id,
+                "status": "approved_step_completed",
+            },
+        )
+        await self._append_approval_audit(
+            session=session,
+            approval=approval,
+            actor_user_id=actor_user_id,
+            action="approved_step_succeeded",
+            detail={"execution_node_run_id": node_run.node_run_id, "result": safe_result},
+        )
+        await session.commit()
+        return approval
+
+    async def _get_current_authorized_tool(
+        self,
+        *,
+        session: AsyncSession,
+        run: WorkflowRunModel,
+        approval: WorkflowApprovalRequestModel,
+    ) -> tuple[MCPToolModel, MCPServerModel]:
+        """Recheck organization, Agent policy, and immutable Tool identity at decision time."""
+
+        statement = (
+            select(MCPToolModel, MCPServerModel)
+            .join(MCPServerModel, MCPToolModel.server_id == MCPServerModel.server_id)
+            .join(AgentMCPPolicyModel, AgentMCPPolicyModel.server_id == MCPServerModel.server_id)
+            .where(
+                AgentMCPPolicyModel.agent_id == run.agent_id,
+                AgentMCPPolicyModel.allowed == True,
+                MCPToolModel.tool_id == approval.tool_id,
+                MCPServerModel.server_id == approval.server_id,
+                MCPServerModel.org_id == run.org_id,
+            )
+        )
+        result = await session.execute(statement)
+        row = result.first()
+        if row is None:
+            raise ValueError("The Agent is no longer authorized to execute this MCP Tool")
+        tool, server = row
+        if tool.name != approval.tool_name or str(tool.risk_level or "").strip().lower() == "low":
+            raise ValueError("The approved MCP Tool snapshot no longer matches current high-risk policy")
+        return tool, server
+
+    async def _append_approval_audit(
+        self,
+        *,
+        session: AsyncSession,
+        approval: WorkflowApprovalRequestModel,
+        actor_user_id: str,
+        action: str,
+        detail: dict[str, Any],
+    ) -> None:
+        await audit_log_db.append_log(
+            session,
+            log_id=new_id("aud"),
+            org_id=approval.org_id,
+            actor_user_id=actor_user_id,
+            action=f"workflow.approval.{action}",
+            resource_type="workflow_approval",
+            resource_id=approval.approval_id,
+            detail={
+                "workflow_run_id": approval.run_id,
+                "workflow_node_id": approval.node_id,
+                "tool_id": approval.tool_id,
+                "tool_name": approval.tool_name,
+                "risk_level": approval.risk_level,
+                "arguments": json.loads(approval.arguments_redacted),
+                **_audit_safe_payload(detail),
+            },
+        )
+
     async def _append_tool_audit(
         self,
         *,
@@ -472,6 +732,15 @@ class WorkflowExecutionService:
         executed_node: ExecutedNode,
         sequence: int,
     ) -> None:
+        output_data = dict(executed_node.output_data)
+        # A successful second attempt is otherwise indistinguishable from a
+        # first attempt in the persisted trace. Keep execution metadata under
+        # a reserved key without changing the node's business output shape.
+        if executed_node.attempt_count != 1 or executed_node.last_error:
+            output_data["_execution"] = {
+                "attempt_count": executed_node.attempt_count,
+                "last_error": executed_node.last_error,
+            }
         node_run = await node_run_db.create_node_run(
             session,
             node_run_id=f"{new_id('nr')}_{sequence:04d}",
@@ -484,7 +753,7 @@ class WorkflowExecutionService:
             session,
             node_run.node_run_id,
             status=executed_node.status,
-            output_data=executed_node.output_data,
+            output_data=output_data,
             error_message=executed_node.error_message,
             elapsed_ms=executed_node.elapsed_ms,
         )
@@ -494,6 +763,32 @@ def _stringify_for_query(value: Any) -> str:
     if isinstance(value, str):
         return value.strip()
     return json.dumps(value, ensure_ascii=False, sort_keys=True)
+
+
+def _utcnow() -> datetime:
+    """Keep approval decision timestamps server-owned and timezone-consistent."""
+
+    return datetime.utcnow()
+
+
+def _decrypt_approval_arguments(arguments_encrypted: str) -> dict[str, Any]:
+    """Read the exact resolved arguments without exposing them to API clients."""
+
+    try:
+        decoded = json.loads(decrypt_api_key(arguments_encrypted))
+    except Exception as exc:
+        raise ValueError("The persisted approval parameters cannot be decrypted") from exc
+    if not isinstance(decoded, dict):
+        raise ValueError("The persisted approval parameters are invalid")
+    return decoded
+
+
+def _safe_approval_error(exc: Exception) -> str:
+    """Avoid returning connector implementation details or credential-bearing errors."""
+
+    if isinstance(exc, (ValueError, ExternalImportError)):
+        return _audit_safe_payload(str(exc))
+    return "Unexpected error while executing the approved MCP Tool"
 
 
 def _load_mcp_credential_headers(credentials_encrypted: str | None) -> dict[str, str]:

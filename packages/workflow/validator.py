@@ -3,6 +3,10 @@
 from packages.workflow.dsl import WorkflowDefinition
 from packages.workflow.budget import WorkflowBudgetConfigurationError, execution_limits_from_definition
 from packages.workflow.conditions import WorkflowConditionError, parse_condition_config
+from packages.workflow.reliability import (
+    WorkflowReliabilityConfigurationError,
+    reliability_policy_for_node,
+)
 from packages.workflow.templates import (
     WorkflowTemplateError,
     collect_template_references,
@@ -221,6 +225,10 @@ class WorkflowValidator:
                 continue
 
             config = node.config
+            try:
+                reliability_policy_for_node(node.node_type, config)
+            except WorkflowReliabilityConfigurationError as exc:
+                errors.append(f"节点 {node.node_id} 的 reliability 配置无效：{exc}")
             if node.node_type == "llm":
                 if not str(config.get("provider") or "").strip():
                     errors.append(f"LLM 节点 {node.node_id} 未选择模型提供商")

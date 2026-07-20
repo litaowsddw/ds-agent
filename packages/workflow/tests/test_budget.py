@@ -55,9 +55,10 @@ def test_guard_blocks_second_llm_before_external_call_and_allows_non_llm_nodes()
 
     guard.before_node("start")
     guard.before_node("llm")
+    guard.before_llm_attempt()
     guard.before_node("tool")
     with pytest.raises(WorkflowBudgetExceeded) as error:
-        guard.before_node("llm")
+        guard.before_llm_attempt()
 
     assert error.value.limit_name == "max_llm_calls"
     assert error.value.used == 1

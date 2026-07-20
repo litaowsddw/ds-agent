@@ -84,6 +84,89 @@ def test_validator_accepts_safe_condition_with_two_named_branches() -> None:
     assert result["valid"] is True
 
 
+def test_validator_accepts_bounded_llm_reliability_policy() -> None:
+    workflow = WorkflowDefinition(
+        version="1.0",
+        nodes=[
+            WorkflowNode(node_id="start", node_type="start"),
+            WorkflowNode(
+                node_id="draft",
+                node_type="llm",
+                config={
+                    "provider": "openai",
+                    "model": "gpt-test",
+                    "reliability": {"max_attempts": 3, "timeout_seconds": 30},
+                },
+            ),
+            WorkflowNode(node_id="end", node_type="end"),
+        ],
+        edges=[
+            WorkflowEdge(source="start", target="draft"),
+            WorkflowEdge(source="draft", target="end"),
+        ],
+    )
+
+    result = WorkflowValidator().validate(workflow)
+
+    assert result["valid"] is True
+
+
+def test_validator_rejects_unsafe_or_side_effecting_reliability_policy() -> None:
+    workflow = WorkflowDefinition(
+        version="1.0",
+        nodes=[
+            WorkflowNode(node_id="start", node_type="start"),
+            WorkflowNode(
+                node_id="call",
+                node_type="tool",
+                config={"tool_id": "send-email", "reliability": {"max_attempts": 2}},
+            ),
+            WorkflowNode(node_id="end", node_type="end"),
+        ],
+        edges=[
+            WorkflowEdge(source="start", target="call"),
+            WorkflowEdge(source="call", target="end"),
+        ],
+    )
+
+    result = WorkflowValidator().validate(workflow)
+
+    assert result["valid"] is False
+    assert any("Tool/MCP" in error for error in result["errors"])
+
+
+def test_validator_rejects_invalid_reliability_types_bounds_and_unknown_fields() -> None:
+    workflow = WorkflowDefinition(
+        version="1.0",
+        nodes=[
+            WorkflowNode(node_id="start", node_type="start"),
+            WorkflowNode(
+                node_id="draft",
+                node_type="llm",
+                config={
+                    "provider": "openai",
+                    "model": "gpt-test",
+                    "reliability": {
+                        "max_attempts": True,
+                        "timeout_seconds": 121,
+                        "backoff_ms": 100,
+                    },
+                },
+            ),
+            WorkflowNode(node_id="end", node_type="end"),
+        ],
+        edges=[
+            WorkflowEdge(source="start", target="draft"),
+            WorkflowEdge(source="draft", target="end"),
+        ],
+    )
+
+    result = WorkflowValidator().validate(workflow)
+
+    assert result["valid"] is False
+    assert any("backoff_ms" in error for error in result["errors"])
+
+
 def test_validator_rejects_unsafe_condition_expression_and_missing_false_branch() -> None:
     workflow = WorkflowDefinition(
         version="1.0",

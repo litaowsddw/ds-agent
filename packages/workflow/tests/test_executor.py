@@ -1,5 +1,7 @@
 """Workflow executor behaviour tests."""
 
+import asyncio
+
 import pytest
 
 from packages.workflow.executor import WorkflowExecutor
@@ -195,3 +197,145 @@ async def test_async_executor_supports_exists_condition_against_upstream_output(
         "continue",
         "end",
     }
+
+
+def test_executor_retries_only_retryable_llm_failures_and_records_attempt_count() -> None:
+    calls: list[dict[str, object]] = []
+
+    def llm(config: dict[str, object], _node_input: dict[str, object]) -> dict[str, str]:
+        calls.append(config)
+        assert "reliability" not in config
+        if len(calls) == 1:
+            raise ConnectionError("temporary upstream reset")
+        return {"text": "recovered"}
+
+    definition = {
+        "nodes": [
+            {"id": "start", "type": "start", "config": {}},
+            {
+                "id": "draft",
+                "type": "llm",
+                "config": {"reliability": {"max_attempts": 3}},
+            },
+            {"id": "end", "type": "end", "config": {}},
+        ],
+        "edges": [
+            {"source": "start", "target": "draft"},
+            {"source": "draft", "target": "end"},
+        ],
+    }
+
+    result = WorkflowExecutor(llm_gateway=llm).execute(definition, {})
+
+    assert result.status == "succeeded"
+    assert len(calls) == 2
+    draft_run = next(node for node in result.node_runs if node.node_id == "draft")
+    assert draft_run.attempt_count == 2
+    assert draft_run.last_error == ""
+
+
+def test_llm_retry_cannot_bypass_the_run_llm_call_cap() -> None:
+    calls = 0
+
+    def llm(_config: dict[str, object], _node_input: dict[str, object]) -> dict[str, str]:
+        nonlocal calls
+        calls += 1
+        raise ConnectionError("temporary upstream reset")
+
+    definition = {
+        "execution_limits": {"max_llm_calls": 1},
+        "nodes": [
+            {"id": "start", "type": "start", "config": {}},
+            {
+                "id": "draft",
+                "type": "llm",
+                "config": {"reliability": {"max_attempts": 3}},
+            },
+            {"id": "end", "type": "end", "config": {}},
+        ],
+        "edges": [
+            {"source": "start", "target": "draft"},
+            {"source": "draft", "target": "end"},
+        ],
+    }
+
+    result = WorkflowExecutor(llm_gateway=llm).execute(definition, {})
+
+    assert result.status == "failed"
+    assert calls == 1
+    draft_run = next(node for node in result.node_runs if node.node_id == "draft")
+    assert draft_run.attempt_count == 1
+    assert "LLM" in draft_run.last_error
+
+
+@pytest.mark.asyncio
+async def test_async_executor_retries_retryable_rag_failures() -> None:
+    calls = 0
+
+    async def rag(_config: dict[str, object], _node_input: dict[str, object]) -> dict[str, str]:
+        nonlocal calls
+        calls += 1
+        if calls == 1:
+            raise ConnectionError("temporary vector store reset")
+        return {"text": "retrieved"}
+
+    definition = {
+        "nodes": [
+            {"id": "start", "type": "start", "config": {}},
+            {
+                "id": "search",
+                "type": "rag",
+                "config": {"reliability": {"max_attempts": 2, "timeout_seconds": 3}},
+            },
+            {"id": "end", "type": "end", "config": {}},
+        ],
+        "edges": [
+            {"source": "start", "target": "search"},
+            {"source": "search", "target": "end"},
+        ],
+    }
+
+    result = await WorkflowExecutor(rag_search=rag).execute_async(definition, {})
+
+    assert result.status == "succeeded"
+    assert calls == 2
+    search_run = next(node for node in result.node_runs if node.node_id == "search")
+    assert search_run.attempt_count == 2
+
+
+@pytest.mark.asyncio
+async def test_async_timeout_stops_waiting_without_automatic_retry() -> None:
+    calls = 0
+
+    async def llm(_config: dict[str, object], _node_input: dict[str, object]) -> dict[str, str]:
+        nonlocal calls
+        calls += 1
+        await asyncio.sleep(5)
+        return {"text": "too late"}
+
+    definition = {
+        "nodes": [
+            {"id": "start", "type": "start", "config": {}},
+            {
+                "id": "draft",
+                "type": "llm",
+                "config": {
+                    "reliability": {"max_attempts": 3, "timeout_seconds": 1}
+                },
+            },
+            {"id": "end", "type": "end", "config": {}},
+        ],
+        "edges": [
+            {"source": "start", "target": "draft"},
+            {"source": "draft", "target": "end"},
+        ],
+    }
+
+    result = await WorkflowExecutor(llm_gateway=llm).execute_async(definition, {})
+
+    assert result.status == "failed"
+    assert calls == 1
+    draft_run = next(node for node in result.node_runs if node.node_id == "draft")
+    assert draft_run.attempt_count == 1
+    assert draft_run.last_error.startswith("llm 节点等待外部服务超过 1 秒")
+    assert "已尝试 1 次，最多允许 3 次" in draft_run.error_message

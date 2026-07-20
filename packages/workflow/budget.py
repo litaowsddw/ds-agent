@@ -65,7 +65,9 @@ class WorkflowBudgetGuard:
 
         A rejected node does not consume a budget unit.  This makes failures
         explainable in the persisted node trace and ensures that a limit of
-        zero LLM calls can safely run non-LLM nodes.
+        zero LLM calls can safely run non-LLM nodes.  LLM calls are reserved
+        separately immediately before each provider attempt, so retries are
+        never hidden from the run-level LLM-call cap.
         """
 
         if (
@@ -77,9 +79,13 @@ class WorkflowBudgetGuard:
                 limit=self.limits.max_steps,
                 used=self.executed_steps,
             )
+        self.executed_steps += 1
+
+    def before_llm_attempt(self) -> None:
+        """Reserve a provider attempt, including any executor-managed retry."""
+
         if (
-            node_type == "llm"
-            and self.limits.max_llm_calls is not None
+            self.limits.max_llm_calls is not None
             and self.executed_llm_calls >= self.limits.max_llm_calls
         ):
             raise WorkflowBudgetExceeded(
@@ -87,9 +93,7 @@ class WorkflowBudgetGuard:
                 limit=self.limits.max_llm_calls,
                 used=self.executed_llm_calls,
             )
-        self.executed_steps += 1
-        if node_type == "llm":
-            self.executed_llm_calls += 1
+        self.executed_llm_calls += 1
 
 
 def execution_limits_from_definition(
