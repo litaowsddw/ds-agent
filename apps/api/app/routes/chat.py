@@ -133,6 +133,7 @@ async def chat(
         from apps.api.app.services.db.session_db import session_db, session_message_db
         from packages.runtime.agent_runtime import AgentKind, AgentRuntime
         from packages.runtime.llm_caller import LLMCallerAdapter
+        from packages.runtime.system_prompt import build_agent_system_prompt
 
         try:
             agent = await agent_db.get_agent_required(db, request.agent_id)
@@ -254,6 +255,11 @@ async def chat(
             model_name=model_name,
             workspace_id=agent.workspace_id or "",
             llm_caller=adapter,
+            system_prompt=build_agent_system_prompt(
+                agent_name=str(agent.name or "Agent"),
+                agent_description=str(agent.description or ""),
+                agent_instructions=str(agent.system_prompt or ""),
+            ),
         )
 
         agent_kind_str = agent.kind or "USER_SUB"
@@ -961,13 +967,16 @@ def _build_agent_prompt(
     skill_catalog: str = "",
     skill_context: str = "",
 ) -> str:
-    system_prompt = str(getattr(agent, "system_prompt", "") or "").strip()
     agent_name = str(getattr(agent, "name", "") or "Agent")
     agent_description = str(getattr(agent, "description", "") or "").strip()
-    if not system_prompt:
-        system_prompt = f"You are {agent_name}. Answer the user directly and accurately."
-    if agent_description:
-        system_prompt = f"{system_prompt}\n\nAgent description: {agent_description}"
+    agent_instructions = str(getattr(agent, "system_prompt", "") or "").strip()
+    from packages.runtime.system_prompt import build_agent_system_prompt
+
+    system_prompt = build_agent_system_prompt(
+        agent_name=agent_name,
+        agent_description=agent_description,
+        agent_instructions=agent_instructions,
+    )
     if memory_context.strip():
         system_prompt = f"{system_prompt}\n\n{memory_context.strip()}"
     if skill_catalog.strip():
@@ -1000,21 +1009,24 @@ def _compile_agent_chat_prompt(
     the active request so a retrieval change never rewrites prior turns.
     """
     from packages.runtime.prompt_compiler import PromptContextCompiler
+    from packages.runtime.system_prompt import build_agent_system_prompt
 
     agent_name = str(getattr(agent, "name", "") or "Agent")
-    system_prompt = str(getattr(agent, "system_prompt", "") or "").strip()
-    if not system_prompt:
-        system_prompt = f"You are {agent_name}. Answer the user directly and accurately."
-
     agent_description = str(getattr(agent, "description", "") or "").strip()
+    agent_instructions = str(getattr(agent, "system_prompt", "") or "").strip()
+    system_prompt = build_agent_system_prompt(
+        agent_name=agent_name,
+        agent_description=agent_description,
+        agent_instructions=agent_instructions,
+    )
     immutable_prefix = [
         {"role": "system", "content": system_prompt},
         {
             "role": "system",
-            "content": "[Agent configuration]\n"
-            f"name: {agent_name}\n"
-            f"description: {agent_description or 'None'}\n"
-            "response_contract: Answer the user directly and accurately.",
+            "content": "[Runtime capability boundary]\n"
+            "Relevant memories, skills, and retrieved knowledge are provided as context. "
+            "Only tools supplied through structured schemas are executable; "
+            "MCP tools outside that schema remain unavailable.",
         },
     ]
     if skill_catalog.strip():

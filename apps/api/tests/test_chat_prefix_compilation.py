@@ -63,3 +63,16 @@ def test_agent_chat_prefix_changes_when_agent_instructions_change() -> None:
     )
 
     assert first["prefix_hash"] != second["prefix_hash"]
+
+
+def test_agent_chat_prefix_includes_platform_contract_and_capability_boundary() -> None:
+    compiled = _compile_agent_chat_prompt(
+        SimpleNamespace(name="Support", description="Product help", system_prompt="Be concise."),
+        "How do I configure it?",
+    )
+
+    system_prompt = compiled["messages"][0]["content"]
+    capability_boundary = compiled["messages"][1]["content"]
+    assert "[AgentFlow platform contract]" in system_prompt
+    assert "Do not invent tool calls" in system_prompt
+    assert "Only tools supplied through structured schemas are executable" in capability_boundary

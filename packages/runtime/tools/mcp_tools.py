@@ -1,6 +1,7 @@
 """MCP 工具 → LangChain BaseTool 包装器。"""
 
 import json
+import inspect
 from typing import Any
 
 from langchain_core.tools import BaseTool
@@ -32,20 +33,26 @@ class MCPTool(BaseTool):
             return json.dumps({"error": "MCP accessor 未配置"}, ensure_ascii=False)
 
         try:
-            # 获取工具列表
+            # The injected accessor is responsible for Agent-policy filtering.
+            # Supporting both synchronous registries and async DB-backed
+            # accessors keeps this wrapper usable in either runtime.
             tools = self.mcp_accessor.get_available_tools(self.org_id, self.agent_id)
+            if inspect.isawaitable(tools):
+                tools = await tools
             tool_info = next((t for t in tools if t.get("name") == self.name), None)
 
             if not tool_info:
                 return json.dumps({"error": f"未找到 MCP 工具: {self.name}"}, ensure_ascii=False)
 
             # 执行工具调用
-            result = await self.mcp_accessor.call_tool(
+            result = self.mcp_accessor.call_tool(
                 org_id=self.org_id,
                 agent_id=self.agent_id,
                 tool_name=self.name,
                 arguments=kwargs,
             )
+            if inspect.isawaitable(result):
+                result = await result
             return json.dumps(result, ensure_ascii=False) if isinstance(result, (dict, list)) else str(result)
         except Exception as exc:
             return json.dumps({"error": str(exc)}, ensure_ascii=False)

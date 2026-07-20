@@ -20,6 +20,7 @@ from langchain_core.tools import BaseTool
 from langgraph.graph import END, START, StateGraph
 
 from packages.runtime.langgraph_supervisor import SubTaskResult
+from packages.runtime.system_prompt import build_subagent_system_prompt
 
 logger = logging.getLogger(__name__)
 
@@ -35,11 +36,33 @@ class ReActState(TypedDict, total=False):
 # ---------- SubAgent 类型对应的系统提示词 ----------
 
 SUBAGENT_SYSTEM_PROMPTS: dict[str, str] = {
-    "SYSTEM_RAG": "你是一个知识检索 Agent。使用 knowledge_search 工具搜索知识库，根据检索结果回答用户问题。",
-    "SYSTEM_SKILL": "你是一个技能创建 Agent。使用 skill_create 工具根据用户需求创建技能。",
-    "SYSTEM_TOOL": "你是一个系统工具 Agent。使用可用工具完成系统操作任务。",
-    "USER_SUB": "你是一个通用对话 Agent。可以使用可用工具辅助回答用户问题。",
+    kind: build_subagent_system_prompt(kind)
+    for kind in ("SYSTEM_RAG", "SYSTEM_SKILL", "SYSTEM_TOOL", "USER_SUB")
 }
+
+MAX_TOOL_RESULT_CHARS = 12_000
+
+
+def _tool_call_fingerprint(tool_name: str, tool_args: Any) -> str:
+    """Make an order-stable fingerprint for duplicate-call suppression."""
+
+    try:
+        rendered_args = json.dumps(tool_args, ensure_ascii=False, sort_keys=True, default=str)
+    except (TypeError, ValueError):
+        rendered_args = str(tool_args)
+    return f"{tool_name}:{rendered_args}"
+
+
+def _bounded_tool_result(result: Any, maximum: int = MAX_TOOL_RESULT_CHARS) -> str:
+    """Keep tool observations useful without allowing a result to exhaust context."""
+
+    if isinstance(result, (dict, list)):
+        text = json.dumps(result, ensure_ascii=False, sort_keys=True, default=str)
+    else:
+        text = str(result)
+    if len(text) <= maximum:
+        return text
+    return text[:maximum] + f"\n[Tool result truncated after {maximum} characters]"
 
 
 class LangGraphReActExecutor:
@@ -87,7 +110,9 @@ class LangGraphReActExecutor:
             SystemMessage(content=system_prompt),
         ]
         if context:
-            initial_messages.append(SystemMessage(content=f"上下文信息：{json.dumps(context, ensure_ascii=False)}"))
+            # Request-scoped context is data, not a higher-priority system
+            # instruction, and must remain outside the cacheable prefix.
+            initial_messages.append(HumanMessage(content=f"[Runtime context]\n{json.dumps(context, ensure_ascii=False)}"))
         initial_messages.append(HumanMessage(content=task))
 
         try:
@@ -135,8 +160,11 @@ class LangGraphReActExecutor:
 
     def _get_or_create_agent(self, tools: list[BaseTool]) -> Any:
         """创建或获取缓存的 ReAct Agent 图。"""
-        tool_names = sorted([t.name for t in tools]) if tools else []
-        cache_key = f"{self.chat_model._llm_type if hasattr(self.chat_model, '_llm_type') else 'unknown'}_{'_'.join(tool_names)}"
+        # The graph closes over actual tool instances and their scoped
+        # accessors.  A cache keyed only by names could reuse one Agent's
+        # closures for another Agent with matching tool names.
+        tool_instances = sorted(f"{tool.name}:{id(tool)}" for tool in tools) if tools else []
+        cache_key = f"{self.chat_model._llm_type if hasattr(self.chat_model, '_llm_type') else 'unknown'}_{'_'.join(tool_instances)}"
 
         if cache_key in self._agent_cache:
             return self._agent_cache[cache_key]
@@ -164,17 +192,43 @@ class LangGraphReActExecutor:
                 return {"messages": messages}
 
             new_messages = list(messages)
+            prior_fingerprints: set[str] = set()
+            for message in messages:
+                if message is last_ai_msg or not isinstance(message, AIMessage):
+                    continue
+                for previous_call in message.tool_calls or []:
+                    prior_fingerprints.add(
+                        _tool_call_fingerprint(
+                            str(previous_call.get("name", "")),
+                            previous_call.get("args", {}),
+                        )
+                    )
             for tool_call in last_ai_msg.tool_calls:
                 tool_name = tool_call.get("name", "")
                 tool_args = tool_call.get("args", {})
                 tool_call_id = tool_call.get("id", "")
+                fingerprint = _tool_call_fingerprint(tool_name, tool_args)
+
+                if fingerprint in prior_fingerprints:
+                    new_messages.append(ToolMessage(
+                        content=json.dumps(
+                            {
+                                "error": "Duplicate tool call blocked",
+                                "detail": "Use the previous observation instead of repeating the same call.",
+                            },
+                            ensure_ascii=False,
+                        ),
+                        tool_call_id=tool_call_id,
+                        name=tool_name,
+                    ))
+                    continue
 
                 tool = tools_by_name.get(tool_name)
                 if tool:
                     try:
                         result = await tool.ainvoke(tool_args)
                         new_messages.append(ToolMessage(
-                            content=str(result),
+                            content=_bounded_tool_result(result),
                             tool_call_id=tool_call_id,
                             name=tool_name,
                         ))

@@ -86,6 +86,14 @@ class AgentRuntime:
     # LLM 调用器
     llm_caller: Any = None  # LLMCaller | None
 
+    # 已由 API/A2A 边界编译的稳定平台提示词。直接对话也必须带上它，
+    # 不能因为没有进入流式聊天路径而退化为裸用户输入。
+    system_prompt: str = ""
+
+    # 已注入且已经过 Agent 范围授权的可执行系统工具。运行时不根据
+    # 名称猜测能力；调用方必须显式提供这些 BaseTool 实例。
+    system_tools: list[Any] = field(default_factory=list)
+
     # 数据库访问器
     db_accessor: Any = None  # DBAccessor | None
 
@@ -141,7 +149,7 @@ class AgentRuntime:
             return await self.langgraph_executor.execute(
                 task=task,
                 subagent_kind=subagent_config.get("subagent_kind", "USER_SUB"),
-                tools=[],  # TODO: 从 available_tools 转换为 LangChain BaseTool
+                tools=list(self.system_tools),
             )
 
         # Supervisor StateGraph
@@ -181,7 +189,10 @@ class AgentRuntime:
             "agent_id": self.agent_id,
             "workspace_id": self.workspace_id,
             "available_subagents": available_subagents,
-            "available_tools": [],
+            "available_tools": [
+                {"name": tool.name, "description": tool.description}
+                for tool in self.system_tools
+            ],
             "iteration": 0,
             "max_iterations": 3,
         }
@@ -283,7 +294,17 @@ class AgentRuntime:
             return {"error": "Agent 未配置真实 LLM 调用器", "mode": "error"}
 
         try:
-            response_text = await self.llm_caller.call(prompt=user_input, temperature=0.3)
+            if self.system_prompt:
+                system_prompt = self.system_prompt
+            else:
+                from packages.runtime.system_prompt import build_agent_system_prompt
+
+                system_prompt = build_agent_system_prompt(agent_name="Agent")
+            response_text = await self.llm_caller.call(
+                prompt=user_input,
+                system_prompt=system_prompt,
+                temperature=0.3,
+            )
 
             if self.db_accessor and session_id:
                 try:
@@ -309,6 +330,10 @@ class AgentRuntime:
         result: dict[str, Any] = {
             "runtime_scope": runtime_scope,
             "enabled_capabilities": self.enabled_capabilities,
+            "system_tools": [
+                {"name": tool.name, "description": tool.description}
+                for tool in self.system_tools
+            ],
         }
 
         if self.supervisor:

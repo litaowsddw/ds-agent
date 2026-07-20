@@ -164,6 +164,7 @@ async def create_a2a_task(
             # 同步执行
             from packages.runtime.llm_caller import LLMCallerAdapter
             from packages.runtime.agent_runtime import AgentRuntime
+            from packages.runtime.system_prompt import build_agent_system_prompt
 
             model_provider = getattr(agent, "model_provider", "") or ""
             model_name = getattr(agent, "model_name", "") or ""
@@ -183,6 +184,11 @@ async def create_a2a_task(
                 model_name=model_name,
                 workspace_id=getattr(agent, "workspace_id", ""),
                 llm_caller=adapter,
+                system_prompt=build_agent_system_prompt(
+                    agent_name=str(getattr(agent, "name", "") or "Agent"),
+                    agent_description=str(getattr(agent, "description", "") or ""),
+                    agent_instructions=str(getattr(agent, "system_prompt", "") or ""),
+                ),
             )
 
             # 如果是 Supervisor，初始化

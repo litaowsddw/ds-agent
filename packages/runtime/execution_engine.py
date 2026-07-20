@@ -19,6 +19,7 @@ from dataclasses import dataclass, field
 from typing import Any, Protocol
 
 from packages.runtime.supervisor import SubAgentRun, SpawnMode, TaskStatus
+from packages.runtime.system_prompt import build_subagent_system_prompt
 
 
 class ExecutionResult:
@@ -234,7 +235,7 @@ class SubAgentExecutionEngine:
         # 默认上下文
         return {
             "agent_id": run.assigned_subagent_id,
-            "system_prompt": "你是一个 AI Agent，帮助用户完成任务。",
+            "system_prompt": build_subagent_system_prompt("USER_SUB"),
         }
 
     def _assemble_prompt(

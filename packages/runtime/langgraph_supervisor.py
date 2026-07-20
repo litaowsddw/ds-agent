@@ -25,6 +25,11 @@ from langchain_core.messages import AIMessage, HumanMessage, SystemMessage
 from langgraph.graph import END, START, StateGraph
 
 from packages.runtime.supervisor import TaskStatus
+from packages.runtime.system_prompt import (
+    PLATFORM_AGENT_CONTRACT,
+    SUPERVISOR_PLANNING_CONTRACT,
+    SUPERVISOR_REFLECTION_CONTRACT,
+)
 
 logger = logging.getLogger(__name__)
 
@@ -70,34 +75,36 @@ class SupervisorState(TypedDict, total=False):
 
 # ---------- 系统提示词 ----------
 
-PLAN_SYSTEM_PROMPT = """你是一个任务规划 Supervisor Agent。分析用户意图并分解为子任务。
+PLAN_SYSTEM_PROMPT = """{platform}
 
-可用 SubAgent 类型：
-- USER_SUB: 通用对话
-- SYSTEM_SKILL: 技能创建/更新
-- SYSTEM_RAG: 知识检索
-- SYSTEM_TOOL: 系统工具
+{planning}
 
-输出 JSON 格式：
-{
-  "intent": "意图分类",
-  "reasoning": "推理过程",
+Available subagent kinds:
+- USER_SUB: general assistance
+- SYSTEM_SKILL: skill discovery or lifecycle
+- SYSTEM_RAG: scoped knowledge retrieval
+- SYSTEM_TOOL: enabled external/system tools
+
+Return exactly this JSON object:
+{{
+  "intent": "intent label",
+  "reasoning": "brief evidence-based rationale",
   "subtasks": [
-    {"task": "任务描述", "subagent_kind": "USER_SUB", "execution_order": 0, "depends_on": []}
+    {{"task": "task", "subagent_kind": "USER_SUB", "execution_order": 0, "depends_on": []}}
   ]
-}
-简单问题只需一个 USER_SUB 子任务。只输出 JSON。"""
+}}""".format(platform=PLATFORM_AGENT_CONTRACT, planning=SUPERVISOR_PLANNING_CONTRACT)
 
-REFLECT_SYSTEM_PROMPT = """你是反思 Supervisor Agent。评估子任务结果，判断是否需要后续行动。
+REFLECT_SYSTEM_PROMPT = """{platform}
 
-输出 JSON 格式：
-{
-  "satisfied": true/false,
-  "reasoning": "评估推理",
+{reflection}
+
+Return exactly this JSON object:
+{{
+  "satisfied": true,
+  "reasoning": "brief evidence-based assessment",
   "follow_up_tasks": [],
-  "final_response": "最终回复（satisfied=true时）"
-}
-最多 3 轮反思。只输出 JSON。"""
+  "final_response": "final user-facing answer when satisfied"
+}}""".format(platform=PLATFORM_AGENT_CONTRACT, reflection=SUPERVISOR_REFLECTION_CONTRACT)
 
 
 # ---------- 规则降级 ----------

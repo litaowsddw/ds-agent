@@ -4,6 +4,7 @@ Supervisor、Skill Evolver 等运行时组件通过此适配器调用 LLM Gatewa
 无需直接依赖 Gateway 的具体实现。
 """
 
+import hashlib
 from typing import Any, Mapping, Protocol
 
 from apps.api.app.gateway.llm import LLMCallRequest, LLMGateway, llm_gateway
@@ -52,6 +53,13 @@ class LLMCallerAdapter:
             provider=self.provider,
             model=self.model,
             prompt=full_prompt,
+            # The system prompt is sent first and is stable for a given Agent,
+            # so it is the cacheable prefix for this legacy runtime path too.
+            prefix_hash=(
+                hashlib.sha256(system_prompt.encode("utf-8")).hexdigest()
+                if system_prompt
+                else None
+            ),
             parameters={
                 "temperature": temperature,
                 "max_tokens": max_tokens,
