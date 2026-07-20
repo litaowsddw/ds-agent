@@ -17,6 +17,11 @@ export interface WorkflowVersion {
   definition?: WorkflowDefinition;
 }
 
+export interface WorkflowValidationResult {
+  valid: boolean;
+  errors: string[];
+}
+
 export interface WorkflowRun {
   run_id: string;
   workflow_id: string;

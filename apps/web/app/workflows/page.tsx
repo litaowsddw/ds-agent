@@ -70,6 +70,7 @@ export default function WorkflowsPage() {
   const selectedNodeId = useWorkflowStore((state) => state.selectedNodeId);
   const selectedEdgeId = useWorkflowStore((state) => state.selectedEdgeId);
   const workflowForm = useWorkflowStore((state) => state.workflowForm);
+  const validation = useWorkflowStore((state) => state.validation);
   const onNodesChange = useWorkflowStore((state) => state.onNodesChange);
   const onEdgesChange = useWorkflowStore((state) => state.onEdgesChange);
   const onConnect = useWorkflowStore((state) => state.onConnect);
@@ -83,6 +84,7 @@ export default function WorkflowsPage() {
   const setSelectedWorkflowId = useWorkflowStore((state) => state.setSelectedWorkflowId);
   const createWorkflow = useWorkflowStore((state) => state.createWorkflow);
   const saveWorkflowDraft = useWorkflowStore((state) => state.saveWorkflowDraft);
+  const validateWorkflow = useWorkflowStore((state) => state.validateWorkflow);
   const publishWorkflow = useWorkflowStore((state) => state.publishWorkflow);
   const runWorkflow = useWorkflowStore((state) => state.runWorkflow);
   const refreshWorkflows = useWorkflowStore((state) => state.refreshWorkflows);
@@ -298,8 +300,15 @@ export default function WorkflowsPage() {
                 }
               }}
             />
-            <div className="grid grid-cols-3 gap-2">
+            <div className="grid grid-cols-4 gap-2">
               <ActionButton icon={<Save size={14} />} label="Save" onClick={() => void saveWorkflowDraft(workspace.userId).then(() => showToast("success", "Draft saved")).catch((error) => showToast("error", error instanceof Error ? error.message : "Save failed"))} />
+              <ActionButton
+                icon={<Search size={14} />}
+                label="Check"
+                onClick={() => void validateWorkflow(workspace.userId).then((result) => {
+                  showToast(result.valid ? "success" : "error", result.valid ? "Preflight passed" : `${result.errors.length} issue(s) need attention`);
+                }).catch((error) => showToast("error", error instanceof Error ? error.message : "Check failed"))}
+              />
               <ActionButton icon={<Send size={14} />} label="Publish" onClick={() => void publishWorkflow(workspace.userId).then(() => showToast("success", "Published")).catch((error) => showToast("error", error instanceof Error ? error.message : "Publish failed"))} />
               <ActionButton
                 disabled={!workflowCanRun}
@@ -310,6 +319,7 @@ export default function WorkflowsPage() {
               />
             </div>
             {runDisabledReason ? <ActionHint text={runDisabledReason} /> : null}
+            {validation ? <WorkflowPreflight validation={validation} /> : null}
             {schemaNodeCount > 0 ? (
               <ActionHint text={`${schemaNodeCount} schema-only node${schemaNodeCount > 1 ? "s are" : " is"} design-only in this phase.`} />
             ) : null}
@@ -386,6 +396,28 @@ function WorkflowProgress({
           {step.label}
         </span>
       ))}
+    </div>
+  );
+}
+
+function WorkflowPreflight({
+  validation,
+}: {
+  validation: { valid: boolean; errors: string[] };
+}) {
+  if (validation.valid) {
+    return (
+      <div className="rounded-lg border border-[#abefc6] bg-[#ecfdf3] px-3 py-2 text-xs leading-5 text-[#027a48]">
+        运行前检查通过。发布会自动保存当前画布，并使用相同规则再次校验。
+      </div>
+    );
+  }
+  return (
+    <div className="rounded-lg border border-[#fecdca] bg-[#fef3f2] px-3 py-2 text-xs leading-5 text-[#b42318]">
+      <div className="font-semibold">运行前检查发现 {validation.errors.length} 个问题</div>
+      <ul className="mt-1 list-disc space-y-1 pl-4">
+        {validation.errors.map((error, index) => <li key={`${error}-${index}`}>{error}</li>)}
+      </ul>
     </div>
   );
 }

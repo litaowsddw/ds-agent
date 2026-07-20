@@ -54,6 +54,22 @@ describe("workflow run requests", () => {
     });
   });
 
+  it("checks the current canvas through the workflow preflight endpoint", async () => {
+    apiRequestMock.mockResolvedValueOnce({ valid: false, errors: ["End 节点无法从 Start 节点到达"] });
+
+    const result = await useWorkflowStore.getState().validateWorkflow("user-1");
+
+    expect(apiRequestMock).toHaveBeenCalledWith("/workflows/workflow-1/validate", {
+      method: "POST",
+      body: expect.objectContaining({
+        actor_user_id: "user-1",
+        draft_definition: expect.any(Object),
+      }),
+    });
+    expect(result).toEqual({ valid: false, errors: ["End 节点无法从 Start 节点到达"] });
+    expect(useWorkflowStore.getState().validation).toEqual(result);
+  });
+
   it("removes only the explicitly selected connection", () => {
     useWorkflowStore.setState({
       edges: [

@@ -40,3 +40,21 @@ def test_validator_rejects_missing_end_node() -> None:
 
     assert result["valid"] is False
     assert "工作流必须包含 end 节点" in result["errors"]
+
+
+def test_validator_rejects_disconnected_design_only_node() -> None:
+    workflow = WorkflowDefinition(
+        version="1.0",
+        nodes=[
+            WorkflowNode(node_id="start", node_type="start"),
+            WorkflowNode(node_id="end", node_type="end"),
+            WorkflowNode(node_id="condition", node_type="condition"),
+        ],
+        edges=[WorkflowEdge(source="start", target="end")],
+    )
+
+    result = WorkflowValidator().validate(workflow)
+
+    assert result["valid"] is False
+    assert any("condition" in error and "未连接" in error for error in result["errors"])
+    assert any("condition" in error and "尚不能运行" in error for error in result["errors"])

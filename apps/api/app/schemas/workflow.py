@@ -26,6 +26,20 @@ class WorkflowPublishRequest(BaseModel):
     actor_user_id: str = Field(description="操作者用户 ID")
 
 
+class WorkflowValidateRequest(BaseModel):
+    """Validate a canvas draft without saving or publishing it."""
+
+    actor_user_id: str = Field(description="操作用户 ID")
+    draft_definition: dict[str, object] = Field(description="待校验的 Workflow DSL")
+
+
+class WorkflowValidationResponse(BaseModel):
+    """Workflow preflight result."""
+
+    valid: bool
+    errors: list[str]
+
+
 class WorkflowResponse(BaseModel):
     """Workflow 响应。"""
 

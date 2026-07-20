@@ -6,6 +6,7 @@ import { useEffect, useState } from "react";
 import Link from "next/link";
 import { Bot, FileText, Network, Save, Settings } from "lucide-react";
 import { showToast } from "@/components/layout/AppLayout";
+import AgentReadinessNotice from "@/components/agents/AgentReadinessNotice";
 import { PrimaryButton } from "@/components/ui/Button";
 import { EmptyText, Metric } from "@/components/ui/DataDisplay";
 import { SelectInput, TextArea, TextInput } from "@/components/ui/Form";
@@ -59,11 +60,13 @@ export default function AgentsPage() {
     defaultWorkflowId: "",
   });
   const [workspaceText, setWorkspaceText] = useState("");
+  const [createdAgentName, setCreatedAgentName] = useState<string | null>(null);
   const selectedAgent = getSelectedAgent();
   const selectedProvider = modelProviders.find((provider) => provider.provider_key === agentForm.modelProvider);
   const modelOptions = selectedProvider?.models ?? [];
   const parameterProvider = modelProviders.find((provider) => provider.provider_key === parameterForm.modelProvider);
   const parameterModelOptions = parameterProvider?.models ?? [];
+  const canCreateChatReadyAgent = Boolean(agentForm.modelProvider && agentForm.modelName);
 
   useEffect(() => {
     if (!workspace) return;
@@ -76,6 +79,16 @@ export default function AgentsPage() {
     void refreshRuntimeData(workspace.orgId, workspace.userId, selectedAgentId);
     void refreshWorkflows(workspace.orgId, workspace.userId, selectedAgentId);
   }, [workspace, selectedAgentId, refreshRuntimeData, refreshWorkflows]);
+
+  useEffect(() => {
+    if (agentForm.modelProvider || modelProviders.length === 0) return;
+    const defaultProvider = modelProviders[0];
+    setAgentForm((current) => ({
+      ...current,
+      modelProvider: defaultProvider.provider_key,
+      modelName: defaultProvider.default_model || defaultProvider.models[0] || "",
+    }));
+  }, [agentForm.modelProvider, modelProviders]);
 
   useEffect(() => {
     if (!selectedAgent) {
@@ -112,6 +125,11 @@ export default function AgentsPage() {
   return (
     <div className="grid gap-6 xl:grid-cols-[360px_1fr]">
       <div className="space-y-6">
+        <AgentReadinessNotice
+          modelProviderCount={modelProviders.length}
+          agent={selectedAgent}
+          createdAgentName={createdAgentName}
+        />
         <Panel title="创建 Agent" icon={<Bot size={17} />}>
           <div className="space-y-3">
             <TextInput label="名称" placeholder="输入 Agent 名称" value={agentForm.name} onChange={(name) => setAgentForm({ ...agentForm, name })} />
@@ -126,10 +144,9 @@ export default function AgentsPage() {
                   modelName: modelProviders.find((provider) => provider.provider_key === modelProvider)?.default_model ?? "",
                 })
               }
-              options={[
-                { label: "暂不绑定默认模型", value: "" },
-                ...modelProviders.map((provider) => ({ label: provider.display_name, value: provider.provider_key })),
-              ]}
+              options={modelProviders.length
+                ? modelProviders.map((provider) => ({ label: provider.display_name, value: provider.provider_key }))
+                : [{ label: "请先配置模型供应商", value: "" }]}
             />
             <SelectInput
               label="默认模型"
@@ -158,9 +175,11 @@ export default function AgentsPage() {
             <p className="text-xs text-[#667085]">达到该上限后会压缩旧会话历史；留空时使用默认值 2400。</p>
             <PrimaryButton
               busy={busy}
-              label="创建 Agent"
+              disabled={!canCreateChatReadyAgent}
+              label="创建可对话的 Agent"
               onClick={async () => {
                 try {
+                  const agentName = agentForm.name.trim();
                   await createAgent({
                     name: agentForm.name,
                     description: agentForm.description,
@@ -173,12 +192,18 @@ export default function AgentsPage() {
                     defaultWorkflowId: null,
                   });
                   setAgentForm({ name: "", description: "", modelProvider: "", modelName: "", systemPrompt: "", temperature: "0.3", maxTokens: "", contextTokenLimit: "", defaultWorkflowId: "" });
-                  showToast("success", "Agent 已创建");
+                  setCreatedAgentName(agentName);
+                  showToast("success", "Agent 已创建并已绑定默认模型，现在可以开始对话");
                 } catch (error) {
                   showToast("error", error instanceof Error ? error.message : "创建 Agent 失败");
                 }
               }}
             />
+            {!canCreateChatReadyAgent ? (
+              <p className="text-xs leading-5 text-[#667085]">
+                请选择模型供应商和默认模型后创建；没有模型时，Agent 无法在 Chat 中运行。
+              </p>
+            ) : null}
           </div>
         </Panel>
 

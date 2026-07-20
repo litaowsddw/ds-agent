@@ -21,6 +21,7 @@ const RANGE_OPTIONS = {
 type RangeKey = keyof typeof RANGE_OPTIONS;
 
 interface EventAggregate {
+  provider_key: string | null;
   model: string | null;
   call_count: number;
   unknown_usage_calls: number;
@@ -58,15 +59,20 @@ function stablePrefixEligibility(events: UsageEvent[]) {
 function aggregateEvents(events: UsageEvent[]): EventAggregate[] {
   const groups = new Map<string, UsageEvent[]>();
   for (const event of events) {
-    const key = event.model || "";
+    // A model identifier is only meaningful together with its provider.  The
+    // same model name can be routed through several providers, each with
+    // different pricing and cache behavior, so merging them hides the facts a
+    // user needs to compare cost and reliability.
+    const key = `${event.provider_key || ""}\u0000${event.model || ""}`;
     groups.set(key, [...(groups.get(key) ?? []), event]);
   }
   const sum = (rows: UsageEvent[], field: "input_tokens" | "output_tokens" | "total_tokens" | "cache_read_input_tokens") => {
     const values = rows.map((event) => event[field]).filter((value): value is number => value !== null && value !== undefined);
     return values.length ? values.reduce((total, value) => total + value, 0) : null;
   };
-  return [...groups].map(([model, rows]) => ({
-    model: model || null,
+  return [...groups].map(([, rows]) => ({
+    provider_key: rows[0]?.provider_key || null,
+    model: rows[0]?.model || null,
     call_count: rows.length,
     unknown_usage_calls: rows.filter((event) => event.usage_status === "unavailable").length,
     input_tokens: sum(rows, "input_tokens"),
@@ -82,6 +88,7 @@ function InsightsContent() {
   const initialAgent = searchParams.get("agent_id") ?? searchParams.get("agent") ?? "";
   const initialRange = searchParams.get("range");
   const [agentId, setAgentId] = useState(initialAgent);
+  const [provider, setProvider] = useState(searchParams.get("provider") ?? "");
   const [model, setModel] = useState("");
   const [apiName, setApiName] = useState("");
   const [workflowId, setWorkflowId] = useState("");
@@ -103,6 +110,7 @@ function InsightsContent() {
       from: from.toISOString(),
       to: to.toISOString(),
       agent_id: agentId || undefined,
+      provider_key: provider || undefined,
       model: model || undefined,
       api_name: apiName || undefined,
       workflow_id: workflowId || undefined,
@@ -111,7 +119,7 @@ function InsightsContent() {
       granularity: "day",
       limit: 200,
     };
-  }, [agentId, apiName, model, range, source, workflowId]);
+  }, [agentId, apiName, model, provider, range, source, workflowId]);
 
   useEffect(() => {
     let active = true;
@@ -178,6 +186,11 @@ function InsightsContent() {
     updateUrl("range", next);
   }
 
+  function updateProvider(value: string) {
+    setProvider(value);
+    updateUrl("provider", value);
+  }
+
   return (
     <div className="space-y-6">
       <header className="rounded-lg border border-[#dfe4ee] bg-white px-5 py-4">
@@ -189,6 +202,7 @@ function InsightsContent() {
         <div className="grid gap-3 md:grid-cols-2 xl:grid-cols-4">
           <TextInput label="Agent ID" value={agentId} onChange={updateAgent} placeholder="保留 URL 中的 agent 筛选" />
           <SelectInput label="时间范围" value={range} onChange={updateRange} options={[{ label: "最近 24 小时", value: "24h" }, { label: "最近 7 天", value: "7d" }, { label: "最近 30 天", value: "30d" }]} />
+          <TextInput label="Provider" value={provider} onChange={updateProvider} placeholder="例如 deepseek" />
           <TextInput label="模型" value={model} onChange={setModel} placeholder="例如 gpt-4o" />
           <TextInput label="API" value={apiName} onChange={setApiName} placeholder="例如 chat.completions" />
           <TextInput label="Workflow ID" value={workflowId} onChange={setWorkflowId} />
@@ -219,14 +233,16 @@ function InsightsContent() {
             <Metric label="平台缓存命中率" value="不可用（尚未采集真实平台缓存指标）" />
           </div>
 
-          <Panel title="按模型汇总" icon={<RefreshCw size={17} />}>
-            {groups.length === 0 ? <EmptyText text="当前筛选条件下没有用量事件。" /> : null}
+          <Panel title="按 Provider / 模型汇总" icon={<RefreshCw size={17} />}>
+            {groups.length === 0 ? (
+              <EmptyText text="当前筛选条件下没有用量事件。请先在模型页测试已保存的 Provider，或在 Agent 对话中完成一次调用；成功后 Token 与缓存数据会自动出现在这里。" />
+            ) : null}
             <div className="space-y-2">
               {groups.map((group, index) => (
-                <div key={`${group.model ?? "unknown"}-${index}`} className="grid gap-2 rounded-lg border border-[#dfe4ee] bg-[#f8fafc] p-3 text-sm md:grid-cols-[minmax(0,1fr)_auto_auto]">
+                <div key={`${group.provider_key ?? "unknown"}-${group.model ?? "unknown"}-${index}`} className="grid gap-2 rounded-lg border border-[#dfe4ee] bg-[#f8fafc] p-3 text-sm md:grid-cols-[minmax(0,1fr)_auto_auto]">
                   <div className="min-w-0">
-                    <div className="truncate font-medium text-[#172033]">{group.model ?? "未命名模型"}</div>
-                    <div className="mt-1 text-xs text-[#667085]">{group.call_count} 次调用 · {group.unknown_usage_calls} 次未知</div>
+                    <div className="truncate font-medium text-[#172033]">{group.provider_key ?? "未命名 Provider"} / {group.model ?? "未命名模型"}</div>
+                    <div className="mt-1 text-xs text-[#667085]">{group.call_count} 次调用 · {group.unknown_usage_calls} 次未知 · 输入 {token(group.input_tokens)} · 输出 {token(group.output_tokens)} · 缓存命中 {token(group.cache_read_input_tokens)}</div>
                   </div>
                   <span className="text-[#344054]">{token(group.total_tokens)}</span>
                   <span className="rounded-full bg-white px-2 py-1 text-xs text-[#344054]">{qualityLabel(group)}</span>

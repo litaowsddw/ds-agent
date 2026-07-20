@@ -21,6 +21,7 @@ import type {
   WorkflowDefinition,
   WorkflowItem,
   WorkflowRun,
+  WorkflowValidationResult,
   WorkflowVersion,
 } from "@/types/workflow";
 
@@ -36,6 +37,7 @@ interface WorkflowStore {
   selectedRunId: string;
   nodeRuns: NodeRun[];
   workflowForm: { name: string; description: string; input: string };
+  validation: WorkflowValidationResult | null;
 
   onNodesChange: (changes: NodeChange[]) => void;
   onEdgesChange: (changes: EdgeChange[]) => void;
@@ -53,6 +55,7 @@ interface WorkflowStore {
   getWorkflowDraft: () => WorkflowDefinition;
   createWorkflow: (actorUserId: string, agentId: string) => Promise<void>;
   saveWorkflowDraft: (actorUserId: string) => Promise<void>;
+  validateWorkflow: (actorUserId: string) => Promise<WorkflowValidationResult>;
   publishWorkflow: (actorUserId: string) => Promise<void>;
   runWorkflow: (actorUserId: string, input: string) => Promise<void>;
   loadNodeRuns: (runId: string, actorUserId: string) => Promise<void>;
@@ -169,17 +172,26 @@ export const useWorkflowStore = create<WorkflowStore>((set, get) => ({
   selectedRunId: "",
   nodeRuns: [],
   workflowForm: { name: "", description: "", input: "" },
+  validation: null,
 
   onNodesChange: (changes) =>
-    set((state) => ({ nodes: applyNodeChanges(changes, state.nodes) as Node<CustomNodeData>[] })),
+    set((state) => ({
+      nodes: applyNodeChanges(changes, state.nodes) as Node<CustomNodeData>[],
+      validation: null,
+    })),
   onEdgesChange: (changes) =>
     set((state) => ({
       edges: applyEdgeChanges(changes, state.edges),
+      validation: null,
       selectedEdgeId: changes.some((change) => change.type === "remove" && change.id === state.selectedEdgeId)
         ? ""
         : state.selectedEdgeId,
     })),
-  onConnect: (connection) => set((state) => ({ edges: addEdge(connection, state.edges), selectedEdgeId: "" })),
+  onConnect: (connection) => set((state) => ({
+    edges: addEdge(connection, state.edges),
+    selectedEdgeId: "",
+    validation: null,
+  })),
 
   addNode: (item) => {
     const nodeIndex = get().nodes.length + 1;
@@ -243,6 +255,7 @@ export const useWorkflowStore = create<WorkflowStore>((set, get) => ({
         nodes: [...shiftedNodes, makeNode(item.type, id, position)],
         edges: [...remainingEdges, ...insertedEdges],
         selectedNodeId: id,
+        validation: null,
       };
     });
   },
@@ -255,6 +268,7 @@ export const useWorkflowStore = create<WorkflowStore>((set, get) => ({
       edges: state.edges.filter((edge) => edge.source !== selectedNodeId && edge.target !== selectedNodeId),
       selectedNodeId: "llm",
       selectedEdgeId: "",
+      validation: null,
     }));
   },
 
@@ -264,6 +278,7 @@ export const useWorkflowStore = create<WorkflowStore>((set, get) => ({
     set((state) => ({
       edges: state.edges.filter((edge) => edge.id !== selectedEdgeId),
       selectedEdgeId: "",
+      validation: null,
     }));
   },
 
@@ -284,6 +299,7 @@ export const useWorkflowStore = create<WorkflowStore>((set, get) => ({
             }
           : node
       ),
+      validation: null,
     }));
   },
 
@@ -306,6 +322,7 @@ export const useWorkflowStore = create<WorkflowStore>((set, get) => ({
         description: workflow.description,
         input: get().workflowForm.input,
       },
+      validation: null,
     });
   },
 
@@ -317,6 +334,7 @@ export const useWorkflowStore = create<WorkflowStore>((set, get) => ({
       edges: INITIAL_EDGES as Edge[],
       selectedNodeId: "llm",
       nodeRuns: [],
+      validation: null,
     }),
 
   getWorkflowDraft: () => {
@@ -385,9 +403,31 @@ export const useWorkflowStore = create<WorkflowStore>((set, get) => ({
     }));
   },
 
+  validateWorkflow: async (actorUserId) => {
+    const { selectedWorkflowId, getWorkflowDraft } = get();
+    if (!selectedWorkflowId) throw new Error("Please select a workflow first");
+    const validation = await apiRequest<WorkflowValidationResult>(
+      `/workflows/${selectedWorkflowId}/validate`,
+      {
+        method: "POST",
+        body: {
+          actor_user_id: actorUserId,
+          draft_definition: getWorkflowDraft(),
+        },
+      }
+    );
+    set({ validation });
+    return validation;
+  },
+
   publishWorkflow: async (actorUserId) => {
     const { selectedWorkflowId } = get();
     if (!selectedWorkflowId) throw new Error("Please select a workflow first");
+    await get().saveWorkflowDraft(actorUserId);
+    const validation = await get().validateWorkflow(actorUserId);
+    if (!validation.valid) {
+      throw new Error(`运行前检查未通过：${validation.errors.join("；")}`);
+    }
     const version = await apiRequest<WorkflowVersion>(`/workflows/${selectedWorkflowId}/publish`, {
       method: "POST",
       body: { actor_user_id: actorUserId },
@@ -447,6 +487,7 @@ export const useWorkflowStore = create<WorkflowStore>((set, get) => ({
       selectedRunId: "",
       nodeRuns: [],
       workflowForm: { name: "", description: "", input: "" },
+      validation: null,
     }),
 
   refreshWorkflows: async (orgId, actorUserId, agentId) => {
@@ -466,6 +507,7 @@ export const useWorkflowStore = create<WorkflowStore>((set, get) => ({
         edges: selectedWorkflow ? hydrateEdges(selectedWorkflow.draft_definition) : state.edges,
         selectedNodeId: nodes.find((node) => node.type !== "start")?.id ?? nodes[0]?.id ?? "",
         selectedEdgeId: "",
+        validation: null,
       };
     });
   },

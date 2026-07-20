@@ -66,4 +66,31 @@ describe("InsightsPage", () => {
     expect(await screen.findByText(/无法保证汇总完整/)).toBeInTheDocument();
     expect(screen.queryByText("按模型汇总")).not.toBeInTheDocument();
   });
+
+  it("keeps same-named models from different providers separate", async () => {
+    getUsageEventsMock.mockResolvedValue({
+      org_id: "org-1", created_at_from: "2026-07-07T00:00:00Z", created_at_to: "2026-07-14T00:00:00Z",
+      events: [
+        {
+          event_id: "event-openai", gateway_call_id: "call-openai", created_at: "2026-07-14T00:00:00Z",
+          source: "gateway_api", api_name: "chat.completions", provider_key: "openai", model: "shared-model",
+          dispatch_status: "succeeded", usage_status: "provider_final", cache_usage_status: "known",
+          input_tokens: 100, output_tokens: 20, total_tokens: 120, cache_read_input_tokens: 10,
+        },
+        {
+          event_id: "event-proxy", gateway_call_id: "call-proxy", created_at: "2026-07-14T00:00:00Z",
+          source: "gateway_api", api_name: "chat.completions", provider_key: "internal-proxy", model: "shared-model",
+          dispatch_status: "succeeded", usage_status: "provider_final", cache_usage_status: "known",
+          input_tokens: 200, output_tokens: 30, total_tokens: 230, cache_read_input_tokens: 40,
+        },
+      ], offset: 0, limit: 200,
+    });
+
+    render(<InsightsPage />);
+
+    expect(await screen.findByText("openai / shared-model")).toBeInTheDocument();
+    expect(screen.getByText("internal-proxy / shared-model")).toBeInTheDocument();
+    expect(screen.getByText(/输入 100 Token · 输出 20 Token · 缓存命中 10 Token/)).toBeInTheDocument();
+    expect(screen.getByText(/输入 200 Token · 输出 30 Token · 缓存命中 40 Token/)).toBeInTheDocument();
+  });
 });

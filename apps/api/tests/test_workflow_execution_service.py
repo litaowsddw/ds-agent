@@ -139,16 +139,19 @@ def test_workflow_execution_service_persists_node_runs_for_success() -> None:
         assert all(node["status"] == "succeeded" for node in node_runs)
 
 
-def test_tool_arguments_must_be_object() -> None:
+def test_tool_arguments_must_be_object_before_publish() -> None:
     with TestClient(app) as client:
         actor_user_id, _org_id, agent_id, owner_headers = _create_owner_org_agent(
             client, _suffix("wf-tool-args")
         )
-        version_id = _create_and_publish_workflow(
-            client,
-            actor_user_id=actor_user_id,
-            agent_id=agent_id,
-            definition={
+        workflow = client.post(
+            "/workflows",
+            json={
+                "actor_user_id": actor_user_id,
+                "agent_id": agent_id,
+                "name": "Tool validation workflow",
+                "description": "",
+                "draft_definition": {
                 "version": "1.0",
                 "nodes": [
                     {"id": "start", "type": "start", "config": {}},
@@ -166,27 +169,74 @@ def test_tool_arguments_must_be_object() -> None:
                     {"source": "start", "target": "tool"},
                     {"source": "tool", "target": "end"},
                 ],
-            },
-        )
-
-        run_response = client.post(
-            "/workflow-runs",
-            json={
-                "version_id": version_id,
-                "input_data": {"text": "hello"},
-                "async_mode": False,
+                },
             },
             headers=owner_headers,
         )
+        assert workflow.status_code == 200
 
-        assert run_response.status_code == 200
-        run = run_response.json()
-        assert run["status"] == "failed"
-        assert "Tool arguments must be an object" in run["error_message"]
-        node_runs = client.get(
-            f"/workflow-runs/{run['run_id']}/nodes",
-            params={"actor_user_id": actor_user_id},
+        preflight = client.post(
+            f"/workflows/{workflow.json()['workflow_id']}/validate",
+            json={
+                "actor_user_id": actor_user_id,
+                "draft_definition": workflow.json()["draft_definition"],
+            },
+            headers=owner_headers,
+        )
+        assert preflight.status_code == 200
+        assert preflight.json()["valid"] is False
+        assert any("参数必须是 JSON 对象" in error for error in preflight.json()["errors"])
+
+        publish = client.post(
+            f"/workflows/{workflow.json()['workflow_id']}/publish",
+            json={"actor_user_id": actor_user_id},
+            headers=owner_headers,
+        )
+        assert publish.status_code == 400
+        assert "参数必须是 JSON 对象" in publish.json()["detail"]
+
+
+def test_workflow_preflight_reports_disconnected_and_non_executable_nodes() -> None:
+    with TestClient(app) as client:
+        actor_user_id, _org_id, agent_id, _owner_headers = _create_owner_org_agent(
+            client, _suffix("wf-preflight")
+        )
+        workflow = client.post(
+            "/workflows",
+            json={
+                "actor_user_id": actor_user_id,
+                "agent_id": agent_id,
+                "name": "Preflight Workflow",
+                "description": "",
+                "draft_definition": {
+                    "version": "1.0",
+                    "nodes": [
+                        {"id": "start", "type": "start", "config": {}},
+                        {"id": "end", "type": "end", "config": {}},
+                    ],
+                    "edges": [{"source": "start", "target": "end"}],
+                },
+            },
         ).json()
-        failed_tool = next(node for node in node_runs if node["node_id"] == "tool")
-        assert failed_tool["status"] == "failed"
-        assert "Tool arguments must be an object" in failed_tool["error_message"]
+
+        response = client.post(
+            f"/workflows/{workflow['workflow_id']}/validate",
+            json={
+                "actor_user_id": actor_user_id,
+                "draft_definition": {
+                    "version": "1.0",
+                    "nodes": [
+                        {"id": "start", "type": "start", "config": {}},
+                        {"id": "end", "type": "end", "config": {}},
+                        {"id": "condition", "type": "condition", "config": {}},
+                    ],
+                    "edges": [{"source": "start", "target": "end"}],
+                },
+            },
+        )
+
+        assert response.status_code == 200
+        body = response.json()
+        assert body["valid"] is False
+        assert any("condition" in error and "尚不能运行" in error for error in body["errors"])
+        assert any("condition" in error and "未连接" in error for error in body["errors"])

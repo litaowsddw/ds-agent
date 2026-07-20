@@ -109,6 +109,9 @@ export default function ModelsPage() {
           </div>
           <TextInput label="Base URL" value={providerForm.baseUrl} onChange={(baseUrl) => setProviderForm({ ...providerForm, baseUrl })} />
           <TextInput label="API Key" type="password" value={providerForm.apiKey} onChange={(apiKey) => setProviderForm({ ...providerForm, apiKey })} />
+          <p className="-mt-1 text-xs leading-5 text-[#667085]">
+            云端供应商通常需要 API Key；本地 Ollama 或已在网关侧配置认证的服务可以留空。
+          </p>
           <TextArea label="Models" rows={3} value={providerForm.models} onChange={(models) => setProviderForm({ ...providerForm, models })} />
           <TextInput label="Default Model" value={providerForm.defaultModel} onChange={(defaultModel) => setProviderForm({ ...providerForm, defaultModel })} />
           <PrimaryButton busy={busy} label="Save Provider" onClick={handleSave} />

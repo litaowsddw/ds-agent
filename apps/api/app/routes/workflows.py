@@ -14,6 +14,8 @@ from app.schemas.workflow import (
     WorkflowPublishRequest,
     WorkflowResponse,
     WorkflowUpdateDraftRequest,
+    WorkflowValidateRequest,
+    WorkflowValidationResponse,
     WorkflowVersionResponse,
 )
 from app.services.db.workflow_db import workflow_db, workflow_version_db
@@ -21,8 +23,59 @@ from app.services.db.agent_db import agent_db
 from app.services.db.identity_db import membership_db
 from app.domain.identity import new_id
 from packages.workflow.validator import WorkflowValidator
+from packages.workflow.dsl import WorkflowDefinition, WorkflowEdge, WorkflowNode
 
 router = APIRouter()
+
+
+def _validate_draft_definition(draft: dict[str, object]) -> dict[str, object]:
+    """Build the DSL defensively so preflight and publish share one policy."""
+
+    raw_nodes = draft.get("nodes", [])
+    raw_edges = draft.get("edges", [])
+    errors: list[str] = []
+    if not isinstance(raw_nodes, list):
+        errors.append("nodes 必须是数组")
+        raw_nodes = []
+    if not isinstance(raw_edges, list):
+        errors.append("edges 必须是数组")
+        raw_edges = []
+
+    nodes: list[WorkflowNode] = []
+    for index, node in enumerate(raw_nodes):
+        if not isinstance(node, dict):
+            errors.append(f"第 {index + 1} 个节点必须是对象")
+            continue
+        node_id = str(node.get("id") or "").strip()
+        node_type = str(node.get("type") or "").strip()
+        config = node.get("config", {})
+        if not node_id:
+            errors.append(f"第 {index + 1} 个节点缺少 id")
+            continue
+        if not node_type:
+            errors.append(f"节点 {node_id} 缺少类型")
+            continue
+        if not isinstance(config, dict):
+            errors.append(f"节点 {node_id} 的 config 必须是对象")
+            continue
+        nodes.append(WorkflowNode(node_id=node_id, node_type=node_type, config=config))
+
+    edges: list[WorkflowEdge] = []
+    for index, edge in enumerate(raw_edges):
+        if not isinstance(edge, dict):
+            errors.append(f"第 {index + 1} 条连线必须是对象")
+            continue
+        source = str(edge.get("source") or "").strip()
+        target = str(edge.get("target") or "").strip()
+        if not source or not target:
+            errors.append(f"第 {index + 1} 条连线必须包含 source 和 target")
+            continue
+        edges.append(WorkflowEdge(source=source, target=target))
+
+    result = WorkflowValidator().validate(
+        WorkflowDefinition(version=str(draft.get("version", "1.0")), nodes=nodes, edges=edges)
+    )
+    return {"valid": not errors and bool(result["valid"]), "errors": [*errors, *list(result["errors"])]}
 
 
 @router.post("", response_model=WorkflowResponse)
@@ -130,6 +183,26 @@ async def update_draft(
     return _to_workflow_response(workflow)
 
 
+@router.post("/{workflow_id}/validate", response_model=WorkflowValidationResponse)
+async def validate_workflow_draft(
+    workflow_id: str,
+    request: WorkflowValidateRequest,
+    session: AsyncSession = Depends(get_db_session),
+) -> WorkflowValidationResponse:
+    """Validate the caller's current canvas before they save, publish, or run it."""
+
+    try:
+        workflow = await workflow_db.get_workflow_required(session, workflow_id)
+        await membership_db.assert_org_access(
+            session, user_id=request.actor_user_id, org_id=workflow.org_id
+        )
+    except ValueError as exc:
+        raise HTTPException(status_code=404, detail=str(exc)) from exc
+
+    result = _validate_draft_definition(request.draft_definition)
+    return WorkflowValidationResponse(valid=bool(result["valid"]), errors=list(result["errors"]))
+
+
 @router.post("/{workflow_id}/publish", response_model=WorkflowVersionResponse)
 async def publish_workflow(
     workflow_id: str,
@@ -143,28 +216,10 @@ async def publish_workflow(
             session, user_id=request.actor_user_id, org_id=workflow.org_id
         )
 
-        # DAG 校验
         draft = await workflow_db.get_draft_definition(session, workflow_id)
-        validator = WorkflowValidator()
-        from packages.workflow.dsl import WorkflowDefinition, WorkflowNode, WorkflowEdge
-        nodes = [
-            WorkflowNode(
-                node_id=str(node["id"]),
-                node_type=str(node["type"]),
-                config=dict(node.get("config", {})),
-            )
-            for node in draft.get("nodes", [])
-        ]
-        edges = [
-            WorkflowEdge(source=str(edge["source"]), target=str(edge["target"]))
-            for edge in draft.get("edges", [])
-        ]
-        wf_def = WorkflowDefinition(
-            version=str(draft.get("version", "1.0")), nodes=nodes, edges=edges
-        )
-        validation_result = validator.validate(wf_def)
+        validation_result = _validate_draft_definition(draft)
         if not validation_result["valid"]:
-            raise ValueError("; ".join(validation_result["errors"]))
+            raise ValueError("；".join(validation_result["errors"]))
 
         version_number = await workflow_version_db.next_version_number(session, workflow_id)
         version = await workflow_version_db.create_version(
