@@ -33,6 +33,8 @@ class WorkflowRunResponse(BaseModel):
     celery_task_id: str | None
     created_by: str
     created_at: datetime
+    started_at: datetime | None
+    finished_at: datetime | None
     updated_at: datetime | None
 
 

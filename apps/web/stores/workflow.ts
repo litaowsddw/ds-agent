@@ -42,6 +42,8 @@ interface WorkflowStore {
   onNodesChange: (changes: NodeChange[]) => void;
   onEdgesChange: (changes: EdgeChange[]) => void;
   onConnect: (connection: Connection) => void;
+  validateConnection: (sourceId: string | null | undefined, targetId: string | null | undefined) => WorkflowConnectionResult;
+  connectNodes: (sourceId: string, targetId: string) => WorkflowConnectionResult;
   addNode: (item: WorkflowPaletteItem) => void;
   removeSelectedNode: () => void;
   removeSelectedEdge: () => void;
@@ -63,6 +65,11 @@ interface WorkflowStore {
   resetWorkspaceData: () => void;
   refreshWorkflows: (orgId: string, actorUserId: string, agentId?: string) => Promise<void>;
   refreshRuns: (orgId: string, actorUserId: string) => Promise<void>;
+}
+
+export interface WorkflowConnectionResult {
+  valid: boolean;
+  message: string;
 }
 
 const NODE_META: Record<string, { label: string; description: string; capability: "executable" | "schema" }> = {
@@ -160,6 +167,58 @@ function hydrateEdges(definition: WorkflowDefinition): Edge[] {
   }));
 }
 
+function wouldCreateCycle(edges: Edge[], sourceId: string, targetId: string): boolean {
+  const adjacency = new Map<string, string[]>();
+  for (const edge of edges) {
+    const targets = adjacency.get(edge.source) ?? [];
+    targets.push(edge.target);
+    adjacency.set(edge.source, targets);
+  }
+
+  const pending = [targetId];
+  const visited = new Set<string>();
+  while (pending.length > 0) {
+    const current = pending.pop() as string;
+    if (current === sourceId) return true;
+    if (visited.has(current)) continue;
+    visited.add(current);
+    pending.push(...(adjacency.get(current) ?? []));
+  }
+  return false;
+}
+
+function checkConnection(
+  nodes: Node<CustomNodeData>[],
+  edges: Edge[],
+  sourceId: string | null | undefined,
+  targetId: string | null | undefined
+): WorkflowConnectionResult {
+  if (!sourceId || !targetId) {
+    return { valid: false, message: "Choose both a source and a target step" };
+  }
+  if (sourceId === targetId) {
+    return { valid: false, message: "A step cannot connect to itself" };
+  }
+  const source = nodes.find((node) => node.id === sourceId);
+  const target = nodes.find((node) => node.id === targetId);
+  if (!source || !target) {
+    return { valid: false, message: "The selected step is no longer on the canvas" };
+  }
+  if (source.type === "end") {
+    return { valid: false, message: "End cannot have an outgoing connection" };
+  }
+  if (target.type === "start") {
+    return { valid: false, message: "Start cannot have an incoming connection" };
+  }
+  if (edges.some((edge) => edge.source === sourceId && edge.target === targetId)) {
+    return { valid: false, message: "This connection already exists" };
+  }
+  if (wouldCreateCycle(edges, sourceId, targetId)) {
+    return { valid: false, message: "This connection would create a cycle" };
+  }
+  return { valid: true, message: "Connection is valid" };
+}
+
 export const useWorkflowStore = create<WorkflowStore>((set, get) => ({
   nodes: INITIAL_NODES as Node<CustomNodeData>[],
   edges: INITIAL_EDGES as Edge[],
@@ -187,11 +246,33 @@ export const useWorkflowStore = create<WorkflowStore>((set, get) => ({
         ? ""
         : state.selectedEdgeId,
     })),
-  onConnect: (connection) => set((state) => ({
-    edges: addEdge(connection, state.edges),
-    selectedEdgeId: "",
-    validation: null,
-  })),
+  validateConnection: (sourceId, targetId) =>
+    checkConnection(get().nodes, get().edges, sourceId, targetId),
+
+  connectNodes: (sourceId, targetId) => {
+    const result = get().validateConnection(sourceId, targetId);
+    if (!result.valid) return result;
+
+    set((state) => ({
+      edges: addEdge(
+        {
+          id: `${sourceId}-${targetId}-${Date.now().toString(36)}`,
+          source: sourceId,
+          target: targetId,
+          animated: true,
+        },
+        state.edges
+      ),
+      selectedEdgeId: "",
+      validation: null,
+    }));
+    return result;
+  },
+
+  onConnect: (connection) => {
+    if (!connection.source || !connection.target) return;
+    get().connectNodes(connection.source, connection.target);
+  },
 
   addNode: (item) => {
     const nodeIndex = get().nodes.length + 1;

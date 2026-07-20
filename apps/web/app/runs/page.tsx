@@ -5,8 +5,8 @@
 
 "use client";
 
-import { useEffect, useMemo } from "react";
-import { Activity, CheckCircle2, FileText, GitBranch } from "lucide-react";
+import { useCallback, useEffect, useMemo } from "react";
+import { Activity, CheckCircle2, FileText, GitBranch, RefreshCw } from "lucide-react";
 import { useWorkspaceStore } from "@/stores/workspace";
 import { useWorkflowStore } from "@/stores/workflow";
 import Panel from "@/components/ui/Panel";
@@ -27,6 +27,7 @@ export default function RunsPage() {
   const versions = useWorkflowStore((s) => s.versions);
   const workflows = useWorkflowStore((s) => s.workflows);
   const loadNodeRuns = useWorkflowStore((s) => s.loadNodeRuns);
+  const setSelectedRunId = useWorkflowStore((s) => s.setSelectedRunId);
   const clearRunSelection = useWorkflowStore((s) => s.clearRunSelection);
   const refreshRuns = useWorkflowStore((s) => s.refreshRuns);
   const refreshWorkflows = useWorkflowStore((s) => s.refreshWorkflows);
@@ -37,6 +38,7 @@ export default function RunsPage() {
     [runs, selectedAgentId]
   );
   const selectedRun = agentRuns.find((r) => r.run_id === selectedRunId) ?? null;
+  const isActiveRun = selectedRun?.status === "pending" || selectedRun?.status === "running";
   const workflowLabels = useMemo(
     () => Object.fromEntries(workflows.map((workflow) => [workflow.workflow_id, workflow.name])),
     [workflows]
@@ -56,6 +58,25 @@ export default function RunsPage() {
       clearRunSelection();
     }
   }, [agentRuns, selectedRunId, clearRunSelection]);
+
+  const refreshSelectedRun = useCallback(async () => {
+    if (!workspace || !selectedRunId) return;
+    await refreshRuns(workspace.orgId, workspace.userId);
+    await loadNodeRuns(selectedRunId, workspace.userId);
+  }, [loadNodeRuns, refreshRuns, selectedRunId, workspace]);
+
+  useEffect(() => {
+    if (!workspace || !selectedRunId || !selectedRun) return;
+    void loadNodeRuns(selectedRunId, workspace.userId).catch(() => undefined);
+  }, [loadNodeRuns, selectedRun?.run_id, selectedRunId, workspace]);
+
+  useEffect(() => {
+    if (!isActiveRun) return;
+    const intervalId = window.setInterval(() => {
+      void refreshSelectedRun().catch(() => undefined);
+    }, 3000);
+    return () => window.clearInterval(intervalId);
+  }, [isActiveRun, refreshSelectedRun]);
 
   if (!workspace) {
     return <WorkspaceRequired />;
@@ -82,7 +103,7 @@ export default function RunsPage() {
           ) : (
             <RunList
               onSelect={(run) => {
-                void loadNodeRuns(run.run_id, workspace.userId);
+                setSelectedRunId(run.run_id);
               }}
               runs={agentRuns}
               selectedRunId={selectedRunId}
@@ -95,10 +116,25 @@ export default function RunsPage() {
         <div className="space-y-6">
           <Panel title="运行详情" icon={<CheckCircle2 size={17} />}>
             {selectedRun ? (
-              <RunSummary
-                run={selectedRun}
-                workflowLabel={workflowLabels[selectedRun.workflow_id]}
-              />
+              <div className="space-y-3">
+                <div className="flex flex-wrap items-center justify-between gap-2 rounded-lg border border-[#dfe4ee] bg-[#f8fafc] px-3 py-2">
+                  <p aria-live="polite" className="text-xs text-[#667085]">
+                    {isActiveRun ? "运行仍在进行中，节点详情每 3 秒自动刷新。" : "已加载该次运行的输入、输出和节点轨迹。"}
+                  </p>
+                  <button
+                    className="inline-flex items-center gap-1 rounded-md border border-[#d0d5dd] bg-white px-2.5 py-1.5 text-xs font-medium text-[#344054] hover:bg-[#f9fafb]"
+                    onClick={() => void refreshSelectedRun().catch(() => undefined)}
+                    type="button"
+                  >
+                    <RefreshCw aria-hidden="true" size={14} />
+                    刷新详情
+                  </button>
+                </div>
+                <RunSummary
+                  run={selectedRun}
+                  workflowLabel={workflowLabels[selectedRun.workflow_id]}
+                />
+              </div>
             ) : (
               <EmptyText text="选择当前 Agent 的一次运行后查看输出。" />
             )}

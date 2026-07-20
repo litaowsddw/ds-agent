@@ -272,6 +272,14 @@ async def _submit_async_run(
 def _to_run_response(run: WorkflowRunModel) -> WorkflowRunResponse:
     """把 WorkflowRun ORM 模型转换成 API 响应。"""
 
+    # Workflow runs predate the generic ``updated_at`` column used by several
+    # other resources.  Their lifecycle is already recorded explicitly, so
+    # expose the real lifecycle timestamps instead of leaving the Runs page
+    # with a permanently empty "last updated" field.
+    started_at = getattr(run, "started_at", None)
+    finished_at = getattr(run, "finished_at", None)
+    updated_at = getattr(run, "updated_at", None) or finished_at or started_at
+
     return WorkflowRunResponse(
         run_id=run.run_id,
         org_id=run.org_id,
@@ -285,7 +293,9 @@ def _to_run_response(run: WorkflowRunModel) -> WorkflowRunResponse:
         celery_task_id="",
         created_by=run.created_by,
         created_at=run.created_at,
-        updated_at=getattr(run, "updated_at", None),
+        started_at=started_at,
+        finished_at=finished_at,
+        updated_at=updated_at,
     )
 
 

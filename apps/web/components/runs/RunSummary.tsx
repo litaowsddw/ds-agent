@@ -94,6 +94,8 @@ export default function RunSummary({ run, workflowLabel, usage: suppliedUsage }:
         <SummaryField label="版本">{displayValue(run.version_id)}</SummaryField>
         <SummaryField label="运行 ID">{displayValue(run.run_id)}</SummaryField>
         <SummaryField label="创建时间">{displayTime(run.created_at)}</SummaryField>
+        <SummaryField label="开始时间">{displayTime(run.started_at)}</SummaryField>
+        <SummaryField label="结束时间">{displayTime(run.finished_at)}</SummaryField>
         <SummaryField label="更新时间">{displayTime(run.updated_at)}</SummaryField>
       </div>
 
@@ -115,6 +117,7 @@ export default function RunSummary({ run, workflowLabel, usage: suppliedUsage }:
         ) : null}
       </div>
 
+      <JsonDisclosure label="运行输入" value={run.input_data} />
       <JsonDisclosure label="输出" value={run.output_data} />
     </div>
   );

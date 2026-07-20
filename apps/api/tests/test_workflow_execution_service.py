@@ -30,6 +30,8 @@ def test_run_response_includes_iso_timestamps() -> None:
     body = _to_run_response(run).model_dump(mode="json")  # type: ignore[arg-type]
 
     assert body["created_at"] == "2026-07-12T01:02:03Z"
+    assert body["started_at"] is None
+    assert body["finished_at"] is None
     assert body["updated_at"] is None
 
 
@@ -127,7 +129,9 @@ def test_workflow_execution_service_persists_node_runs_for_success() -> None:
         assert run_response.status_code == 200
         run = run_response.json()
         assert run["created_at"]
-        assert run["updated_at"] is None
+        assert run["started_at"]
+        assert run["finished_at"]
+        assert run["updated_at"] == run["finished_at"]
         assert run["status"] == "succeeded"
         node_runs_response = client.get(
             f"/workflow-runs/{run['run_id']}/nodes",

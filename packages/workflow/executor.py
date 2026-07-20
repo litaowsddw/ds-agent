@@ -10,11 +10,41 @@ import inspect
 from collections.abc import Awaitable, Callable
 from dataclasses import dataclass, field
 from time import perf_counter
-from typing import Any, TypedDict
+from typing import Annotated, Any, TypedDict
 
 from langgraph.graph import END, START, StateGraph
 
 NodeCallResult = dict[str, Any] | Awaitable[dict[str, Any]]
+
+
+def _merge_context_by_node(
+    current: dict[str, dict[str, Any]] | None,
+    update: dict[str, dict[str, Any]] | None,
+) -> dict[str, dict[str, Any]]:
+    """Merge outputs produced by independent branches in the same graph step."""
+
+    return {**(current or {}), **(update or {})}
+
+
+def _append_node_runs(
+    current: list["ExecutedNode"] | None,
+    update: list["ExecutedNode"] | None,
+) -> list["ExecutedNode"]:
+    """Append only the node runs produced by the current graph step."""
+
+    return [*(current or []), *(update or [])]
+
+
+def _any_failed(current: bool | None, update: bool | None) -> bool:
+    """Keep a workflow failed once any branch has failed."""
+
+    return bool(current) or bool(update)
+
+
+def _first_error(current: str | None, update: str | None) -> str:
+    """Preserve the first concrete branch failure for the run summary."""
+
+    return current or update or ""
 
 # LLMGatewayCall 是 LLM 节点的真实调用入口。
 LLMGatewayCall = Callable[[dict[str, Any], dict[str, Any]], NodeCallResult]
@@ -30,10 +60,12 @@ class WorkflowGraphState(TypedDict, total=False):
     """LangGraph 执行状态。"""
 
     workflow_input: dict[str, Any]
-    context_by_node: dict[str, dict[str, Any]]
-    node_runs: list["ExecutedNode"]
-    failed: bool
-    error_message: str
+    context_by_node: Annotated[
+        dict[str, dict[str, Any]], _merge_context_by_node
+    ]
+    node_runs: Annotated[list["ExecutedNode"], _append_node_runs]
+    failed: Annotated[bool, _any_failed]
+    error_message: Annotated[str, _first_error]
 
 
 @dataclass(slots=True)
@@ -240,7 +272,6 @@ class WorkflowExecutor:
         """执行同步节点并更新状态。"""
 
         context_by_node = dict(state.get("context_by_node", {}))
-        node_runs = list(state.get("node_runs", []))
         node_input = self._build_node_input(
             definition_edges=definition_edges,
             node_id=node_id,
@@ -248,7 +279,7 @@ class WorkflowExecutor:
             context_by_node=context_by_node,
         )
         executed_node = self._execute_node_sync(node_id, node_type, config, node_input)
-        return self._merge_node_result(node_id, context_by_node, node_runs, executed_node)
+        return self._merge_node_result(node_id, executed_node)
 
     async def _run_async_node(
         self,
@@ -261,7 +292,6 @@ class WorkflowExecutor:
         """执行异步节点并更新状态。"""
 
         context_by_node = dict(state.get("context_by_node", {}))
-        node_runs = list(state.get("node_runs", []))
         node_input = self._build_node_input(
             definition_edges=definition_edges,
             node_id=node_id,
@@ -274,7 +304,7 @@ class WorkflowExecutor:
         executed_node = await self._execute_node_async(
             node_id, node_type, callback_config, node_input
         )
-        return self._merge_node_result(node_id, context_by_node, node_runs, executed_node)
+        return self._merge_node_result(node_id, executed_node)
 
     def _execute_node_sync(
         self,
@@ -370,21 +400,20 @@ class WorkflowExecutor:
     def _merge_node_result(
         self,
         node_id: str,
-        context_by_node: dict[str, dict[str, Any]],
-        node_runs: list[ExecutedNode],
         executed_node: ExecutedNode,
     ) -> dict[str, Any]:
         """把单节点结果合并回 LangGraph 状态。"""
 
-        node_runs.append(executed_node)
         if executed_node.status == "failed":
             return {
-                "node_runs": node_runs,
+                "node_runs": [executed_node],
                 "failed": True,
                 "error_message": executed_node.error_message,
             }
-        context_by_node[node_id] = executed_node.output_data
-        return {"context_by_node": context_by_node, "node_runs": node_runs}
+        return {
+            "context_by_node": {node_id: executed_node.output_data},
+            "node_runs": [executed_node],
+        }
 
     def _final_output(self, executed_nodes: list[ExecutedNode]) -> dict[str, Any]:
         """获取最终输出。"""

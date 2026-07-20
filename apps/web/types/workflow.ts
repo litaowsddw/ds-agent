@@ -27,10 +27,13 @@ export interface WorkflowRun {
   workflow_id: string;
   version_id: string;
   agent_id: string;
+  input_data: Record<string, unknown>;
   status: string;
   output_data: Record<string, unknown>;
   error_message: string;
   created_at: string;
+  started_at: string | null;
+  finished_at: string | null;
   updated_at: string | null;
 }
 

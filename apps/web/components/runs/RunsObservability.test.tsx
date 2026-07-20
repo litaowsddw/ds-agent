@@ -20,10 +20,13 @@ const runs: WorkflowRun[] = [
     workflow_id: "workflow-orders",
     version_id: "version-2",
     agent_id: "agent-a",
+    input_data: { order_id: "order-1" },
     status: "failed",
     output_data: { partial: true },
     error_message: "Payment node failed",
     created_at: "2026-07-12T01:00:00Z",
+    started_at: "2026-07-12T01:00:00Z",
+    finished_at: "2026-07-12T01:00:01Z",
     updated_at: "2026-07-12T01:00:01Z",
   },
   {
@@ -31,10 +34,13 @@ const runs: WorkflowRun[] = [
     workflow_id: "workflow-support",
     version_id: "version-1",
     agent_id: "agent-a",
+    input_data: { text: "need support" },
     status: "succeeded",
     output_data: { answer: "done" },
     error_message: "",
     created_at: "2026-07-12T02:00:00Z",
+    started_at: "2026-07-12T02:00:00Z",
+    finished_at: "2026-07-12T02:00:02Z",
     updated_at: "2026-07-12T02:00:02Z",
   },
 ];
@@ -101,6 +107,8 @@ describe("RunSummary", () => {
     expect(screen.getAllByText("—").length).toBeGreaterThan(0);
     const text = container.textContent ?? "";
     expect(text.indexOf("Payment node failed")).toBeLessThan(text.indexOf("输出"));
+    expect(screen.getByText("运行输入")).toBeInTheDocument();
+    expect(screen.getByText(/"order_id": "order-1"/)).toBeInTheDocument();
   });
 
   it("keeps provider cache-read tokens separate from platform cache metrics", () => {

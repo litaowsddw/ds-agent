@@ -74,6 +74,8 @@ export default function WorkflowsPage() {
   const onNodesChange = useWorkflowStore((state) => state.onNodesChange);
   const onEdgesChange = useWorkflowStore((state) => state.onEdgesChange);
   const onConnect = useWorkflowStore((state) => state.onConnect);
+  const validateConnection = useWorkflowStore((state) => state.validateConnection);
+  const connectNodes = useWorkflowStore((state) => state.connectNodes);
   const addNode = useWorkflowStore((state) => state.addNode);
   const removeSelectedNode = useWorkflowStore((state) => state.removeSelectedNode);
   const removeSelectedEdge = useWorkflowStore((state) => state.removeSelectedEdge);
@@ -253,6 +255,7 @@ export default function WorkflowsPage() {
             onEdgesChange={onEdgesChange}
             onNodeClick={handleNodeClick}
             onNodesChange={onNodesChange}
+            isValidConnection={(connection) => validateConnection(connection.source, connection.target).valid}
             panOnScroll
             selectionOnDrag
             snapGrid={[20, 20]}
@@ -332,6 +335,22 @@ export default function WorkflowsPage() {
           modelProviders={modelProviders}
           node={selectedNode}
           updateConfig={updateSelectedNodeConfig}
+        />
+
+        <ConnectionInspector
+          edges={edges}
+          node={selectedNode}
+          nodes={nodes}
+          onAddConnection={(sourceId, targetId) => {
+            const result = connectNodes(sourceId, targetId);
+            showToast(result.valid ? "success" : "error", result.valid ? "Connection added" : result.message);
+            return result.valid;
+          }}
+          onDeleteSelected={removeSelectedEdge}
+          onSelectEdge={setSelectedEdgeId}
+          onSelectNode={setSelectedNodeId}
+          selectedEdgeId={selectedEdgeId}
+          validateConnection={validateConnection}
         />
 
         <section className="rounded-lg border border-[#dfe4ee] bg-white">
@@ -640,6 +659,194 @@ function NodeInspector({
       </div>
     </section>
   );
+}
+
+function ConnectionInspector({
+  edges,
+  node,
+  nodes,
+  onAddConnection,
+  onDeleteSelected,
+  onSelectEdge,
+  onSelectNode,
+  selectedEdgeId,
+  validateConnection,
+}: {
+  edges: Array<{ id: string; source: string; target: string }>;
+  node: { id: string; type?: string; data: CustomNodeData } | undefined;
+  nodes: Array<{ id: string; type?: string; data: CustomNodeData }>;
+  onAddConnection: (sourceId: string, targetId: string) => boolean;
+  onDeleteSelected: () => void;
+  onSelectEdge: (id: string) => void;
+  onSelectNode: (id: string) => void;
+  selectedEdgeId: string;
+  validateConnection: (sourceId: string | null | undefined, targetId: string | null | undefined) => { valid: boolean; message: string };
+}) {
+  const [targetId, setTargetId] = useState("");
+  const selectedEdge = edges.find((edge) => edge.id === selectedEdgeId);
+  const incoming = node ? edges.filter((edge) => edge.target === node.id) : [];
+  const outgoing = node ? edges.filter((edge) => edge.source === node.id) : [];
+  const targetOptions = node
+    ? nodes
+        .filter((candidate) => candidate.id !== node.id && candidate.type !== "start")
+        .map((candidate) => ({ label: `${canvasNodeLabel(candidate)} (${candidate.type ?? "node"})`, value: candidate.id }))
+    : [];
+  const connectionCheck = node && targetId
+    ? validateConnection(node.id, targetId)
+    : { valid: false, message: "Choose a target step to add a connection" };
+
+  useEffect(() => {
+    setTargetId("");
+  }, [node?.id]);
+
+  return (
+    <section className="rounded-lg border border-[#dfe4ee] bg-white">
+      <div className="flex items-center justify-between border-b border-[#dfe4ee] px-4 py-3">
+        <div className="flex items-center gap-2 text-sm font-semibold text-[#172033]">
+          <GitBranch size={16} />
+          Connections
+        </div>
+        <span className="rounded bg-[#f8fafc] px-2 py-1 text-[10px] font-semibold text-[#667085]">
+          {edges.length} total
+        </span>
+      </div>
+      <div className="space-y-3 p-4">
+        {!node ? <EmptyText text="Select a step to review and connect its execution path" /> : null}
+        {node ? (
+          <>
+            <div className="rounded-lg border border-[#dfe4ee] bg-[#f8fafc] px-3 py-2 text-xs leading-5 text-[#667085]">
+              <span className="font-semibold text-[#344054]">{canvasNodeLabel(node)}</span> receives the complete output of each incoming step and passes its own output to every outgoing step.
+            </div>
+            <ConnectionList
+              emptyText="This step has no incoming connection"
+              label="Input from"
+              nodes={nodes}
+              onSelectEdge={onSelectEdge}
+              onSelectNode={onSelectNode}
+              relatedEdges={incoming}
+              selectedEdgeId={selectedEdgeId}
+              side="source"
+            />
+            <ConnectionList
+              emptyText="This step has no outgoing connection"
+              label="Output to"
+              nodes={nodes}
+              onSelectEdge={onSelectEdge}
+              onSelectNode={onSelectNode}
+              relatedEdges={outgoing}
+              selectedEdgeId={selectedEdgeId}
+              side="target"
+            />
+            {node.type !== "end" ? (
+              <div className="space-y-2 border-t border-[#eaecf0] pt-3">
+                <SelectInput
+                  label="Connect this step to"
+                  onChange={setTargetId}
+                  options={[{ label: "Choose a target step", value: "" }, ...targetOptions]}
+                  value={targetId}
+                />
+                {targetId ? (
+                  <div className={`text-xs ${connectionCheck.valid ? "text-[#027a48]" : "text-[#b42318]"}`}>
+                    {connectionCheck.valid ? "Ready to connect. The downstream step will receive this step's output." : connectionCheck.message}
+                  </div>
+                ) : null}
+                <button
+                  className="w-full rounded-lg border border-[#2f6feb] bg-[#eef4ff] px-3 py-2 text-xs font-semibold text-[#175cd3] transition hover:bg-[#dbeafe] disabled:cursor-not-allowed disabled:border-[#d0d5dd] disabled:bg-[#f8fafc] disabled:text-[#98a2b3]"
+                  disabled={!connectionCheck.valid}
+                  onClick={() => {
+                    if (!node || !targetId) return;
+                    if (onAddConnection(node.id, targetId)) setTargetId("");
+                  }}
+                  type="button"
+                >
+                  Add connection
+                </button>
+              </div>
+            ) : (
+              <ActionHint text="End is terminal and cannot connect to another step." />
+            )}
+          </>
+        ) : null}
+
+        {selectedEdge ? (
+          <div className="rounded-lg border border-[#bfdbfe] bg-[#eff6ff] p-3">
+            <div className="text-xs font-semibold text-[#1d4ed8]">Selected connection</div>
+            <div className="mt-1 text-xs text-[#344054]">
+              {canvasNodeLabel(findCanvasNode(nodes, selectedEdge.source))} → {canvasNodeLabel(findCanvasNode(nodes, selectedEdge.target))}
+            </div>
+            <button
+              className="mt-2 text-xs font-semibold text-[#b42318] hover:text-[#912018]"
+              onClick={onDeleteSelected}
+              type="button"
+            >
+              Delete connection
+            </button>
+          </div>
+        ) : (
+          <div className="text-xs leading-5 text-[#667085]">Tip: click a canvas connection to inspect or delete it. The editor blocks self-links, duplicate links, invalid Start/End directions, and cycles before save.</div>
+        )}
+      </div>
+    </section>
+  );
+}
+
+function ConnectionList({
+  emptyText,
+  label,
+  nodes,
+  onSelectEdge,
+  onSelectNode,
+  relatedEdges,
+  selectedEdgeId,
+  side,
+}: {
+  emptyText: string;
+  label: string;
+  nodes: Array<{ id: string; type?: string; data: CustomNodeData }>;
+  onSelectEdge: (id: string) => void;
+  onSelectNode: (id: string) => void;
+  relatedEdges: Array<{ id: string; source: string; target: string }>;
+  selectedEdgeId: string;
+  side: "source" | "target";
+}) {
+  return (
+    <div>
+      <div className="mb-1.5 text-[11px] font-semibold uppercase tracking-normal text-[#667085]">{label}</div>
+      {relatedEdges.length === 0 ? <div className="text-xs text-[#98a2b3]">{emptyText}</div> : null}
+      <div className="flex flex-wrap gap-1.5">
+        {relatedEdges.map((edge) => {
+          const relatedNodeId = edge[side];
+          const relatedNode = findCanvasNode(nodes, relatedNodeId);
+          return (
+            <button
+              key={edge.id}
+              className={`rounded border px-2 py-1 text-xs transition ${selectedEdgeId === edge.id ? "border-[#2f6feb] bg-[#eef4ff] text-[#175cd3]" : "border-[#dfe4ee] bg-white text-[#475467] hover:border-[#93c5fd]"}`}
+              onClick={() => {
+                onSelectEdge(edge.id);
+                onSelectNode(relatedNodeId);
+              }}
+              type="button"
+            >
+              {canvasNodeLabel(relatedNode)}
+            </button>
+          );
+        })}
+      </div>
+    </div>
+  );
+}
+
+function findCanvasNode(
+  nodes: Array<{ id: string; type?: string; data: CustomNodeData }>,
+  id: string
+) {
+  return nodes.find((node) => node.id === id);
+}
+
+function canvasNodeLabel(node: { id: string; data: CustomNodeData } | undefined): string {
+  if (!node) return "Unknown step";
+  const config = node.data.config ?? {};
+  return stringValue(config.display_name).trim() || node.data.label || node.id;
 }
 
 function SchemaNotice() {

@@ -86,4 +86,56 @@ describe("workflow run requests", () => {
     ]);
     expect(useWorkflowStore.getState().selectedEdgeId).toBe("");
   });
+
+  it("adds an explicit connection only when it is safe for the execution graph", () => {
+    useWorkflowStore.setState({
+      nodes: ["start", "llm", "rag", "end"].map((id) => ({
+        id,
+        type: id,
+        position: { x: 0, y: 0 },
+        data: { label: id },
+      })) as never,
+      edges: [
+        { id: "start-llm", source: "start", target: "llm" },
+        { id: "llm-end", source: "llm", target: "end" },
+      ],
+    });
+
+    expect(useWorkflowStore.getState().connectNodes("llm", "rag")).toEqual({
+      valid: true,
+      message: "Connection is valid",
+    });
+    expect(useWorkflowStore.getState().edges).toEqual(expect.arrayContaining([
+      expect.objectContaining({ source: "llm", target: "rag" }),
+    ]));
+
+    expect(useWorkflowStore.getState().connectNodes("llm", "rag")).toEqual({
+      valid: false,
+      message: "This connection already exists",
+    });
+    expect(useWorkflowStore.getState().connectNodes("end", "start")).toEqual({
+      valid: false,
+      message: "End cannot have an outgoing connection",
+    });
+  });
+
+  it("blocks a cycle before the user saves or publishes the workflow", () => {
+    useWorkflowStore.setState({
+      nodes: ["first", "second", "third"].map((id) => ({
+        id,
+        type: "llm",
+        position: { x: 0, y: 0 },
+        data: { label: id },
+      })) as never,
+      edges: [
+        { id: "first-second", source: "first", target: "second" },
+        { id: "second-third", source: "second", target: "third" },
+      ],
+    });
+
+    expect(useWorkflowStore.getState().validateConnection("third", "first")).toEqual({
+      valid: false,
+      message: "This connection would create a cycle",
+    });
+  });
 });
