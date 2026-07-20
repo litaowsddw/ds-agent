@@ -1,8 +1,4 @@
 :8080 {
-  basic_auth {
-    {$DEPLOY_USER} {$DEPLOY_PASSWORD_HASH}
-  }
-
   handle_path /api/* {
     # Chat relies on SSE for preflight context and streaming tokens.
     reverse_proxy api:8000 {

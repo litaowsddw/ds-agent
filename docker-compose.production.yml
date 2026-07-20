@@ -125,9 +125,6 @@ services:
     restart: unless-stopped
     ports:
       - "127.0.0.1:18080:8080"
-    environment:
-      DEPLOY_USER: ${DEPLOY_USER:?Set DEPLOY_USER in the external env file}
-      DEPLOY_PASSWORD_HASH: ${DEPLOY_PASSWORD_HASH:?Set DEPLOY_PASSWORD_HASH in the external env file}
     volumes:
       - ./deploy/Caddyfile:/etc/caddy/Caddyfile:ro
     healthcheck:
