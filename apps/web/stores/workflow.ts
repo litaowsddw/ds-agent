@@ -11,6 +11,7 @@ import {
   type NodeChange,
 } from "@xyflow/react";
 import { create } from "zustand";
+import { cloneWorkflowDefinition } from "@/components/workflows/workflowTemplates";
 import { apiRequest } from "@/lib/api";
 import { INITIAL_EDGES, INITIAL_NODES, type WorkflowPaletteItem } from "@/lib/constants";
 import { useKnowledgeStore } from "@/stores/knowledge";
@@ -19,11 +20,16 @@ import type {
   CustomNodeData,
   NodeRun,
   WorkflowDefinition,
+  WorkflowExecutionLimits,
   WorkflowItem,
   WorkflowRun,
+  WorkflowTemplate,
   WorkflowValidationResult,
   WorkflowVersion,
 } from "@/types/workflow";
+
+type ConditionBranch = "true" | "false";
+export type EditableExecutionLimits = { max_steps: string; max_llm_calls: string };
 
 interface WorkflowStore {
   nodes: Node<CustomNodeData>[];
@@ -37,13 +43,18 @@ interface WorkflowStore {
   selectedRunId: string;
   nodeRuns: NodeRun[];
   workflowForm: { name: string; description: string; input: string };
+  executionLimits: EditableExecutionLimits;
   validation: WorkflowValidationResult | null;
 
   onNodesChange: (changes: NodeChange[]) => void;
   onEdgesChange: (changes: EdgeChange[]) => void;
   onConnect: (connection: Connection) => void;
-  validateConnection: (sourceId: string | null | undefined, targetId: string | null | undefined) => WorkflowConnectionResult;
-  connectNodes: (sourceId: string, targetId: string) => WorkflowConnectionResult;
+  validateConnection: (
+    sourceId: string | null | undefined,
+    targetId: string | null | undefined,
+    branch?: ConditionBranch
+  ) => WorkflowConnectionResult;
+  connectNodes: (sourceId: string, targetId: string, branch?: ConditionBranch) => WorkflowConnectionResult;
   addNode: (item: WorkflowPaletteItem) => void;
   removeSelectedNode: () => void;
   removeSelectedEdge: () => void;
@@ -51,6 +62,8 @@ interface WorkflowStore {
   setSelectedEdgeId: (id: string) => void;
   updateSelectedNodeConfig: (patch: Record<string, unknown>) => void;
   setWorkflowForm: (form: { name: string; description: string; input: string }) => void;
+  setExecutionLimits: (limits: EditableExecutionLimits) => void;
+  applyWorkflowTemplate: (template: WorkflowTemplate) => void;
   setSelectedWorkflowId: (id: string) => void;
   setSelectedRunId: (id: string) => void;
   resetCanvas: () => void;
@@ -80,7 +93,7 @@ const NODE_META: Record<string, { label: string; description: string; capability
   llm: { label: "LLM", description: "Model call", capability: "executable" },
   rag: { label: "Knowledge Retrieval", description: "Vector knowledge search", capability: "executable" },
   tool: { label: "Tool", description: "Authorized MCP tool plan", capability: "executable" },
-  condition: { label: "Condition", description: "Branch by expression", capability: "schema" },
+  condition: { label: "Condition", description: "Route by a safe data check", capability: "executable" },
   http: { label: "HTTP Request", description: "External HTTP call", capability: "schema" },
   code: { label: "Code", description: "Sandboxed transform", capability: "schema" },
   variable: { label: "Variable", description: "Assign workflow values", capability: "schema" },
@@ -104,7 +117,7 @@ function defaultConfig(type: string): Record<string, unknown> {
     case "tool":
       return { tool_id: "", risk_level: "low", arguments: { query: "{{input.text}}" } };
     case "condition":
-      return { expression: "{{input.status}} == 'ok'", true_label: "true", false_label: "false" };
+      return { left: "{{input.status}}", operator: "equals", value: "ok", value_type: "string" };
     case "http":
       return { method: "GET", url: "", headers: {}, body: "" };
     case "code":
@@ -127,6 +140,15 @@ function makeNode(
   config?: Record<string, unknown>
 ): Node<CustomNodeData> {
   const meta = NODE_META[type] ?? { label: type, description: "Custom node", capability: "schema" as const };
+  const mergedConfig = { ...defaultConfig(type), ...(config ?? {}) };
+  if (
+    type === "condition" &&
+    config &&
+    !Object.prototype.hasOwnProperty.call(config, "value_type") &&
+    Object.prototype.hasOwnProperty.call(mergedConfig, "value")
+  ) {
+    mergedConfig.value_type = conditionValueType(mergedConfig.value);
+  }
   return {
     id,
     type,
@@ -135,7 +157,7 @@ function makeNode(
       label: meta.label,
       description: meta.description,
       capability: meta.capability,
-      config: { ...defaultConfig(type), ...(config ?? {}) },
+      config: mergedConfig,
     },
   };
 }
@@ -166,7 +188,64 @@ function hydrateEdges(definition: WorkflowDefinition): Edge[] {
     id: `${edge.source}-${edge.target}-${index}`,
     source: edge.source,
     target: edge.target,
+    sourceHandle: edge.branch,
+    label: edge.branch,
+    labelStyle: edge.branch ? { fill: "#475467", fontSize: 11, fontWeight: 600 } : undefined,
   }));
+}
+
+function conditionValueType(value: unknown): "string" | "number" | "boolean" | "null" {
+  if (value === null) return "null";
+  if (typeof value === "number") return "number";
+  if (typeof value === "boolean") return "boolean";
+  return "string";
+}
+
+function coerceConditionValue(value: unknown, valueType: unknown): string | number | boolean | null {
+  switch (valueType) {
+    case "number": {
+      const numeric = typeof value === "number" ? value : Number(value);
+      return Number.isFinite(numeric) ? numeric : 0;
+    }
+    case "boolean":
+      return value === true || value === "true";
+    case "null":
+      return null;
+    default:
+      return typeof value === "string" ? value : String(value ?? "");
+  }
+}
+
+function editableExecutionLimits(definition: WorkflowDefinition): EditableExecutionLimits {
+  const limits = definition.execution_limits;
+  return {
+    max_steps: limits?.max_steps === undefined ? "" : String(limits.max_steps),
+    max_llm_calls: limits?.max_llm_calls === undefined ? "" : String(limits.max_llm_calls),
+  };
+}
+
+function parseExecutionLimit(value: string, name: "max_steps" | "max_llm_calls"): number | undefined {
+  const text = value.trim();
+  if (!text) return undefined;
+  if (!/^\d+$/.test(text)) {
+    throw new Error(`${name} must be a whole number`);
+  }
+  const parsed = Number(text);
+  const [minimum, maximum] = name === "max_steps" ? [1, 500] : [0, 100];
+  if (parsed < minimum || parsed > maximum) {
+    throw new Error(`${name} must be between ${minimum} and ${maximum}`);
+  }
+  return parsed;
+}
+
+function serializeExecutionLimits(limits: EditableExecutionLimits): WorkflowExecutionLimits | undefined {
+  const maxSteps = parseExecutionLimit(limits.max_steps, "max_steps");
+  const maxLlmCalls = parseExecutionLimit(limits.max_llm_calls, "max_llm_calls");
+  if (maxSteps === undefined && maxLlmCalls === undefined) return undefined;
+  return {
+    ...(maxSteps === undefined ? {} : { max_steps: maxSteps }),
+    ...(maxLlmCalls === undefined ? {} : { max_llm_calls: maxLlmCalls }),
+  };
 }
 
 function wouldCreateCycle(edges: Edge[], sourceId: string, targetId: string): boolean {
@@ -193,7 +272,8 @@ function checkConnection(
   nodes: Node<CustomNodeData>[],
   edges: Edge[],
   sourceId: string | null | undefined,
-  targetId: string | null | undefined
+  targetId: string | null | undefined,
+  branch?: ConditionBranch
 ): WorkflowConnectionResult {
   if (!sourceId || !targetId) {
     return { valid: false, message: "Choose both a source and a target step" };
@@ -212,7 +292,17 @@ function checkConnection(
   if (target.type === "start") {
     return { valid: false, message: "Start cannot have an incoming connection" };
   }
-  if (edges.some((edge) => edge.source === sourceId && edge.target === targetId)) {
+  const sourceIsCondition = source.type === "condition";
+  if (sourceIsCondition && branch !== "true" && branch !== "false") {
+    return { valid: false, message: "Choose the true or false output for this Condition" };
+  }
+  if (!sourceIsCondition && branch) {
+    return { valid: false, message: "Only a Condition can have a named output branch" };
+  }
+  if (sourceIsCondition && edges.some((edge) => edge.source === sourceId && edge.sourceHandle === branch)) {
+    return { valid: false, message: `The ${branch} branch is already connected` };
+  }
+  if (!sourceIsCondition && edges.some((edge) => edge.source === sourceId && edge.target === targetId)) {
     return { valid: false, message: "This connection already exists" };
   }
   if (wouldCreateCycle(edges, sourceId, targetId)) {
@@ -233,6 +323,7 @@ export const useWorkflowStore = create<WorkflowStore>((set, get) => ({
   selectedRunId: "",
   nodeRuns: [],
   workflowForm: { name: "", description: "", input: "" },
+  executionLimits: { max_steps: "", max_llm_calls: "" },
   validation: null,
 
   onNodesChange: (changes) =>
@@ -248,11 +339,11 @@ export const useWorkflowStore = create<WorkflowStore>((set, get) => ({
         ? ""
         : state.selectedEdgeId,
     })),
-  validateConnection: (sourceId, targetId) =>
-    checkConnection(get().nodes, get().edges, sourceId, targetId),
+  validateConnection: (sourceId, targetId, branch) =>
+    checkConnection(get().nodes, get().edges, sourceId, targetId, branch),
 
-  connectNodes: (sourceId, targetId) => {
-    const result = get().validateConnection(sourceId, targetId);
+  connectNodes: (sourceId, targetId, branch) => {
+    const result = get().validateConnection(sourceId, targetId, branch);
     if (!result.valid) return result;
 
     set((state) => ({
@@ -261,6 +352,9 @@ export const useWorkflowStore = create<WorkflowStore>((set, get) => ({
           id: `${sourceId}-${targetId}-${Date.now().toString(36)}`,
           source: sourceId,
           target: targetId,
+          sourceHandle: branch,
+          label: branch,
+          labelStyle: branch ? { fill: "#475467", fontSize: 11, fontWeight: 600 } : undefined,
           animated: true,
         },
         state.edges
@@ -273,7 +367,11 @@ export const useWorkflowStore = create<WorkflowStore>((set, get) => ({
 
   onConnect: (connection) => {
     if (!connection.source || !connection.target) return;
-    get().connectNodes(connection.source, connection.target);
+    const source = get().nodes.find((node) => node.id === connection.source);
+    const branch = source?.type === "condition" && (connection.sourceHandle === "true" || connection.sourceHandle === "false")
+      ? connection.sourceHandle
+      : undefined;
+    get().connectNodes(connection.source, connection.target, branch);
   },
 
   addNode: (item) => {
@@ -315,22 +413,39 @@ export const useWorkflowStore = create<WorkflowStore>((set, get) => ({
       const remainingEdges = replacedEdgeId
         ? state.edges.filter((edge) => edge.id !== replacedEdgeId)
         : state.edges;
+      const sourceNode = state.nodes.find((node) => node.id === sourceId);
+      const replacedEdge = state.edges.find((edge) => edge.id === replacedEdgeId);
+      const inheritedBranch = sourceNode?.type === "condition" &&
+        (replacedEdge?.sourceHandle === "true" || replacedEdge?.sourceHandle === "false")
+        ? replacedEdge.sourceHandle
+        : undefined;
       const insertedEdges = sourceId
         ? [
             {
               id: `${sourceId}-${id}-${timestamp}`,
               source: sourceId,
               target: id,
+              sourceHandle: inheritedBranch,
+              label: inheritedBranch,
               animated: true,
             },
-            ...(targetId
-              ? [{
-                  id: `${id}-${targetId}-${timestamp}`,
+            ...(targetId && item.type === "condition"
+              ? (["true", "false"] as const).map((branch) => ({
+                  id: `${id}-${branch}-${targetId}-${timestamp}`,
                   source: id,
                   target: targetId,
+                  sourceHandle: branch,
+                  label: branch,
                   animated: true,
-                }]
-              : []),
+                }))
+              : targetId
+                ? [{
+                    id: `${id}-${targetId}-${timestamp}`,
+                    source: id,
+                    target: targetId,
+                    animated: true,
+                  }]
+                : []),
           ]
         : [];
 
@@ -387,6 +502,30 @@ export const useWorkflowStore = create<WorkflowStore>((set, get) => ({
   },
 
   setWorkflowForm: (form) => set({ workflowForm: form }),
+  setExecutionLimits: (executionLimits) => set({ executionLimits, validation: null }),
+
+  applyWorkflowTemplate: (template) => {
+    const definition = cloneWorkflowDefinition(template.definition);
+    const nodes = hydrateNodes(definition);
+    set((state) => ({
+      nodes,
+      edges: hydrateEdges(definition),
+      // A template is always a fresh draft. Retaining an existing ID would
+      // let a later Save overwrite a customer's current workflow.
+      selectedWorkflowId: "",
+      selectedNodeId: nodes.find((node) => node.type !== "start")?.id ?? nodes[0]?.id ?? "",
+      selectedEdgeId: "",
+      selectedRunId: "",
+      nodeRuns: [],
+      workflowForm: {
+        name: template.suggestedName,
+        description: template.description,
+        input: state.workflowForm.input,
+      },
+      executionLimits: editableExecutionLimits(definition),
+      validation: null,
+    }));
+  },
 
   setSelectedWorkflowId: (id) => {
     const workflow = get().workflows.find((item) => item.workflow_id === id);
@@ -405,6 +544,7 @@ export const useWorkflowStore = create<WorkflowStore>((set, get) => ({
         description: workflow.description,
         input: get().workflowForm.input,
       },
+      executionLimits: editableExecutionLimits(workflow.draft_definition),
       validation: null,
     });
   },
@@ -417,15 +557,17 @@ export const useWorkflowStore = create<WorkflowStore>((set, get) => ({
       edges: INITIAL_EDGES as Edge[],
       selectedNodeId: "llm",
       nodeRuns: [],
+      executionLimits: { max_steps: "", max_llm_calls: "" },
       validation: null,
     }),
 
   getWorkflowDraft: () => {
-    const { nodes, edges } = get();
+    const { nodes, edges, executionLimits } = get();
     const runtime = useRuntimeStore.getState();
     const knowledge = useKnowledgeStore.getState();
     const firstTool = runtime.mcpTools[0] ?? null;
 
+    const execution_limits = serializeExecutionLimits(executionLimits);
     return {
       version: "1.0",
       nodes: nodes.map((node) => {
@@ -447,9 +589,28 @@ export const useWorkflowStore = create<WorkflowStore>((set, get) => ({
         if (nodeType === "http") {
           config.headers = parseMaybeJson(config.headers);
         }
+        if (nodeType === "condition") {
+          const operator = config.operator === "exists" ? "exists" : "equals";
+          config.operator = operator;
+          if (operator === "exists") {
+            delete config.value;
+          } else {
+            config.value = coerceConditionValue(config.value, config.value_type);
+          }
+          delete config.value_type;
+          delete config.expression;
+          delete config.true_label;
+          delete config.false_label;
+        }
         return { id: node.id, type: nodeType, config: cleanConfig(config) };
       }),
-      edges: edges.map((edge) => ({ source: edge.source, target: edge.target })),
+      edges: edges.map((edge) => {
+        const branch = edge.sourceHandle === "true" || edge.sourceHandle === "false"
+          ? edge.sourceHandle
+          : undefined;
+        return { source: edge.source, target: edge.target, ...(branch ? { branch } : {}) };
+      }),
+      ...(execution_limits ? { execution_limits } : {}),
     };
   },
 
@@ -565,6 +726,7 @@ export const useWorkflowStore = create<WorkflowStore>((set, get) => ({
       edges: hydrateEdges(workflow.draft_definition),
       selectedNodeId: nodes.find((node) => node.type !== "start")?.id ?? nodes[0]?.id ?? "",
       selectedEdgeId: "",
+      executionLimits: editableExecutionLimits(workflow.draft_definition),
       validation: null,
     }));
   },
@@ -614,6 +776,7 @@ export const useWorkflowStore = create<WorkflowStore>((set, get) => ({
       selectedRunId: "",
       nodeRuns: [],
       workflowForm: { name: "", description: "", input: "" },
+      executionLimits: { max_steps: "", max_llm_calls: "" },
       validation: null,
     }),
 
@@ -634,6 +797,9 @@ export const useWorkflowStore = create<WorkflowStore>((set, get) => ({
         edges: selectedWorkflow ? hydrateEdges(selectedWorkflow.draft_definition) : state.edges,
         selectedNodeId: nodes.find((node) => node.type !== "start")?.id ?? nodes[0]?.id ?? "",
         selectedEdgeId: "",
+        executionLimits: selectedWorkflow
+          ? editableExecutionLimits(selectedWorkflow.draft_definition)
+          : state.executionLimits,
         validation: null,
       };
     });

@@ -42,7 +42,7 @@ def test_validator_rejects_missing_end_node() -> None:
     assert "工作流必须包含 end 节点" in result["errors"]
 
 
-def test_validator_rejects_disconnected_design_only_node() -> None:
+def test_validator_rejects_disconnected_unconfigured_condition_node() -> None:
     workflow = WorkflowDefinition(
         version="1.0",
         nodes=[
@@ -57,4 +57,53 @@ def test_validator_rejects_disconnected_design_only_node() -> None:
 
     assert result["valid"] is False
     assert any("condition" in error and "未连接" in error for error in result["errors"])
-    assert any("condition" in error and "尚不能运行" in error for error in result["errors"])
+    assert any("condition" in error and "配置无效" in error for error in result["errors"])
+
+
+def test_validator_accepts_safe_condition_with_two_named_branches() -> None:
+    workflow = WorkflowDefinition(
+        version="1.0",
+        nodes=[
+            WorkflowNode(node_id="start", node_type="start"),
+            WorkflowNode(
+                node_id="check",
+                node_type="condition",
+                config={"left": "{{input.status}}", "operator": "equals", "value": "approved"},
+            ),
+            WorkflowNode(node_id="approved", node_type="end"),
+        ],
+        edges=[
+            WorkflowEdge(source="start", target="check"),
+            WorkflowEdge(source="check", target="approved", branch="true"),
+            WorkflowEdge(source="check", target="approved", branch="false"),
+        ],
+    )
+
+    result = WorkflowValidator().validate(workflow)
+
+    assert result["valid"] is True
+
+
+def test_validator_rejects_unsafe_condition_expression_and_missing_false_branch() -> None:
+    workflow = WorkflowDefinition(
+        version="1.0",
+        nodes=[
+            WorkflowNode(node_id="start", node_type="start"),
+            WorkflowNode(
+                node_id="check",
+                node_type="condition",
+                config={"expression": "__import__('os').system('whoami')"},
+            ),
+            WorkflowNode(node_id="end", node_type="end"),
+        ],
+        edges=[
+            WorkflowEdge(source="start", target="check"),
+            WorkflowEdge(source="check", target="end", branch="true"),
+        ],
+    )
+
+    result = WorkflowValidator().validate(workflow)
+
+    assert result["valid"] is False
+    assert any("配置无效" in error for error in result["errors"])
+    assert any("false 出边" in error for error in result["errors"])

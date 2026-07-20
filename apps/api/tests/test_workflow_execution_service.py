@@ -200,7 +200,7 @@ def test_tool_arguments_must_be_object_before_publish() -> None:
         assert "参数必须是 JSON 对象" in publish.json()["detail"]
 
 
-def test_workflow_preflight_reports_disconnected_and_non_executable_nodes() -> None:
+def test_workflow_preflight_reports_disconnected_and_unconfigured_condition_nodes() -> None:
     with TestClient(app) as client:
         actor_user_id, _org_id, agent_id, _owner_headers = _create_owner_org_agent(
             client, _suffix("wf-preflight")
@@ -242,5 +242,70 @@ def test_workflow_preflight_reports_disconnected_and_non_executable_nodes() -> N
         assert response.status_code == 200
         body = response.json()
         assert body["valid"] is False
-        assert any("condition" in error and "尚不能运行" in error for error in body["errors"])
+        assert any("condition" in error and "配置无效" in error for error in body["errors"])
         assert any("condition" in error and "未连接" in error for error in body["errors"])
+
+
+def test_workflow_preflight_and_run_support_condition_branch_edges() -> None:
+    """The API preserves branch metadata and executes only the selected route."""
+
+    with TestClient(app) as client:
+        actor_user_id, _org_id, agent_id, owner_headers = _create_owner_org_agent(
+            client, _suffix("wf-condition")
+        )
+        definition = {
+            "version": "1.0",
+            "nodes": [
+                {"id": "start", "type": "start", "config": {}},
+                {
+                    "id": "check",
+                    "type": "condition",
+                    "config": {"left": "{{input.approved}}", "operator": "exists"},
+                },
+                {"id": "end", "type": "end", "config": {}},
+            ],
+            "edges": [
+                {"source": "start", "target": "check"},
+                {"source": "check", "target": "end", "branch": "true"},
+                {"source": "check", "target": "end", "branch": "false"},
+            ],
+        }
+        workflow = client.post(
+            "/workflows",
+            json={
+                "actor_user_id": actor_user_id,
+                "agent_id": agent_id,
+                "name": "Condition workflow",
+                "description": "",
+                "draft_definition": definition,
+            },
+            headers=owner_headers,
+        ).json()
+        preflight = client.post(
+            f"/workflows/{workflow['workflow_id']}/validate",
+            json={"actor_user_id": actor_user_id, "draft_definition": definition},
+            headers=owner_headers,
+        )
+        assert preflight.status_code == 200
+        assert preflight.json() == {"valid": True, "errors": []}
+
+        version_id = _create_and_publish_workflow(
+            client,
+            actor_user_id=actor_user_id,
+            agent_id=agent_id,
+            definition=definition,
+        )
+        run_response = client.post(
+            "/workflow-runs",
+            json={"version_id": version_id, "input_data": {"approved": "yes"}, "async_mode": False},
+            headers=owner_headers,
+        )
+
+        assert run_response.status_code == 200
+        assert run_response.json()["status"] == "succeeded"
+        node_runs = client.get(
+            f"/workflow-runs/{run_response.json()['run_id']}/nodes",
+            params={"actor_user_id": actor_user_id},
+        ).json()
+        assert [node["node_id"] for node in node_runs] == ["start", "check", "end"]
+        assert node_runs[1]["output_data"]["branch"] == "true"

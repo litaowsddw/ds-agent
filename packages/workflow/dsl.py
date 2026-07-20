@@ -28,6 +28,10 @@ class WorkflowEdge:
     # target 是终点节点 ID。
     target: str
 
+    # branch 为 Condition 节点的具名出边，仅允许 true 或 false。
+    # 普通节点的连线必须保持为空，避免把路由语义悄悄附着到普通 DAG 边。
+    branch: str | None = None
+
 
 @dataclass(slots=True)
 class WorkflowDefinition:
@@ -41,3 +45,7 @@ class WorkflowDefinition:
 
     # edges 是连线列表。
     edges: list[WorkflowEdge]
+
+    # execution_limits 是随发布版本冻结的运行保护策略。保留为原始对象，
+    # 交给 budget 模块做严格校验，避免类型转换悄悄放宽用户设定的安全边界。
+    execution_limits: object | None = None

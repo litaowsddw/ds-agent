@@ -7,6 +7,7 @@ LLM、RAG、Tool 节点的真实能力由上层注入，因此生产链路不会
 from __future__ import annotations
 
 import inspect
+from contextvars import ContextVar
 from collections.abc import Awaitable, Callable
 from dataclasses import dataclass, field
 from time import perf_counter
@@ -14,9 +15,23 @@ from typing import Annotated, Any, TypedDict
 
 from langgraph.graph import END, START, StateGraph
 
+from packages.workflow.conditions import evaluate_condition, normalize_condition_config
+from packages.workflow.budget import (
+    WorkflowBudgetGuard,
+    execution_limits_from_definition,
+)
 from packages.workflow.templates import resolve_template_value
 
 NodeCallResult = dict[str, Any] | Awaitable[dict[str, Any]]
+
+
+def _edge_branch(edge: dict[str, Any]) -> str | None:
+    """Read the canonical branch field and two React Flow compatibility names."""
+
+    value = edge.get("branch", edge.get("source_handle", edge.get("sourceHandle")))
+    if value is None:
+        return None
+    return str(value).strip()
 
 
 def _merge_context_by_node(
@@ -131,6 +146,11 @@ class WorkflowExecutor:
         self.llm_gateway = llm_gateway
         self.rag_search = rag_search
         self.tool_call = tool_call
+        # A ContextVar keeps one mutable counter isolated per execute/execute_async
+        # call, including concurrent runs using the same executor instance.
+        self._budget_guard: ContextVar[WorkflowBudgetGuard | None] = ContextVar(
+            "workflow_budget_guard", default=None
+        )
 
     def execute(
         self, definition: dict[str, Any], input_data: dict[str, Any]
@@ -141,6 +161,9 @@ class WorkflowExecutor:
         API 路由中的真实执行使用 execute_async。
         """
 
+        guard_token = self._budget_guard.set(
+            WorkflowBudgetGuard(execution_limits_from_definition(definition))
+        )
         try:
             graph = self._compile_graph(definition=definition, async_mode=False)
             final_state = graph.invoke(self._initial_state(input_data))
@@ -152,6 +175,8 @@ class WorkflowExecutor:
                 node_runs=[],
                 error_message=str(exc),
             )
+        finally:
+            self._budget_guard.reset(guard_token)
 
     async def execute_async(
         self, definition: dict[str, Any], input_data: dict[str, Any]
@@ -161,6 +186,9 @@ class WorkflowExecutor:
         真实接口会在这里注入数据库、模型供应商、知识库和 MCP 授权能力。
         """
 
+        guard_token = self._budget_guard.set(
+            WorkflowBudgetGuard(execution_limits_from_definition(definition))
+        )
         try:
             graph = self._compile_graph(async_mode=True, definition=definition)
             final_state = await graph.ainvoke(self._initial_state(input_data))
@@ -172,6 +200,8 @@ class WorkflowExecutor:
                 node_runs=[],
                 error_message=str(exc),
             )
+        finally:
+            self._budget_guard.reset(guard_token)
 
     def _compile_graph(self, definition: dict[str, Any] | None = None, async_mode: bool = False):
         """把 Workflow DSL 编译成 LangGraph 可执行图。"""
@@ -196,14 +226,35 @@ class WorkflowExecutor:
 
         incoming_count = {node_id: 0 for node_id in nodes_by_id}
         outgoing_count = {node_id: 0 for node_id in nodes_by_id}
+        condition_branch_targets: dict[str, dict[str, str]] = {}
         for edge in definition.get("edges", []):
             source = str(edge["source"])
             target = str(edge["target"])
             if source not in nodes_by_id or target not in nodes_by_id:
                 raise ValueError(f"连线引用了不存在的节点：{source} -> {target}")
-            graph.add_edge(source, target)
+            if str(nodes_by_id[source].get("type")) == "condition":
+                branch = _edge_branch(edge)
+                if branch not in {"true", "false"}:
+                    raise ValueError(f"条件节点 {source} 的出边必须声明 true 或 false branch")
+                if branch in condition_branch_targets.setdefault(source, {}):
+                    raise ValueError(f"条件节点 {source} 存在重复的 {branch} 出边")
+                condition_branch_targets[source][branch] = target
+            else:
+                graph.add_edge(source, target)
             incoming_count[target] += 1
             outgoing_count[source] += 1
+
+        for node_id, node in nodes_by_id.items():
+            if str(node.get("type")) != "condition":
+                continue
+            targets = condition_branch_targets.get(node_id, {})
+            if set(targets) != {"true", "false"}:
+                raise ValueError(f"条件节点 {node_id} 必须同时配置 true 和 false 出边")
+            graph.add_conditional_edges(
+                node_id,
+                self._condition_router(node_id),
+                {"true": targets["true"], "false": targets["false"]},
+            )
 
         for node_id, count in incoming_count.items():
             if count == 0:
@@ -319,6 +370,9 @@ class WorkflowExecutor:
 
         started_at = perf_counter()
         try:
+            self._consume_execution_budget(node_type)
+            if node_type == "condition":
+                config = normalize_condition_config(config)
             resolved_config = self._resolve_node_config(node_id, config, node_input)
             output_data = self._resolve_sync_output(node_type, resolved_config, node_input)
             return self._succeeded_node(node_id, node_type, node_input, output_data, started_at)
@@ -336,11 +390,21 @@ class WorkflowExecutor:
 
         started_at = perf_counter()
         try:
+            self._consume_execution_budget(node_type)
+            if node_type == "condition":
+                config = normalize_condition_config(config)
             resolved_config = self._resolve_node_config(node_id, config, node_input)
             output_data = await self._resolve_async_output(node_type, resolved_config, node_input)
             return self._succeeded_node(node_id, node_type, node_input, output_data, started_at)
         except Exception as exc:
             return self._failed_node(node_id, node_type, node_input, exc, started_at)
+
+    def _consume_execution_budget(self, node_type: str) -> None:
+        """Reserve this node before resolving config or invoking an external service."""
+
+        guard = self._budget_guard.get()
+        if guard is not None:
+            guard.before_node(node_type)
 
     def _resolve_sync_output(
         self, node_type: str, config: dict[str, Any], node_input: dict[str, Any]
@@ -351,6 +415,9 @@ class WorkflowExecutor:
             return {"input": node_input.get("workflow_input", {})}
         if node_type == "end":
             return {"result": node_input.get("upstream", {})}
+        if node_type == "condition":
+            matched = evaluate_condition(config)
+            return {"result": matched, "branch": "true" if matched else "false"}
         call = self._required_call(node_type)
         output = call(config, node_input)
         if inspect.isawaitable(output):
@@ -366,6 +433,9 @@ class WorkflowExecutor:
             return {"input": node_input.get("workflow_input", {})}
         if node_type == "end":
             return {"result": node_input.get("upstream", {})}
+        if node_type == "condition":
+            matched = evaluate_condition(config)
+            return {"result": matched, "branch": "true" if matched else "false"}
         call = self._required_call(node_type)
         output = call(config, node_input)
         if inspect.isawaitable(output):
@@ -452,6 +522,18 @@ class WorkflowExecutor:
             "context_by_node": {node_id: executed_node.output_data},
             "node_runs": [executed_node],
         }
+
+    def _condition_router(self, node_id: str):
+        """Build the LangGraph route function for one Condition node."""
+
+        def route(state: WorkflowGraphState) -> str:
+            output = state.get("context_by_node", {}).get(node_id, {})
+            branch = output.get("branch")
+            if branch not in {"true", "false"}:
+                raise ValueError(f"条件节点 {node_id} 未产出有效的 true/false 路由结果")
+            return str(branch)
+
+        return route
 
     def _final_output(self, executed_nodes: list[ExecutedNode]) -> dict[str, Any]:
         """获取最终输出。"""

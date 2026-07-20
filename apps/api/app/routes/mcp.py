@@ -104,6 +104,10 @@ async def register_server(
         await membership_db.assert_org_access(
             session, user_id=request.actor_user_id, org_id=request.org_id
         )
+        if request.transport == MCPTransport.STREAMABLE_HTTP:
+            raise ValueError(
+                "streamable_http MCP 必须通过 /mcp/agents/{agent_id}/import 受控导入并绑定 Agent"
+            )
         server = await mcp_server_db.create_server(
             session,
             server_id=new_id("mcp"),

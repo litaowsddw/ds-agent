@@ -54,6 +54,9 @@ function getNodeStatus(nodeType: string, data: Record<string, unknown>) {
   if (nodeType === "tool" && !config.tool_id) {
     return { label: "setup", tone: "bg-[#fff7ed] text-[#c2410c]" };
   }
+  if (nodeType === "condition" && (!config.left || !config.operator)) {
+    return { label: "setup", tone: "bg-[#fff7ed] text-[#c2410c]" };
+  }
   return { label: "ready", tone: "bg-[#ecfdf3] text-[#027a48]" };
 }
 
@@ -66,7 +69,7 @@ function BaseNode({ data, type }: NodeProps & { type?: string }) {
 
   return (
     <div
-      className={`min-w-[188px] rounded-lg border-2 ${theme.border} ${theme.bg} px-4 py-3 shadow-sm transition-shadow hover:shadow-md`}
+      className={`relative min-w-[188px] rounded-lg border-2 ${theme.border} ${theme.bg} px-4 py-3 shadow-sm transition-shadow hover:shadow-md`}
     >
       {nodeType !== "start" ? (
         <Handle
@@ -95,7 +98,26 @@ function BaseNode({ data, type }: NodeProps & { type?: string }) {
         </span>
       </div>
 
-      {nodeType !== "end" ? (
+      {nodeType === "condition" ? (
+        <>
+          <span className="absolute right-4 top-[42%] -translate-y-1/2 text-[10px] font-semibold text-[#027a48]">true</span>
+          <Handle
+            id="true"
+            type="source"
+            position={Position.Right}
+            style={{ top: "42%" }}
+            className="!h-3 !w-3 !rounded-full !border-2 !border-white !bg-[#22c55e]"
+          />
+          <span className="absolute right-4 top-[72%] -translate-y-1/2 text-[10px] font-semibold text-[#b42318]">false</span>
+          <Handle
+            id="false"
+            type="source"
+            position={Position.Right}
+            style={{ top: "72%" }}
+            className="!h-3 !w-3 !rounded-full !border-2 !border-white !bg-[#ef4444]"
+          />
+        </>
+      ) : nodeType !== "end" ? (
         <Handle
           type="source"
           position={Position.Right}

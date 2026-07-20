@@ -48,10 +48,10 @@ export const NODE_PALETTE: WorkflowPaletteItem[] = [
   {
     type: "condition",
     label: "Condition",
-    description: "Branch by expression or upstream value",
+    description: "Route by a safe input or upstream value check",
     group: "Logic",
     icon: "GitBranch",
-    capability: "schema",
+    capability: "executable",
   },
   {
     type: "http",

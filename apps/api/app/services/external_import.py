@@ -171,6 +171,68 @@ def discover_streamable_http_tools(url: str, headers: dict[str, str]) -> list[Di
     return tools
 
 
+def invoke_streamable_http_tool(
+    url: str,
+    headers: dict[str, str],
+    *,
+    tool_name: str,
+    arguments: dict[str, object],
+) -> dict[str, Any]:
+    """Invoke one imported Streamable HTTP MCP tool.
+
+    This deliberately shares the import-time transport boundary: only a public
+    HTTPS endpoint, bounded requests/responses, no redirects, and the small
+    allow-list of credential headers are supported.  It is *not* a generic
+    HTTP action node.  Callers must still perform their Agent authorization and
+    human-approval checks before reaching this function.
+
+    A new MCP session is established per workflow node invocation.  Persisting
+    a session ID across Workflow runs would create cross-run state and makes
+    audit/retry semantics ambiguous, so it is intentionally avoided here.
+    """
+
+    if not tool_name or len(tool_name) > 128:
+        raise ExternalImportError("MCP Tool 名称不合法")
+    if not isinstance(arguments, dict):
+        raise ExternalImportError("MCP Tool 参数必须是 JSON 对象")
+
+    endpoint = validate_public_https_url(url)
+    request_headers = _safe_mcp_headers(headers)
+    initialize = _mcp_request(
+        endpoint,
+        request_headers,
+        request_id=1,
+        method="initialize",
+        params={
+            "protocolVersion": "2025-03-26",
+            "capabilities": {},
+            "clientInfo": {"name": "ds-agent", "version": "1.0"},
+        },
+    )
+    if "error" in initialize:
+        raise ExternalImportError(f"MCP initialize 失败: {_rpc_error_text(initialize['error'])}")
+
+    session_id = str(initialize.get("_mcp_session_id") or "")
+    if session_id:
+        request_headers["Mcp-Session-Id"] = session_id
+    tool_result = _mcp_request(
+        endpoint,
+        request_headers,
+        request_id=2,
+        method="tools/call",
+        params={"name": tool_name, "arguments": arguments},
+    )
+    if "error" in tool_result:
+        raise ExternalImportError(f"MCP Tool 调用失败: {_rpc_error_text(tool_result['error'])}")
+
+    result = tool_result.get("result")
+    if not isinstance(result, dict):
+        raise ExternalImportError("MCP Tool 返回格式无效")
+    if result.get("isError") is True:
+        raise ExternalImportError(f"MCP Tool 执行失败: {_mcp_tool_error_text(result)}")
+    return result
+
+
 def _safe_mcp_headers(headers: dict[str, str]) -> dict[str, str]:
     accepted: dict[str, str] = {
         "Accept": "application/json, text/event-stream",
@@ -238,3 +300,19 @@ def _parse_mcp_response(payload: bytes) -> dict[str, Any]:
 
 def _rpc_error_text(error: object) -> str:
     return str(error.get("message") if isinstance(error, dict) else error)[:400]
+
+
+def _mcp_tool_error_text(result: dict[str, Any]) -> str:
+    """Extract a bounded, display-safe error message from an MCP tool result."""
+
+    content = result.get("content")
+    if isinstance(content, list):
+        messages = [
+            str(item.get("text") or "")
+            for item in content
+            if isinstance(item, dict) and item.get("type") == "text"
+        ]
+        text = " ".join(message for message in messages if message)
+        if text:
+            return text[:400]
+    return "远端 MCP Tool 返回 isError"

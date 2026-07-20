@@ -2,10 +2,14 @@
 
 from __future__ import annotations
 
+import asyncio
 import json
-from collections.abc import Awaitable, Callable
+from collections.abc import Awaitable, Callable, Mapping
 from typing import Any
 
+from jsonschema import FormatChecker
+from jsonschema.exceptions import SchemaError
+from jsonschema.validators import validator_for
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
@@ -17,7 +21,7 @@ from app.models.workflow import WorkflowRunModel
 from app.routes.knowledge import search_knowledge_base
 from app.schemas.knowledge import SearchRequest
 from app.services.context_tokens import preflight_chat_context
-from app.services.db.identity_db import membership_db
+from app.services.db.identity_db import audit_log_db, membership_db
 from app.services.db.runtime_db import model_provider_db
 from app.services.db.workflow_db import (
     knowledge_base_db,
@@ -28,6 +32,7 @@ from app.services.db.workflow_db import (
 )
 from app.services.metering import SessionUsageRecorder
 from app.services.stream_usage import StreamUsageReporter
+from app.services.external_import import ExternalImportError, invoke_streamable_http_tool
 from packages.workflow.executor import ExecutedNode, WorkflowExecutor
 
 
@@ -116,7 +121,7 @@ class WorkflowExecutionService:
             ),
             tool_call=lambda config, node_input: self._execute_tool_node(
                 session=session,
-                config=config,
+                config={**config, "_workflow_run_id": run.run_id},
                 node_input=node_input,
                 actor_user_id=actor_user_id,
                 org_id=run.org_id,
@@ -274,19 +279,191 @@ class WorkflowExecutionService:
         if row is None:
             raise ValueError("Agent 未授权调用该 MCP Tool")
         tool, server = row
-        risk_level = str(config.get("risk_level") or tool.risk_level or "low")
-        requires_approval = risk_level in {"high", "critical"}
-        return {
+        # Risk comes exclusively from the imported Tool snapshot.  A workflow
+        # author must never lower policy by placing a different ``risk_level``
+        # in canvas JSON.
+        risk_level = str(tool.risk_level or "").strip().lower()
+        run_id = str(config.get("_workflow_run_id") or "")
+        node_id = str(config.get("id") or "")
+        if risk_level != "low":
+            await self._append_tool_audit(
+                session=session,
+                org_id=org_id,
+                actor_user_id=actor_user_id,
+                run_id=run_id,
+                node_id=node_id,
+                tool=tool,
+                status="approval_required",
+                arguments=arguments,
+                detail={
+                    "risk_level": risk_level or "unknown",
+                    "reason": "该运行时没有可验证、持久化的人类审批记录",
+                },
+            )
+            raise ValueError(
+                f"MCP Tool '{tool.name}' 风险等级为 {risk_level or 'unknown'}，"
+                "需要人工审批；当前 Workflow 运行时不会执行未审批的外部操作"
+            )
+
+        try:
+            _validate_mcp_tool_arguments(tool.input_schema, arguments)
+        except ValueError as exc:
+            await self._append_tool_audit(
+                session=session,
+                org_id=org_id,
+                actor_user_id=actor_user_id,
+                run_id=run_id,
+                node_id=node_id,
+                tool=tool,
+                status="rejected",
+                arguments=arguments,
+                detail={"reason": "MCP Tool input_schema 校验失败", "error": str(exc)},
+            )
+            raise
+
+        # Import is deliberately the only supported way to bind an external
+        # executable connector.  Legacy manually registered HTTP/SSE servers
+        # keep their metadata but cannot become an SSRF-capable action node.
+        if str(server.transport) != "streamable_http":
+            await self._append_tool_audit(
+                session=session,
+                org_id=org_id,
+                actor_user_id=actor_user_id,
+                run_id=run_id,
+                node_id=node_id,
+                tool=tool,
+                status="rejected",
+                arguments=arguments,
+                detail={
+                    "reason": "仅已导入的 streamable_http MCP 支持运行时调用",
+                    "transport": str(server.transport),
+                },
+            )
+            raise ValueError("仅已导入的 streamable_http MCP Tool 可以在 Workflow 中执行")
+
+        try:
+            credential_headers = _load_mcp_credential_headers(server.credentials_encrypted)
+        except ValueError as exc:
+            await self._append_tool_audit(
+                session=session,
+                org_id=org_id,
+                actor_user_id=actor_user_id,
+                run_id=run_id,
+                node_id=node_id,
+                tool=tool,
+                status="rejected",
+                arguments=arguments,
+                detail={"reason": "MCP 凭据配置无效", "error": str(exc)},
+            )
+            raise
+
+        # Record the intent before the remote side effect.  No credentials are
+        # placed in this log, and all user-controlled payloads are redacted and
+        # bounded.  The resolved input/output also remains in the node trace.
+        await self._append_tool_audit(
+            session=session,
+            org_id=org_id,
+            actor_user_id=actor_user_id,
+            run_id=run_id,
+            node_id=node_id,
+            tool=tool,
+            status="started",
+            arguments=arguments,
+            detail={"risk_level": "low", "server_id": server.server_id},
+        )
+        try:
+            mcp_result = await asyncio.to_thread(
+                invoke_streamable_http_tool,
+                server.url,
+                credential_headers,
+                tool_name=tool.name,
+                arguments=arguments,
+            )
+        except ExternalImportError as exc:
+            await self._append_tool_audit(
+                session=session,
+                org_id=org_id,
+                actor_user_id=actor_user_id,
+                run_id=run_id,
+                node_id=node_id,
+                tool=tool,
+                status="failed",
+                arguments=arguments,
+                detail={"error": str(exc)},
+            )
+            raise ValueError(f"MCP Tool '{tool.name}' 调用失败：{exc}") from exc
+        except Exception as exc:
+            # Keep the original exception out of the public response and audit
+            # to avoid leaking transport implementation details or secrets.
+            await self._append_tool_audit(
+                session=session,
+                org_id=org_id,
+                actor_user_id=actor_user_id,
+                run_id=run_id,
+                node_id=node_id,
+                tool=tool,
+                status="failed",
+                arguments=arguments,
+                detail={"error": "MCP Tool 运行时发生未预期错误"},
+            )
+            raise ValueError(f"MCP Tool '{tool.name}' 调用失败：运行时错误") from exc
+
+        result = {
             "tool_id": tool.tool_id,
             "tool_name": tool.name,
             "server_id": tool.server_id,
-            "server_url": server.url,
-            "risk_level": risk_level,
+            "risk_level": "low",
             "arguments": arguments,
-            "status": "requires_approval" if requires_approval else "planned",
-            "requires_approval": requires_approval,
+            "status": "succeeded",
+            "requires_approval": False,
+            "result": mcp_result,
             "upstream": node_input.get("upstream", {}),
         }
+        await self._append_tool_audit(
+            session=session,
+            org_id=org_id,
+            actor_user_id=actor_user_id,
+            run_id=run_id,
+            node_id=node_id,
+            tool=tool,
+            status="succeeded",
+            arguments=arguments,
+            detail={"result": mcp_result},
+        )
+        return result
+
+    async def _append_tool_audit(
+        self,
+        *,
+        session: AsyncSession,
+        org_id: str,
+        actor_user_id: str,
+        run_id: str,
+        node_id: str,
+        tool: MCPToolModel,
+        status: str,
+        arguments: dict[str, Any],
+        detail: dict[str, Any],
+    ) -> None:
+        """Record a bounded, credential-safe MCP execution audit event."""
+
+        await audit_log_db.append_log(
+            session,
+            log_id=new_id("aud"),
+            org_id=org_id,
+            actor_user_id=actor_user_id,
+            action=f"workflow.mcp_tool.{status}",
+            resource_type="mcp_tool",
+            resource_id=tool.tool_id,
+            detail={
+                "workflow_run_id": run_id,
+                "workflow_node_id": node_id,
+                "server_id": tool.server_id,
+                "tool_name": tool.name,
+                "arguments": _audit_safe_payload(arguments),
+                **_audit_safe_payload(detail),
+            },
+        )
 
     async def _persist_executed_node(
         self,
@@ -317,6 +494,124 @@ def _stringify_for_query(value: Any) -> str:
     if isinstance(value, str):
         return value.strip()
     return json.dumps(value, ensure_ascii=False, sort_keys=True)
+
+
+def _load_mcp_credential_headers(credentials_encrypted: str | None) -> dict[str, str]:
+    """Load credentials created by MCP import without exposing them in traces."""
+
+    # Only the reviewed import flow writes an encrypted credentials envelope
+    # (including encrypted ``{}`` for public MCPs).  Legacy registry records
+    # have an empty value, so accepting them would let a manually registered
+    # server bypass the import-time HTTPS/SSRF review boundary.
+    if not credentials_encrypted:
+        raise ValueError("MCP Server 未通过受控导入绑定，禁止在 Workflow 中执行")
+    try:
+        raw = decrypt_api_key(credentials_encrypted)
+        decoded = json.loads(raw)
+    except Exception as exc:
+        raise ValueError("MCP 凭据无法解密或格式无效") from exc
+    if not isinstance(decoded, Mapping):
+        raise ValueError("MCP 凭据格式无效")
+    headers: dict[str, str] = {}
+    for name, value in decoded.items():
+        if not isinstance(name, str) or not isinstance(value, str):
+            raise ValueError("MCP 凭据格式无效")
+        headers[name] = value
+    return headers
+
+
+def _validate_mcp_tool_arguments(input_schema_raw: str | None, arguments: dict[str, Any]) -> None:
+    """Validate resolved Tool arguments against the imported MCP JSON Schema.
+
+    MCP schemas are integration-owned data.  Using the maintained JSON Schema
+    implementation keeps Draft selection, nested objects, arrays, required
+    fields, and format validation consistent instead of approximating a
+    security boundary with a partial hand-written validator.
+    """
+
+    try:
+        input_schema = json.loads(input_schema_raw or "{}")
+    except (TypeError, json.JSONDecodeError) as exc:
+        raise ValueError("已导入 MCP Tool 的 input_schema 不是有效 JSON") from exc
+    if not isinstance(input_schema, dict):
+        raise ValueError("已导入 MCP Tool 的 input_schema 必须是 JSON 对象")
+    _assert_local_json_schema_references(input_schema)
+    try:
+        validator_class = validator_for(input_schema)
+        validator_class.check_schema(input_schema)
+        validator = validator_class(input_schema, format_checker=FormatChecker())
+        errors = sorted(validator.iter_errors(arguments), key=lambda error: list(error.absolute_path))
+    except SchemaError as exc:
+        raise ValueError("已导入 MCP Tool 的 input_schema 不合法") from exc
+    if not errors:
+        return
+    first_error = errors[0]
+    path = ".".join(str(part) for part in first_error.absolute_path) or "参数对象"
+    raise ValueError(f"MCP Tool 参数未通过 input_schema 校验（{path}）：{first_error.message}")
+
+
+def _assert_local_json_schema_references(value: Any) -> None:
+    """Keep imported schemas data-only and prevent validator-time SSRF via `$ref`."""
+
+    if isinstance(value, Mapping):
+        for key, nested in value.items():
+            if key in {"$ref", "$dynamicRef"}:
+                if not isinstance(nested, str) or not nested.startswith("#"):
+                    raise ValueError("已导入 MCP Tool 的 input_schema 不允许外部 $ref")
+            _assert_local_json_schema_references(nested)
+    elif isinstance(value, list):
+        for nested in value:
+            _assert_local_json_schema_references(nested)
+
+
+_AUDIT_SENSITIVE_FIELD_PARTS = (
+    "access_key",
+    "api_key",
+    "authorization",
+    "bearer",
+    "cookie",
+    "credential",
+    "header",
+    "password",
+    "private_key",
+    "secret",
+    "token",
+)
+_MAX_AUDIT_VALUE_CHARS = 4_000
+_MAX_AUDIT_COLLECTION_ITEMS = 50
+
+
+def _audit_safe_payload(value: Any, *, _depth: int = 0) -> Any:
+    """Preserve useful Tool evidence without putting secrets or huge data in audit logs."""
+
+    if _depth >= 6:
+        return "[truncated: nesting limit]"
+    if isinstance(value, Mapping):
+        result: dict[str, Any] = {}
+        for index, (key, nested) in enumerate(value.items()):
+            if index >= _MAX_AUDIT_COLLECTION_ITEMS:
+                result["_truncated"] = f"{len(value) - _MAX_AUDIT_COLLECTION_ITEMS} items omitted"
+                break
+            key_text = str(key)
+            if any(part in key_text.lower() for part in _AUDIT_SENSITIVE_FIELD_PARTS):
+                result[key_text] = "[redacted]"
+            else:
+                result[key_text] = _audit_safe_payload(nested, _depth=_depth + 1)
+        return result
+    if isinstance(value, list):
+        items = [
+            _audit_safe_payload(item, _depth=_depth + 1)
+            for item in value[:_MAX_AUDIT_COLLECTION_ITEMS]
+        ]
+        if len(value) > _MAX_AUDIT_COLLECTION_ITEMS:
+            items.append(f"[truncated: {len(value) - _MAX_AUDIT_COLLECTION_ITEMS} items omitted]")
+        return items
+    if isinstance(value, str):
+        suffix = "[truncated]" if len(value) > _MAX_AUDIT_VALUE_CHARS else ""
+        return value[:_MAX_AUDIT_VALUE_CHARS] + suffix
+    if value is None or isinstance(value, (bool, int, float)):
+        return value
+    return str(value)[:_MAX_AUDIT_VALUE_CHARS]
 
 
 workflow_execution_service = WorkflowExecutionService()

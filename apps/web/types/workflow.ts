@@ -56,6 +56,28 @@ export interface WorkflowDefinition {
   version: string;
   nodes: WorkflowNodeConfig[];
   edges: WorkflowEdgeConfig[];
+  /** Optional deterministic guardrails for one workflow run, never a billing policy. */
+  execution_limits?: WorkflowExecutionLimits;
+}
+
+export interface WorkflowExecutionLimits {
+  max_steps?: number;
+  max_llm_calls?: number;
+}
+
+/**
+ * A curated starting point for a new workflow.  Templates deliberately carry
+ * only workflow DSL: they never include tenant-specific provider credentials,
+ * knowledge-base IDs, or tool authorisations.
+ */
+export interface WorkflowTemplate {
+  id: string;
+  name: string;
+  description: string;
+  category: string;
+  suggestedName: string;
+  setup: string[];
+  definition: WorkflowDefinition;
 }
 
 export interface WorkflowNodeConfig {
@@ -67,6 +89,8 @@ export interface WorkflowNodeConfig {
 export interface WorkflowEdgeConfig {
   source: string;
   target: string;
+  /** Condition nodes route through one explicitly named output branch. */
+  branch?: "true" | "false";
 }
 
 export interface CustomNodeData extends Record<string, unknown> {

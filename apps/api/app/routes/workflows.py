@@ -71,10 +71,17 @@ def _validate_draft_definition(draft: dict[str, object]) -> dict[str, object]:
         if not source or not target:
             errors.append(f"第 {index + 1} 条连线必须包含 source 和 target")
             continue
-        edges.append(WorkflowEdge(source=source, target=target))
+        branch_raw = edge.get("branch", edge.get("source_handle", edge.get("sourceHandle")))
+        branch = None if branch_raw is None else str(branch_raw).strip()
+        edges.append(WorkflowEdge(source=source, target=target, branch=branch))
 
     result = WorkflowValidator().validate(
-        WorkflowDefinition(version=str(draft.get("version", "1.0")), nodes=nodes, edges=edges)
+        WorkflowDefinition(
+            version=str(draft.get("version", "1.0")),
+            nodes=nodes,
+            edges=edges,
+            execution_limits=draft.get("execution_limits"),
+        )
     )
     return {"valid": not errors and bool(result["valid"]), "errors": [*errors, *list(result["errors"])]}
 

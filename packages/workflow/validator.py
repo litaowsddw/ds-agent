@@ -1,6 +1,8 @@
 """Workflow DAG 校验器。"""
 
 from packages.workflow.dsl import WorkflowDefinition
+from packages.workflow.budget import WorkflowBudgetConfigurationError, execution_limits_from_definition
+from packages.workflow.conditions import WorkflowConditionError, parse_condition_config
 from packages.workflow.templates import (
     WorkflowTemplateError,
     collect_template_references,
@@ -55,6 +57,8 @@ class WorkflowValidator:
         edge_errors = self._validate_edges(workflow=workflow, node_ids=set(node_ids))
         errors.extend(edge_errors)
 
+        errors.extend(self._validate_condition_nodes(workflow))
+
         if not edge_errors and self._has_cycle(workflow=workflow):
             errors.append("工作流不能包含环")
 
@@ -69,6 +73,10 @@ class WorkflowValidator:
 
         errors.extend(self._validate_executable_nodes(workflow))
         errors.extend(self._validate_template_references(workflow))
+        try:
+            execution_limits_from_definition({"execution_limits": workflow.execution_limits})
+        except WorkflowBudgetConfigurationError as exc:
+            errors.append(str(exc))
 
         return {"valid": not errors, "errors": errors}
 
@@ -76,11 +84,47 @@ class WorkflowValidator:
         """校验连线是否引用存在的节点。"""
 
         errors: list[str] = []
+        node_types = {node.node_id: node.node_type for node in workflow.nodes}
         for edge in workflow.edges:
             if edge.source not in node_ids:
                 errors.append(f"连线起点不存在：{edge.source}")
             if edge.target not in node_ids:
                 errors.append(f"连线终点不存在：{edge.target}")
+            source_type = node_types.get(edge.source)
+            if source_type == "condition":
+                if edge.branch not in {"true", "false"}:
+                    errors.append(
+                        f"条件节点 {edge.source} 的出边必须声明 branch 为 true 或 false"
+                    )
+            elif edge.branch is not None:
+                errors.append(
+                    f"普通节点 {edge.source} 的连线不能声明 branch；只有 Condition 可使用 true/false 出边"
+                )
+        return errors
+
+    def _validate_condition_nodes(self, workflow: WorkflowDefinition) -> list[str]:
+        """Validate the limited condition DSL and its two explicit routes."""
+
+        errors: list[str] = []
+        edges_by_source: dict[str, list[object]] = {}
+        for edge in workflow.edges:
+            edges_by_source.setdefault(edge.source, []).append(edge)
+
+        for node in workflow.nodes:
+            if node.node_type != "condition":
+                continue
+            try:
+                parse_condition_config(node.config)
+            except WorkflowConditionError as exc:
+                errors.append(f"条件节点 {node.node_id} 配置无效：{exc}")
+
+            branch_edges = edges_by_source.get(node.node_id, [])
+            true_edges = [edge for edge in branch_edges if getattr(edge, "branch", None) == "true"]
+            false_edges = [edge for edge in branch_edges if getattr(edge, "branch", None) == "false"]
+            if len(true_edges) != 1:
+                errors.append(f"条件节点 {node.node_id} 必须且只能有一条 true 出边")
+            if len(false_edges) != 1:
+                errors.append(f"条件节点 {node.node_id} 必须且只能有一条 false 出边")
         return errors
 
     def _has_cycle(self, workflow: WorkflowDefinition) -> bool:
@@ -167,7 +211,7 @@ class WorkflowValidator:
     def _validate_executable_nodes(self, workflow: WorkflowDefinition) -> list[str]:
         """在发布前拦住当前执行器尚不支持或配置不完整的步骤。"""
 
-        supported_types = {"start", "end", "llm", "rag", "tool"}
+        supported_types = {"start", "end", "llm", "rag", "tool", "condition"}
         errors: list[str] = []
         for node in workflow.nodes:
             if node.node_type not in supported_types:

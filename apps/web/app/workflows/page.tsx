@@ -28,7 +28,11 @@ import { SelectInput, TextArea, TextInput } from "@/components/ui/Form";
 import AgentRequired from "@/components/ui/AgentRequired";
 import WorkspaceRequired from "@/components/ui/WorkspaceRequired";
 import WorkflowResponsiveLayout from "@/components/workflows/WorkflowResponsiveLayout";
-import WorkflowVariablePicker, { appendWorkflowReference } from "@/components/workflows/WorkflowVariablePicker";
+import WorkflowTemplateLibrary from "@/components/workflows/WorkflowTemplateLibrary";
+import WorkflowVariablePicker, {
+  appendWorkflowReference,
+  directUpstreamNodes,
+} from "@/components/workflows/WorkflowVariablePicker";
 import { NODE_PALETTE, type WorkflowPaletteItem } from "@/lib/constants";
 import { useKnowledgeStore } from "@/stores/knowledge";
 import { useRuntimeStore } from "@/stores/runtime";
@@ -71,6 +75,7 @@ export default function WorkflowsPage() {
   const selectedNodeId = useWorkflowStore((state) => state.selectedNodeId);
   const selectedEdgeId = useWorkflowStore((state) => state.selectedEdgeId);
   const workflowForm = useWorkflowStore((state) => state.workflowForm);
+  const executionLimits = useWorkflowStore((state) => state.executionLimits);
   const validation = useWorkflowStore((state) => state.validation);
   const onNodesChange = useWorkflowStore((state) => state.onNodesChange);
   const onEdgesChange = useWorkflowStore((state) => state.onEdgesChange);
@@ -84,6 +89,8 @@ export default function WorkflowsPage() {
   const setSelectedEdgeId = useWorkflowStore((state) => state.setSelectedEdgeId);
   const updateSelectedNodeConfig = useWorkflowStore((state) => state.updateSelectedNodeConfig);
   const setWorkflowForm = useWorkflowStore((state) => state.setWorkflowForm);
+  const setExecutionLimits = useWorkflowStore((state) => state.setExecutionLimits);
+  const applyWorkflowTemplate = useWorkflowStore((state) => state.applyWorkflowTemplate);
   const setSelectedWorkflowId = useWorkflowStore((state) => state.setSelectedWorkflowId);
   const createWorkflow = useWorkflowStore((state) => state.createWorkflow);
   const saveWorkflowDraft = useWorkflowStore((state) => state.saveWorkflowDraft);
@@ -256,7 +263,13 @@ export default function WorkflowsPage() {
             onEdgesChange={onEdgesChange}
             onNodeClick={handleNodeClick}
             onNodesChange={onNodesChange}
-            isValidConnection={(connection) => validateConnection(connection.source, connection.target).valid}
+            isValidConnection={(connection) => validateConnection(
+              connection.source,
+              connection.target,
+              connection.sourceHandle === "true" || connection.sourceHandle === "false"
+                ? connection.sourceHandle
+                : undefined
+            ).valid}
             panOnScroll
             selectionOnDrag
             snapGrid={[20, 20]}
@@ -275,6 +288,13 @@ export default function WorkflowsPage() {
       }
       inspector={
         <>
+        <WorkflowTemplateLibrary
+          onSelect={(template) => {
+            applyWorkflowTemplate(template);
+            showToast("success", `已载入“${template.name}”新草稿；请完成所需配置后再创建。`);
+          }}
+        />
+
         <section className="rounded-lg border border-[#dfe4ee] bg-white">
           <div className="border-b border-[#dfe4ee] px-4 py-3">
             <div className="flex items-center gap-2 text-sm font-semibold text-[#172033]">
@@ -290,6 +310,7 @@ export default function WorkflowsPage() {
             <TextInput label="Name" value={workflowForm.name} onChange={(name) => setWorkflowForm({ ...workflowForm, name })} />
             <TextArea label="Description" rows={2} value={workflowForm.description} onChange={(description) => setWorkflowForm({ ...workflowForm, description })} />
             <TextArea label="Run input" rows={3} value={workflowForm.input} onChange={(input) => setWorkflowForm({ ...workflowForm, input })} />
+            <ExecutionLimitsEditor limits={executionLimits} onChange={setExecutionLimits} />
             <PrimaryButton
               busy={busy}
               icon={<Plus size={15} />}
@@ -344,8 +365,8 @@ export default function WorkflowsPage() {
           edges={edges}
           node={selectedNode}
           nodes={nodes}
-          onAddConnection={(sourceId, targetId) => {
-            const result = connectNodes(sourceId, targetId);
+          onAddConnection={(sourceId, targetId, branch) => {
+            const result = connectNodes(sourceId, targetId, branch);
             showToast(result.valid ? "success" : "error", result.valid ? "Connection added" : result.message);
             return result.valid;
           }}
@@ -448,6 +469,72 @@ function ActionHint({ text }: { text: string }) {
   return <div className="rounded-lg bg-[#f8fafc] px-3 py-2 text-xs text-[#667085]">{text}</div>;
 }
 
+function executionLimitError(value: string, minimum: number, maximum: number): string | null {
+  const text = value.trim();
+  if (!text) return null;
+  if (!/^\d+$/.test(text)) return "Enter a whole number or leave this blank.";
+  const numeric = Number(text);
+  if (numeric < minimum || numeric > maximum) return `Enter a value from ${minimum} to ${maximum}.`;
+  return null;
+}
+
+function ExecutionLimitsEditor({
+  limits,
+  onChange,
+}: {
+  limits: { max_steps: string; max_llm_calls: string };
+  onChange: (limits: { max_steps: string; max_llm_calls: string }) => void;
+}) {
+  const stepError = executionLimitError(limits.max_steps, 1, 500);
+  const llmError = executionLimitError(limits.max_llm_calls, 0, 100);
+  return (
+    <section aria-label="Run protection" className="rounded-lg border border-[#dbeafe] bg-[#f8fbff] p-3">
+      <div className="flex items-start justify-between gap-3">
+        <div>
+          <div className="text-xs font-semibold text-[#175cd3]">Run protection</div>
+          <p className="mt-1 text-[11px] leading-4 text-[#475467]">
+            Optional hard stops for one workflow run. These limits control execution steps and LLM call count; they are not a money, billing, or token budget.
+          </p>
+        </div>
+        {(limits.max_steps || limits.max_llm_calls) ? (
+          <button
+            className="shrink-0 text-[11px] font-semibold text-[#175cd3] hover:text-[#1d4ed8]"
+            onClick={() => onChange({ max_steps: "", max_llm_calls: "" })}
+            type="button"
+          >
+            Clear
+          </button>
+        ) : null}
+      </div>
+      <div className="mt-3 grid grid-cols-2 gap-2">
+        <div>
+          <TextInput
+            label="Max steps (optional)"
+            onChange={(max_steps) => onChange({ ...limits, max_steps })}
+            placeholder="1–500"
+            type="number"
+            value={limits.max_steps}
+          />
+          {stepError ? <p role="alert" className="mt-1 text-[11px] text-[#b42318]">{stepError}</p> : null}
+        </div>
+        <div>
+          <TextInput
+            label="Max LLM calls (optional)"
+            onChange={(max_llm_calls) => onChange({ ...limits, max_llm_calls })}
+            placeholder="0–100"
+            type="number"
+            value={limits.max_llm_calls}
+          />
+          {llmError ? <p role="alert" className="mt-1 text-[11px] text-[#b42318]">{llmError}</p> : null}
+        </div>
+      </div>
+      <p className="mt-2 text-[11px] leading-4 text-[#667085]">
+        Leave either field blank to avoid setting that guard. A value of 0 for LLM calls permits no LLM nodes in the run.
+      </p>
+    </section>
+  );
+}
+
 function ActionButton({
   disabled = false,
   icon,
@@ -484,7 +571,7 @@ function NodeInspector({
   nodes,
   updateConfig,
 }: {
-  edges: Array<{ source: string; target: string }>;
+  edges: Array<{ source: string; target: string; sourceHandle?: string | null }>;
   knowledgeBases: Array<{ kb_id: string; name: string }>;
   mcpTools: Array<{ tool_id: string; name: string; risk_level: string }>;
   modelProviders: Array<{ provider_key: string; display_name: string; models: string[]; default_model: string }>;
@@ -643,12 +730,39 @@ function NodeInspector({
 
         {type === "condition" ? (
           <>
-            <TextInput label="Expression" value={stringValue(config.expression)} onChange={(expression) => updateConfig({ expression })} />
-            <div className="grid grid-cols-2 gap-2">
-              <TextInput label="True label" value={stringValue(config.true_label)} onChange={(true_label) => updateConfig({ true_label })} />
-              <TextInput label="False label" value={stringValue(config.false_label)} onChange={(false_label) => updateConfig({ false_label })} />
-            </div>
-            <SchemaNotice />
+            <ConditionReferencePicker
+              edges={edges}
+              node={node}
+              nodes={nodes}
+              onChange={(left) => updateConfig({ left })}
+              value={stringValue(config.left)}
+            />
+            <SelectInput
+              label="Check"
+              onChange={(operator) => updateConfig({
+                operator,
+                value: operator === "equals" ? config.value ?? "" : undefined,
+              })}
+              options={[
+                { label: "Exists", value: "exists" },
+                { label: "Equals", value: "equals" },
+              ]}
+              value={stringValue(config.operator) || "equals"}
+            />
+            {stringValue(config.operator) !== "exists" ? (
+              <ConditionScalarValue
+                onChange={(patch) => updateConfig(patch)}
+                value={config.value}
+                valueType={stringValue(config.value_type) || conditionValueType(config.value)}
+              />
+            ) : (
+              <ConfigurationHint>
+                Exists is true for non-empty strings, lists, objects, numbers, and booleans. It is false for null or an empty value.
+              </ConfigurationHint>
+            )}
+            <ConfigurationHint>
+              Condition only evaluates this selected data value. It never runs code or an arbitrary expression. Connect exactly one <strong>true</strong> and one <strong>false</strong> output branch.
+            </ConfigurationHint>
           </>
         ) : null}
 
@@ -701,6 +815,133 @@ function ConfigurationHint({ children }: { children: React.ReactNode }) {
   return (
     <div className="rounded-lg border border-[#dbeafe] bg-[#f8fbff] px-3 py-2 text-xs leading-5 text-[#475467]">
       {children}
+    </div>
+  );
+}
+
+function conditionValueType(value: unknown): "string" | "number" | "boolean" | "null" {
+  if (value === null) return "null";
+  if (typeof value === "number") return "number";
+  if (typeof value === "boolean") return "boolean";
+  return "string";
+}
+
+function ConditionReferencePicker({
+  edges,
+  node,
+  nodes,
+  onChange,
+  value,
+}: {
+  edges: Array<{ source: string; target: string; sourceHandle?: string | null }>;
+  node: { id: string; type?: string; data: CustomNodeData };
+  nodes: Array<{ id: string; type?: string; data: CustomNodeData }>;
+  onChange: (value: string) => void;
+  value: string;
+}) {
+  const upstream = directUpstreamNodes(nodes, edges, node.id);
+  const options = [
+    { label: "Run input: text", value: "{{input.text}}" },
+    { label: "Run input: status", value: "{{input.status}}" },
+    { label: "Run input: approved", value: "{{input.approved}}" },
+    ...upstream.flatMap((upstreamNode) => conditionUpstreamReferences(upstreamNode)),
+  ];
+  if (value && !options.some((option) => option.value === value)) {
+    options.unshift({ label: `Custom reference: ${value}`, value });
+  }
+
+  return (
+    <div className="space-y-2">
+      <SelectInput
+        label="Data reference"
+        onChange={onChange}
+        options={options}
+        value={value || "{{input.text}}"}
+      />
+      <TextInput
+        label="Custom input or upstream field"
+        onChange={onChange}
+        placeholder="{{input.customer_tier}} or {{upstream.classify.label}}"
+        value={value}
+      />
+      <p className="text-[11px] leading-4 text-[#667085]">
+        Choose a known run-input field or direct upstream output above. A custom reference must use the same <code>{"{{input.field}}"}</code> or <code>{"{{upstream.node.field}}"}</code> format.
+      </p>
+    </div>
+  );
+}
+
+function conditionUpstreamReferences(node: { id: string; type?: string; data: CustomNodeData }) {
+  const label = canvasNodeLabel(node);
+  const outputFields: Record<string, Array<{ field: string; label: string }>> = {
+    start: [{ field: "input", label: "input" }],
+    llm: [{ field: "text", label: "text" }],
+    rag: [{ field: "chunks", label: "chunks" }],
+    tool: [{ field: "status", label: "status" }],
+    condition: [{ field: "result", label: "result" }],
+  };
+  const fields = outputFields[String(node.type ?? "")] ?? [{ field: "result", label: "result" }];
+  return fields.map(({ field, label: fieldLabel }) => ({
+    label: `${label}: ${fieldLabel}`,
+    value: `{{upstream.${node.id}.${field}}}`,
+  }));
+}
+
+function ConditionScalarValue({
+  onChange,
+  value,
+  valueType,
+}: {
+  onChange: (patch: Record<string, unknown>) => void;
+  value: unknown;
+  valueType: "string" | "number" | "boolean" | "null" | string;
+}) {
+  const normalizedType = ["string", "number", "boolean", "null"].includes(valueType)
+    ? valueType as "string" | "number" | "boolean" | "null"
+    : conditionValueType(value);
+  const setType = (nextType: string) => {
+    const defaults: Record<string, string | number | boolean | null> = {
+      string: "",
+      number: 0,
+      boolean: false,
+      null: null,
+    };
+    onChange({ value_type: nextType, value: defaults[nextType] });
+  };
+
+  return (
+    <div className="space-y-2 rounded-lg border border-[#dfe4ee] bg-[#f8fafc] p-3">
+      <SelectInput
+        label="Expected value type"
+        onChange={setType}
+        options={[
+          { label: "Text", value: "string" },
+          { label: "Number", value: "number" },
+          { label: "Boolean", value: "boolean" },
+          { label: "Null", value: "null" },
+        ]}
+        value={normalizedType}
+      />
+      {normalizedType === "string" ? (
+        <TextInput label="Expected text" onChange={(nextValue) => onChange({ value: nextValue })} value={stringValue(value)} />
+      ) : null}
+      {normalizedType === "number" ? (
+        <TextInput
+          label="Expected number"
+          onChange={(nextValue) => onChange({ value: Number(nextValue || 0) })}
+          type="number"
+          value={stringValue(value)}
+        />
+      ) : null}
+      {normalizedType === "boolean" ? (
+        <SelectInput
+          label="Expected boolean"
+          onChange={(nextValue) => onChange({ value: nextValue === "true" })}
+          options={[{ label: "true", value: "true" }, { label: "false", value: "false" }]}
+          value={value === true ? "true" : "false"}
+        />
+      ) : null}
+      {normalizedType === "null" ? <p className="text-xs text-[#667085]">This branch matches only when the selected value is null.</p> : null}
     </div>
   );
 }
@@ -778,17 +1019,22 @@ function ConnectionInspector({
   selectedEdgeId,
   validateConnection,
 }: {
-  edges: Array<{ id: string; source: string; target: string }>;
+  edges: Array<{ id: string; source: string; target: string; sourceHandle?: string | null }>;
   node: { id: string; type?: string; data: CustomNodeData } | undefined;
   nodes: Array<{ id: string; type?: string; data: CustomNodeData }>;
-  onAddConnection: (sourceId: string, targetId: string) => boolean;
+  onAddConnection: (sourceId: string, targetId: string, branch?: "true" | "false") => boolean;
   onDeleteSelected: () => void;
   onSelectEdge: (id: string) => void;
   onSelectNode: (id: string) => void;
   selectedEdgeId: string;
-  validateConnection: (sourceId: string | null | undefined, targetId: string | null | undefined) => { valid: boolean; message: string };
+  validateConnection: (
+    sourceId: string | null | undefined,
+    targetId: string | null | undefined,
+    branch?: "true" | "false"
+  ) => { valid: boolean; message: string };
 }) {
   const [targetId, setTargetId] = useState("");
+  const [branch, setBranch] = useState<"true" | "false">("true");
   const selectedEdge = edges.find((edge) => edge.id === selectedEdgeId);
   const incoming = node ? edges.filter((edge) => edge.target === node.id) : [];
   const outgoing = node ? edges.filter((edge) => edge.source === node.id) : [];
@@ -798,11 +1044,12 @@ function ConnectionInspector({
         .map((candidate) => ({ label: `${canvasNodeLabel(candidate)} (${candidate.type ?? "node"})`, value: candidate.id }))
     : [];
   const connectionCheck = node && targetId
-    ? validateConnection(node.id, targetId)
+    ? validateConnection(node.id, targetId, node.type === "condition" ? branch : undefined)
     : { valid: false, message: "Choose a target step to add a connection" };
 
   useEffect(() => {
     setTargetId("");
+    setBranch("true");
   }, [node?.id]);
 
   return (
@@ -821,7 +1068,9 @@ function ConnectionInspector({
         {node ? (
           <>
             <div className="rounded-lg border border-[#dfe4ee] bg-[#f8fafc] px-3 py-2 text-xs leading-5 text-[#667085]">
-              <span className="font-semibold text-[#344054]">{canvasNodeLabel(node)}</span> receives the complete output of each incoming step and passes its own output to every outgoing step.
+              <span className="font-semibold text-[#344054]">{canvasNodeLabel(node)}</span>{node.type === "condition"
+                ? " receives its selected data input and routes to exactly one named true or false output."
+                : " receives the complete output of each incoming step and passes its own output to every outgoing step."}
             </div>
             <ConnectionList
               emptyText="This step has no incoming connection"
@@ -851,6 +1100,17 @@ function ConnectionInspector({
                   options={[{ label: "Choose a target step", value: "" }, ...targetOptions]}
                   value={targetId}
                 />
+                {node.type === "condition" ? (
+                  <SelectInput
+                    label="Condition output"
+                    onChange={(nextBranch) => setBranch(nextBranch as "true" | "false")}
+                    options={[
+                      { label: "true — condition matches", value: "true" },
+                      { label: "false — condition does not match", value: "false" },
+                    ]}
+                    value={branch}
+                  />
+                ) : null}
                 {targetId ? (
                   <div className={`text-xs ${connectionCheck.valid ? "text-[#027a48]" : "text-[#b42318]"}`}>
                     {connectionCheck.valid ? "Ready to connect. The downstream step will receive this step's output." : connectionCheck.message}
@@ -861,7 +1121,7 @@ function ConnectionInspector({
                   disabled={!connectionCheck.valid}
                   onClick={() => {
                     if (!node || !targetId) return;
-                    if (onAddConnection(node.id, targetId)) setTargetId("");
+                    if (onAddConnection(node.id, targetId, node.type === "condition" ? branch : undefined)) setTargetId("");
                   }}
                   type="button"
                 >
@@ -879,6 +1139,9 @@ function ConnectionInspector({
             <div className="text-xs font-semibold text-[#1d4ed8]">Selected connection</div>
             <div className="mt-1 text-xs text-[#344054]">
               {canvasNodeLabel(findCanvasNode(nodes, selectedEdge.source))} → {canvasNodeLabel(findCanvasNode(nodes, selectedEdge.target))}
+              {selectedEdge.sourceHandle === "true" || selectedEdge.sourceHandle === "false"
+                ? ` (${selectedEdge.sourceHandle})`
+                : ""}
             </div>
             <button
               className="mt-2 text-xs font-semibold text-[#b42318] hover:text-[#912018]"
@@ -911,7 +1174,7 @@ function ConnectionList({
   nodes: Array<{ id: string; type?: string; data: CustomNodeData }>;
   onSelectEdge: (id: string) => void;
   onSelectNode: (id: string) => void;
-  relatedEdges: Array<{ id: string; source: string; target: string }>;
+  relatedEdges: Array<{ id: string; source: string; target: string; sourceHandle?: string | null }>;
   selectedEdgeId: string;
   side: "source" | "target";
 }) {
@@ -934,6 +1197,9 @@ function ConnectionList({
               type="button"
             >
               {canvasNodeLabel(relatedNode)}
+              {side === "target" && (edge.sourceHandle === "true" || edge.sourceHandle === "false")
+                ? ` (${edge.sourceHandle})`
+                : ""}
             </button>
           );
         })}

@@ -9,6 +9,7 @@ from app.services.external_import import (
     ExternalImportError,
     discover_streamable_http_tools,
     fetch_github_skill,
+    invoke_streamable_http_tool,
     normalize_github_skill_url,
     validate_public_https_url,
 )
@@ -79,3 +80,59 @@ def test_streamable_mcp_discovery_imports_all_declared_tools(monkeypatch) -> Non
     tools = discover_streamable_http_tools("https://mcp.example.com/mcp", {"Authorization": "Bearer test"})
 
     assert [(tool.name, tool.description) for tool in tools] == [("search_docs", "Search the public docs")]
+
+
+def test_streamable_mcp_tool_call_reuses_initialized_session(monkeypatch) -> None:
+    monkeypatch.setattr(external_import.socket, "getaddrinfo", _public_dns)
+    calls: list[dict[str, object]] = []
+    responses = iter(
+        [
+            {"jsonrpc": "2.0", "id": 1, "result": {}, "_mcp_session_id": "session-1"},
+            {
+                "jsonrpc": "2.0",
+                "id": 2,
+                "result": {"content": [{"type": "text", "text": "found"}]},
+            },
+        ]
+    )
+
+    def fake_request(_endpoint, headers, **kwargs):
+        calls.append({"headers": dict(headers), **kwargs})
+        return next(responses)
+
+    monkeypatch.setattr(external_import, "_mcp_request", fake_request)
+
+    result = invoke_streamable_http_tool(
+        "https://mcp.example.com/mcp",
+        {"Authorization": "Bearer test"},
+        tool_name="search_docs",
+        arguments={"q": "AgentFlow"},
+    )
+
+    assert result["content"][0]["text"] == "found"
+    assert [call["method"] for call in calls] == ["initialize", "tools/call"]
+    assert calls[1]["headers"]["Mcp-Session-Id"] == "session-1"
+    assert calls[1]["params"] == {"name": "search_docs", "arguments": {"q": "AgentFlow"}}
+
+
+def test_streamable_mcp_tool_call_rejects_remote_is_error(monkeypatch) -> None:
+    monkeypatch.setattr(external_import.socket, "getaddrinfo", _public_dns)
+    responses = iter(
+        [
+            {"jsonrpc": "2.0", "id": 1, "result": {}},
+            {
+                "jsonrpc": "2.0",
+                "id": 2,
+                "result": {"isError": True, "content": [{"type": "text", "text": "denied"}]},
+            },
+        ]
+    )
+    monkeypatch.setattr(external_import, "_mcp_request", lambda *_args, **_kwargs: next(responses))
+
+    with pytest.raises(ExternalImportError, match="denied"):
+        invoke_streamable_http_tool(
+            "https://mcp.example.com/mcp",
+            {},
+            tool_name="delete_record",
+            arguments={"id": "record-1"},
+        )

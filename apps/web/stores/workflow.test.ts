@@ -5,6 +5,7 @@ const { apiRequestMock } = vi.hoisted(() => ({ apiRequestMock: vi.fn() }));
 vi.mock("@/lib/api", () => ({ apiRequest: apiRequestMock }));
 
 import { useWorkflowStore } from "@/stores/workflow";
+import { WORKFLOW_TEMPLATES } from "@/components/workflows/workflowTemplates";
 
 describe("workflow run requests", () => {
   beforeEach(() => {
@@ -137,5 +138,129 @@ describe("workflow run requests", () => {
       valid: false,
       message: "This connection would create a cycle",
     });
+  });
+
+  it("keeps named condition branches when adding and serializing canvas connections", () => {
+    useWorkflowStore.setState({
+      nodes: ["start", "check", "end"].map((id) => ({
+        id,
+        type: id === "check" ? "condition" : id,
+        position: { x: 0, y: 0 },
+        data: {
+          label: id,
+          config: id === "check"
+            ? { left: "{{input.status}}", operator: "equals", value: "approved", value_type: "string" }
+            : {},
+        },
+      })) as never,
+      edges: [{ id: "start-check", source: "start", target: "check" }],
+    });
+
+    expect(useWorkflowStore.getState().connectNodes("check", "end", "true")).toMatchObject({ valid: true });
+    expect(useWorkflowStore.getState().connectNodes("check", "end", "false")).toMatchObject({ valid: true });
+    expect(useWorkflowStore.getState().connectNodes("check", "end", "true")).toEqual({
+      valid: false,
+      message: "The true branch is already connected",
+    });
+
+    expect(useWorkflowStore.getState().getWorkflowDraft().edges).toEqual([
+      { source: "start", target: "check" },
+      { source: "check", target: "end", branch: "true" },
+      { source: "check", target: "end", branch: "false" },
+    ]);
+    expect(useWorkflowStore.getState().getWorkflowDraft().nodes[1].config).toEqual({
+      left: "{{input.status}}",
+      operator: "equals",
+      value: "approved",
+    });
+  });
+
+  it("serializes optional run protection as steps and LLM-call guards, including zero calls", () => {
+    useWorkflowStore.setState({ executionLimits: { max_steps: "12", max_llm_calls: "0" } });
+
+    expect(useWorkflowStore.getState().getWorkflowDraft().execution_limits).toEqual({
+      max_steps: 12,
+      max_llm_calls: 0,
+    });
+
+    useWorkflowStore.getState().setExecutionLimits({ max_steps: "", max_llm_calls: "" });
+    expect(useWorkflowStore.getState().getWorkflowDraft()).not.toHaveProperty("execution_limits");
+  });
+
+  it("loads and template-copies run protection without treating it as a billing policy", () => {
+    const template = WORKFLOW_TEMPLATES.find((item) => item.id === "content-polish");
+    if (!template) throw new Error("content template is missing");
+    const guardedTemplate = {
+      ...template,
+      definition: {
+        ...template.definition,
+        execution_limits: { max_steps: 30, max_llm_calls: 2 },
+      },
+    };
+
+    useWorkflowStore.getState().applyWorkflowTemplate(guardedTemplate);
+    expect(useWorkflowStore.getState().executionLimits).toEqual({ max_steps: "30", max_llm_calls: "2" });
+
+    useWorkflowStore.setState({
+      workflows: [{
+        workflow_id: "guarded-workflow",
+        agent_id: "agent-1",
+        name: "Guarded",
+        description: "",
+        draft_definition: {
+          version: "1.0",
+          nodes: [],
+          edges: [],
+          execution_limits: { max_steps: 8, max_llm_calls: 0 },
+        },
+        published_version_id: null,
+      }],
+    });
+    useWorkflowStore.getState().setSelectedWorkflowId("guarded-workflow");
+    expect(useWorkflowStore.getState().executionLimits).toEqual({ max_steps: "8", max_llm_calls: "0" });
+  });
+
+  it("blocks invalid run protection before an unsafe draft can be sent", () => {
+    useWorkflowStore.setState({ executionLimits: { max_steps: "501", max_llm_calls: "-1" } });
+
+    expect(() => useWorkflowStore.getState().getWorkflowDraft()).toThrow("max_steps must be between 1 and 500");
+  });
+
+  it("loads a template as a new isolated draft instead of overwriting the selected workflow", () => {
+    const template = WORKFLOW_TEMPLATES.find((item) => item.id === "knowledge-answer");
+    if (!template) throw new Error("knowledge template is missing");
+
+    useWorkflowStore.setState({
+      selectedWorkflowId: "workflow-1",
+      selectedRunId: "run-old",
+      nodeRuns: [{ node_run_id: "node-old" } as never],
+      workflowForm: { name: "Existing workflow", description: "Existing", input: "keep this input" },
+    });
+
+    useWorkflowStore.getState().applyWorkflowTemplate(template);
+
+    const state = useWorkflowStore.getState();
+    expect(state.selectedWorkflowId).toBe("");
+    expect(state.selectedRunId).toBe("");
+    expect(state.nodeRuns).toEqual([]);
+    expect(state.workflowForm).toEqual({
+      name: "知识库问答",
+      description: template.description,
+      input: "keep this input",
+    });
+    expect(state.nodes.map((node) => node.id)).toEqual([
+      "start",
+      "retrieve_knowledge",
+      "grounded_answer",
+      "end",
+    ]);
+    expect(state.edges.map((edge) => [edge.source, edge.target])).toEqual([
+      ["start", "retrieve_knowledge"],
+      ["retrieve_knowledge", "grounded_answer"],
+      ["grounded_answer", "end"],
+    ]);
+
+    state.updateSelectedNodeConfig({ kb_id: "kb-new" });
+    expect(template.definition.nodes.find((node) => node.id === "retrieve_knowledge")?.config.kb_id).toBe("");
   });
 });
