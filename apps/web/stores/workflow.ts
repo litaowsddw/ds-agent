@@ -59,6 +59,8 @@ interface WorkflowStore {
   saveWorkflowDraft: (actorUserId: string) => Promise<void>;
   validateWorkflow: (actorUserId: string) => Promise<WorkflowValidationResult>;
   publishWorkflow: (actorUserId: string) => Promise<void>;
+  refreshVersions: (workflowIds: string[], actorUserId: string) => Promise<void>;
+  restoreVersionToDraft: (actorUserId: string, versionId: string) => Promise<void>;
   runWorkflow: (actorUserId: string, input: string) => Promise<void>;
   loadNodeRuns: (runId: string, actorUserId: string) => Promise<void>;
   clearRunSelection: () => void;
@@ -520,6 +522,50 @@ export const useWorkflowStore = create<WorkflowStore>((set, get) => ({
           ? { ...item, published_version_id: version.version_id }
           : item
       ),
+    }));
+  },
+
+  refreshVersions: async (workflowIds, actorUserId) => {
+    const uniqueWorkflowIds = [...new Set(workflowIds.filter(Boolean))];
+    if (uniqueWorkflowIds.length === 0) {
+      set({ versions: [] });
+      return;
+    }
+    const versionGroups = await Promise.all(
+      uniqueWorkflowIds.map((workflowId) =>
+        apiRequest<WorkflowVersion[]>(
+          `/workflows/${workflowId}/versions?actor_user_id=${encodeURIComponent(actorUserId)}`
+        )
+      )
+    );
+    set({
+      versions: versionGroups
+        .flat()
+        .sort((left, right) => right.created_at.localeCompare(left.created_at)),
+    });
+  },
+
+  restoreVersionToDraft: async (actorUserId, versionId) => {
+    const version = get().versions.find((item) => item.version_id === versionId);
+    if (!version) throw new Error("The selected published version is no longer available");
+    const workflow = await apiRequest<WorkflowItem>(
+      `/workflows/${version.workflow_id}/versions/${versionId}/restore-draft`,
+      {
+        method: "POST",
+        body: { actor_user_id: actorUserId },
+      }
+    );
+    const nodes = hydrateNodes(workflow.draft_definition);
+    set((state) => ({
+      workflows: state.workflows.map((item) =>
+        item.workflow_id === workflow.workflow_id ? workflow : item
+      ),
+      selectedWorkflowId: workflow.workflow_id,
+      nodes,
+      edges: hydrateEdges(workflow.draft_definition),
+      selectedNodeId: nodes.find((node) => node.type !== "start")?.id ?? nodes[0]?.id ?? "",
+      selectedEdgeId: "",
+      validation: null,
     }));
   },
 

@@ -123,6 +123,7 @@ class WorkflowVersionDBService(BaseDBService[WorkflowVersionModel]):
         org_id: str,
         version_number: int,
         definition: dict,
+        release_note: str = "",
         created_by: str = "",
     ) -> WorkflowVersionModel:
         """创建发布版本（不可变）。"""
@@ -131,6 +132,7 @@ class WorkflowVersionDBService(BaseDBService[WorkflowVersionModel]):
             workflow_id=workflow_id,
             version_number=version_number,
             definition=json.dumps(definition, ensure_ascii=False),
+            release_note=release_note.strip(),
             created_by=created_by,
         )
         session.add(version)
@@ -166,6 +168,23 @@ class WorkflowVersionDBService(BaseDBService[WorkflowVersionModel]):
         """获取版本定义（解析 JSON）。"""
         version = await self.get_by_id_required(session, version_id, "version_id")
         return json.loads(version.definition)
+
+    async def get_workflow_version_required(
+        self,
+        session: AsyncSession,
+        workflow_id: str,
+        version_id: str,
+    ) -> WorkflowVersionModel:
+        """Return a version only when it belongs to the requested workflow.
+
+        Keeping this lookup scoped prevents a caller from restoring a snapshot
+        that belongs to another workflow in the same organization.
+        """
+
+        version = await self.get_by_id_required(session, version_id, "version_id")
+        if version.workflow_id != workflow_id:
+            raise ValueError("该发布版本不属于当前 Workflow")
+        return version
 
 
 class WorkflowRunDBService(BaseDBService[WorkflowRunModel]):

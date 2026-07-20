@@ -14,6 +14,8 @@ from typing import Annotated, Any, TypedDict
 
 from langgraph.graph import END, START, StateGraph
 
+from packages.workflow.templates import resolve_template_value
+
 NodeCallResult = dict[str, Any] | Awaitable[dict[str, Any]]
 
 
@@ -317,7 +319,8 @@ class WorkflowExecutor:
 
         started_at = perf_counter()
         try:
-            output_data = self._resolve_sync_output(node_type, config, node_input)
+            resolved_config = self._resolve_node_config(node_id, config, node_input)
+            output_data = self._resolve_sync_output(node_type, resolved_config, node_input)
             return self._succeeded_node(node_id, node_type, node_input, output_data, started_at)
         except Exception as exc:
             return self._failed_node(node_id, node_type, node_input, exc, started_at)
@@ -333,7 +336,8 @@ class WorkflowExecutor:
 
         started_at = perf_counter()
         try:
-            output_data = await self._resolve_async_output(node_type, config, node_input)
+            resolved_config = self._resolve_node_config(node_id, config, node_input)
+            output_data = await self._resolve_async_output(node_type, resolved_config, node_input)
             return self._succeeded_node(node_id, node_type, node_input, output_data, started_at)
         except Exception as exc:
             return self._failed_node(node_id, node_type, node_input, exc, started_at)
@@ -395,7 +399,41 @@ class WorkflowExecutor:
             upstream_node_id: context_by_node.get(upstream_node_id, {})
             for upstream_node_id in upstream_node_ids
         }
-        return {"workflow_input": input_data, "upstream": upstream}
+        # ``variables`` is the data contract exposed to templates in node
+        # config.  Node IDs form namespaces for their output fields, while
+        # ``input`` is a concise alias for the workflow invocation payload.
+        # The executor never exposes Python objects or evaluators here.
+        variables = {
+            **context_by_node,
+            "input": input_data,
+            "workflow_input": input_data,
+            "upstream": upstream,
+        }
+        return {
+            "workflow_input": input_data,
+            "upstream": upstream,
+            "variables": variables,
+        }
+
+    def _resolve_node_config(
+        self,
+        node_id: str,
+        config: dict[str, Any],
+        node_input: dict[str, Any],
+    ) -> dict[str, Any]:
+        """Resolve only the data-only template language before node execution."""
+
+        variables = node_input.get("variables")
+        if not isinstance(variables, dict):
+            raise ValueError(f"节点 {node_id} 缺少模板变量上下文")
+        resolved = resolve_template_value(
+            config,
+            variables=variables,
+            location=f"节点 {node_id} 的 config",
+        )
+        if not isinstance(resolved, dict):  # ``config`` is a validated object.
+            raise ValueError(f"节点 {node_id} 的 config 模板解析后必须是对象")
+        return resolved
 
     def _merge_node_result(
         self,

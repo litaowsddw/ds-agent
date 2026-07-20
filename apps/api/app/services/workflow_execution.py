@@ -221,7 +221,11 @@ class WorkflowExecutionService:
         kb = await knowledge_base_db.get_by_id_required(session, kb_id, "kb_id")
         if kb.org_id != org_id:
             raise ValueError("RAG 节点不能访问其他组织的知识库")
-        query = _render_template(template=str(config.get("query_template") or ""), node_input=node_input)
+        # WorkflowExecutor resolves every config template before callbacks are
+        # invoked.  Do not render here again: user input can legitimately
+        # contain literal ``{{...}}`` text and must not be treated as a second
+        # template pass.
+        query = str(config.get("query_template") or "").strip()
         if not query:
             query = _stringify_for_query(node_input.get("workflow_input", {}))
         limit = int(config.get("limit") or 5)
@@ -307,18 +311,6 @@ class WorkflowExecutionService:
             error_message=executed_node.error_message,
             elapsed_ms=executed_node.elapsed_ms,
         )
-
-
-def _render_template(template: str, node_input: dict[str, Any]) -> str:
-    if not template.strip():
-        return ""
-    workflow_input = node_input.get("workflow_input", {})
-    upstream = node_input.get("upstream", {})
-    rendered = template
-    rendered = rendered.replace("{{input}}", _stringify_for_query(workflow_input))
-    rendered = rendered.replace("{{workflow_input}}", _stringify_for_query(workflow_input))
-    rendered = rendered.replace("{{upstream}}", _stringify_for_query(upstream))
-    return rendered.strip()
 
 
 def _stringify_for_query(value: Any) -> str:

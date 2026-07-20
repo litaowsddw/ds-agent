@@ -34,6 +34,8 @@ class WorkflowVersionModel(Base):
     workflow_id: Mapped[str] = mapped_column(String(64), ForeignKey("workflows.workflow_id"), nullable=False, index=True)
     version_number: Mapped[int] = mapped_column(Integer, nullable=False)
     definition: Mapped[str] = mapped_column(Text, nullable=False)  # JSON - 不可变快照
+    # 发布说明与快照一起写入，供团队审计、排障与回滚决策使用。
+    release_note: Mapped[str] = mapped_column(String(500), default="")
     created_by: Mapped[str] = mapped_column(String(64), nullable=False)
     created_at: Mapped[datetime] = mapped_column(DateTime, default=datetime.utcnow)
 

@@ -12,6 +12,7 @@ from app.models.workflow import WorkflowModel, WorkflowVersionModel
 from app.schemas.workflow import (
     WorkflowCreateRequest,
     WorkflowPublishRequest,
+    WorkflowRestoreDraftRequest,
     WorkflowResponse,
     WorkflowUpdateDraftRequest,
     WorkflowValidateRequest,
@@ -229,6 +230,7 @@ async def publish_workflow(
             org_id=workflow.org_id,
             version_number=version_number,
             definition=draft,
+            release_note=request.release_note,
             created_by=request.actor_user_id,
         )
 
@@ -239,6 +241,39 @@ async def publish_workflow(
     except ValueError as exc:
         await session.rollback()
         raise HTTPException(status_code=400, detail=str(exc)) from exc
+
+
+@router.post("/{workflow_id}/versions/{version_id}/restore-draft", response_model=WorkflowResponse)
+async def restore_version_to_draft(
+    workflow_id: str,
+    version_id: str,
+    request: WorkflowRestoreDraftRequest,
+    session: AsyncSession = Depends(get_db_session),
+) -> WorkflowResponse:
+    """Copy an immutable published snapshot into the editable draft.
+
+    The currently live ``published_version_id`` is deliberately left untouched:
+    a restore is a safe preparation step that must pass preflight and be
+    explicitly published before production traffic changes.
+    """
+
+    try:
+        workflow = await workflow_db.get_workflow_required(session, workflow_id)
+        await membership_db.assert_org_access(
+            session, user_id=request.actor_user_id, org_id=workflow.org_id
+        )
+        version = await workflow_version_db.get_workflow_version_required(
+            session, workflow_id, version_id
+        )
+        workflow = await workflow_db.update_draft(
+            session, workflow_id, json.loads(version.definition)
+        )
+        await session.commit()
+    except ValueError as exc:
+        await session.rollback()
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
+
+    return _to_workflow_response(workflow)
 
 
 @router.get("/{workflow_id}/versions", response_model=list[WorkflowVersionResponse])
@@ -282,5 +317,7 @@ def _to_version_response(version: WorkflowVersionModel) -> WorkflowVersionRespon
         org_id="",
         version_number=version.version_number,
         definition=json.loads(version.definition),
+        release_note=version.release_note or "",
         created_by=version.created_by,
+        created_at=version.created_at,
     )

@@ -87,6 +87,7 @@ async def init_db() -> None:
         await conn.run_sync(_ensure_session_message_meta_info_column)
         await conn.run_sync(_ensure_mcp_credentials_column)
         await conn.run_sync(_ensure_agent_context_token_limit_column)
+        await conn.run_sync(_ensure_workflow_release_note_column)
 
 
 def _ensure_session_message_meta_info_column(connection) -> None:
@@ -120,3 +121,14 @@ def _ensure_agent_context_token_limit_column(connection) -> None:
     columns = {column["name"] for column in inspector.get_columns("agents")}
     if "context_token_limit" not in columns:
         connection.execute(text("ALTER TABLE agents ADD COLUMN context_token_limit INTEGER"))
+
+
+def _ensure_workflow_release_note_column(connection) -> None:
+    """Backfill immutable-version release notes for create_all-managed deployments."""
+    inspector = inspect(connection)
+    if "workflow_versions" not in inspector.get_table_names():
+        return
+    columns = {column["name"] for column in inspector.get_columns("workflow_versions")}
+    if "release_note" not in columns:
+        connection.execute(text("ALTER TABLE workflow_versions ADD COLUMN release_note VARCHAR(500)"))
+        connection.execute(text("UPDATE workflow_versions SET release_note = '' WHERE release_note IS NULL"))

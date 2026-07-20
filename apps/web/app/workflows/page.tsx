@@ -28,6 +28,7 @@ import { SelectInput, TextArea, TextInput } from "@/components/ui/Form";
 import AgentRequired from "@/components/ui/AgentRequired";
 import WorkspaceRequired from "@/components/ui/WorkspaceRequired";
 import WorkflowResponsiveLayout from "@/components/workflows/WorkflowResponsiveLayout";
+import WorkflowVariablePicker, { appendWorkflowReference } from "@/components/workflows/WorkflowVariablePicker";
 import { NODE_PALETTE, type WorkflowPaletteItem } from "@/lib/constants";
 import { useKnowledgeStore } from "@/stores/knowledge";
 import { useRuntimeStore } from "@/stores/runtime";
@@ -330,10 +331,12 @@ export default function WorkflowsPage() {
         </section>
 
         <NodeInspector
+          edges={edges}
           knowledgeBases={knowledgeBases}
           mcpTools={mcpTools}
           modelProviders={modelProviders}
           node={selectedNode}
+          nodes={nodes}
           updateConfig={updateSelectedNodeConfig}
         />
 
@@ -473,16 +476,20 @@ function ActionButton({
 }
 
 function NodeInspector({
+  edges,
   knowledgeBases,
   mcpTools,
   modelProviders,
   node,
+  nodes,
   updateConfig,
 }: {
+  edges: Array<{ source: string; target: string }>;
   knowledgeBases: Array<{ kb_id: string; name: string }>;
   mcpTools: Array<{ tool_id: string; name: string; risk_level: string }>;
   modelProviders: Array<{ provider_key: string; display_name: string; models: string[]; default_model: string }>;
   node: { id: string; type?: string; data: CustomNodeData } | undefined;
+  nodes: Array<{ id: string; type?: string; data: CustomNodeData }>;
   updateConfig: (patch: Record<string, unknown>) => void;
 }) {
   if (!node) {
@@ -564,10 +571,18 @@ function NodeInspector({
             />
             <TextArea label="System prompt" rows={2} value={stringValue(config.system_prompt)} onChange={(system_prompt) => updateConfig({ system_prompt })} />
             <TextArea label="Prompt" rows={3} value={stringValue(config.prompt)} onChange={(prompt) => updateConfig({ prompt })} />
+            <ConfigurationHint>
+              The run input and direct predecessor outputs are supplied to the model as separate runtime context. Do not rely on curly-brace text interpolation in an LLM prompt yet.
+            </ConfigurationHint>
             <div className="grid grid-cols-2 gap-2">
               <TextInput label="Temperature" value={numberValue(config.temperature, 0)} onChange={(temperature) => updateConfig({ temperature: Number(temperature || 0) })} />
               <TextInput label="Max tokens" value={numberValue(config.max_tokens, 512)} onChange={(max_tokens) => updateConfig({ max_tokens: Number(max_tokens || 0) })} />
             </div>
+            <OutputVariableName
+              nodeId={node.id}
+              onChange={(output_variable) => updateConfig({ output_variable })}
+              value={stringValue(config.output_variable)}
+            />
           </>
         ) : null}
 
@@ -580,7 +595,20 @@ function NodeInspector({
               value={stringValue(config.kb_id)}
             />
             <TextInput label="Query template" value={stringValue(config.query_template)} onChange={(query_template) => updateConfig({ query_template })} />
+            <WorkflowVariablePicker
+              edges={edges}
+              nodeId={node.id}
+              nodes={nodes}
+              onInsert={(reference) => updateConfig({
+                query_template: appendWorkflowReference(stringValue(config.query_template), reference),
+              })}
+            />
             <TextInput label="Limit" value={numberValue(config.limit, 5)} onChange={(limit) => updateConfig({ limit: Number(limit || 5) })} />
+            <OutputVariableName
+              nodeId={node.id}
+              onChange={(output_variable) => updateConfig({ output_variable })}
+              value={stringValue(config.output_variable)}
+            />
           </>
         ) : null}
 
@@ -601,7 +629,15 @@ function NodeInspector({
               options={["low", "medium", "high", "critical"].map((item) => ({ label: item, value: item }))}
               value={stringValue(config.risk_level) || "low"}
             />
-            <TextArea label="Arguments JSON" rows={5} value={stringValue(config.arguments)} onChange={(argumentsValue) => updateConfig({ arguments: argumentsValue })} />
+            <ToolArgumentsInput
+              onChange={(argumentsValue) => updateConfig({ arguments: argumentsValue })}
+              value={stringValue(config.arguments)}
+            />
+            <OutputVariableName
+              nodeId={node.id}
+              onChange={(output_variable) => updateConfig({ output_variable })}
+              value={stringValue(config.output_variable)}
+            />
           </>
         ) : null}
 
@@ -659,6 +695,76 @@ function NodeInspector({
       </div>
     </section>
   );
+}
+
+function ConfigurationHint({ children }: { children: React.ReactNode }) {
+  return (
+    <div className="rounded-lg border border-[#dbeafe] bg-[#f8fbff] px-3 py-2 text-xs leading-5 text-[#475467]">
+      {children}
+    </div>
+  );
+}
+
+function OutputVariableName({
+  nodeId,
+  onChange,
+  value,
+}: {
+  nodeId: string;
+  onChange: (value: string) => void;
+  value: string;
+}) {
+  const isValid = !value.trim() || /^[A-Za-z_][A-Za-z0-9_]*$/.test(value.trim());
+  return (
+    <div className="space-y-1.5 rounded-lg border border-[#dfe4ee] bg-[#f8fafc] p-3">
+      <TextInput
+        label="Output variable name"
+        onChange={onChange}
+        placeholder="e.g. customer_summary"
+        value={value}
+      />
+      {!isValid ? (
+        <p role="alert" className="text-xs text-[#b42318]">
+          Use letters, numbers, and underscores; start with a letter or underscore.
+        </p>
+      ) : null}
+      <p className="text-[11px] leading-4 text-[#667085]">
+        This alias is saved with the workflow to document the intended output. The current executor keeps the actual output under immutable node key <code className="rounded bg-white px-1">upstream.{nodeId}</code>; it does not remap runtime fields yet.
+      </p>
+    </div>
+  );
+}
+
+function ToolArgumentsInput({
+  onChange,
+  value,
+}: {
+  onChange: (value: string) => void;
+  value: string;
+}) {
+  const error = jsonObjectError(value);
+  return (
+    <div className="space-y-1.5">
+      <TextArea label="Arguments (JSON object)" rows={5} value={value} onChange={onChange} />
+      {error ? <p role="alert" className="text-xs text-[#b42318]">{error}</p> : null}
+      <p className="text-[11px] leading-4 text-[#667085]">
+        Parameters are saved as a JSON object and validated again before publishing. Use {"{{input.field}}"} or {"{{node_id.field}}"} to pass runtime values; a reference on its own preserves JSON types.
+      </p>
+    </div>
+  );
+}
+
+function jsonObjectError(value: string): string | null {
+  if (!value.trim()) return null;
+  try {
+    const parsed: unknown = JSON.parse(value);
+    if (parsed === null || Array.isArray(parsed) || typeof parsed !== "object") {
+      return "Tool arguments must be a JSON object, for example {\"query\": \"refund policy\"}.";
+    }
+    return null;
+  } catch {
+    return "Enter valid JSON before publishing this tool step.";
+  }
 }
 
 function ConnectionInspector({

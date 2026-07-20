@@ -1,6 +1,13 @@
 """Workflow DAG 校验器。"""
 
 from packages.workflow.dsl import WorkflowDefinition
+from packages.workflow.templates import (
+    WorkflowTemplateError,
+    collect_template_references,
+    is_special_root,
+)
+
+_RESERVED_TEMPLATE_NAMESPACES = {"input", "workflow_input", "upstream"}
 
 
 class WorkflowValidator:
@@ -27,6 +34,10 @@ class WorkflowValidator:
 
         if duplicated_node_ids:
             errors.append(f"存在重复节点 ID：{duplicated_node_ids}")
+
+        reserved_node_ids = sorted(set(node_ids) & _RESERVED_TEMPLATE_NAMESPACES)
+        if reserved_node_ids:
+            errors.append(f"节点 ID 不能使用保留模板命名空间：{reserved_node_ids}")
 
         start_nodes = [node for node in workflow.nodes if node.node_type == "start"]
         end_nodes = [node for node in workflow.nodes if node.node_type == "end"]
@@ -57,6 +68,7 @@ class WorkflowValidator:
             )
 
         errors.extend(self._validate_executable_nodes(workflow))
+        errors.extend(self._validate_template_references(workflow))
 
         return {"valid": not errors, "errors": errors}
 
@@ -179,3 +191,56 @@ class WorkflowValidator:
                 if not isinstance(arguments, dict):
                     errors.append(f"工具节点 {node.node_id} 的参数必须是 JSON 对象")
         return errors
+
+    def _validate_template_references(self, workflow: WorkflowDefinition) -> list[str]:
+        """Reject malformed, missing, and non-upstream template references.
+
+        Field existence cannot always be known before a run (LLM and Tool
+        outputs are dynamic), so field-level verification remains strict at
+        execution time.  Publishing still catches the expensive authoring
+        mistakes: invalid syntax, unknown node IDs, self references, and
+        references to a node outside the current node's upstream lineage.
+        """
+
+        node_ids = {node.node_id for node in workflow.nodes}
+        reverse_adjacency: dict[str, list[str]] = {node.node_id: [] for node in workflow.nodes}
+        for edge in workflow.edges:
+            if edge.source in node_ids and edge.target in node_ids:
+                reverse_adjacency[edge.target].append(edge.source)
+
+        errors: list[str] = []
+        for node in workflow.nodes:
+            upstream_node_ids = self._reachable_nodes(node.node_id, reverse_adjacency)
+            upstream_node_ids.discard(node.node_id)
+            for location, template in self._template_strings(node.config, "config"):
+                try:
+                    references = collect_template_references(template)
+                except WorkflowTemplateError as exc:
+                    errors.append(f"节点 {node.node_id} 的 {location}：{exc}")
+                    continue
+                for reference in references:
+                    if is_special_root(reference.root):
+                        continue
+                    if reference.root not in node_ids:
+                        errors.append(
+                            f"节点 {node.node_id} 的 {location} 引用了不存在的节点输出："
+                            f"{{{{{reference.expression}}}}}"
+                        )
+                    elif reference.root not in upstream_node_ids:
+                        errors.append(
+                            f"节点 {node.node_id} 的 {location} 只能引用已连接上游节点的输出："
+                            f"{{{{{reference.expression}}}}}"
+                        )
+        return errors
+
+    def _template_strings(self, value: object, location: str):
+        """Yield strings from a config object with a stable human-readable path."""
+
+        if isinstance(value, str):
+            yield location, value
+        elif isinstance(value, dict):
+            for key, item in value.items():
+                yield from self._template_strings(item, f"{location}.{key}")
+        elif isinstance(value, list):
+            for index, item in enumerate(value):
+                yield from self._template_strings(item, f"{location}[{index}]")

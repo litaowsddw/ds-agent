@@ -11,10 +11,13 @@ export interface WorkflowItem {
 
 export interface WorkflowVersion {
   version_id: string;
-  workflow_id?: string;
-  org_id?: string;
+  workflow_id: string;
+  org_id: string;
   version_number: number;
-  definition?: WorkflowDefinition;
+  definition: WorkflowDefinition;
+  release_note: string;
+  created_by: string;
+  created_at: string;
 }
 
 export interface WorkflowValidationResult {

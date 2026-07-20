@@ -1,5 +1,6 @@
 """Workflow API Schema。"""
 
+from datetime import datetime
 from pydantic import BaseModel, Field
 
 
@@ -22,6 +23,17 @@ class WorkflowUpdateDraftRequest(BaseModel):
 
 class WorkflowPublishRequest(BaseModel):
     """发布 Workflow 请求。"""
+
+    actor_user_id: str = Field(description="操作者用户 ID")
+    release_note: str = Field(
+        default="",
+        max_length=500,
+        description="本次发布的变更说明，会与不可变版本快照一起保存",
+    )
+
+
+class WorkflowRestoreDraftRequest(BaseModel):
+    """从已发布版本恢复一份可编辑草稿。"""
 
     actor_user_id: str = Field(description="操作者用户 ID")
 
@@ -61,4 +73,6 @@ class WorkflowVersionResponse(BaseModel):
     org_id: str
     version_number: int
     definition: dict[str, object]
+    release_note: str
     created_by: str
+    created_at: datetime

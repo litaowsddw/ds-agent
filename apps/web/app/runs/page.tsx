@@ -5,8 +5,8 @@
 
 "use client";
 
-import { useCallback, useEffect, useMemo } from "react";
-import { Activity, CheckCircle2, FileText, GitBranch, RefreshCw } from "lucide-react";
+import { useCallback, useEffect, useMemo, useState } from "react";
+import { Activity, CheckCircle2, FileText, GitBranch, RefreshCw, RotateCcw } from "lucide-react";
 import { useWorkspaceStore } from "@/stores/workspace";
 import { useWorkflowStore } from "@/stores/workflow";
 import Panel from "@/components/ui/Panel";
@@ -31,6 +31,9 @@ export default function RunsPage() {
   const clearRunSelection = useWorkflowStore((s) => s.clearRunSelection);
   const refreshRuns = useWorkflowStore((s) => s.refreshRuns);
   const refreshWorkflows = useWorkflowStore((s) => s.refreshWorkflows);
+  const refreshVersions = useWorkflowStore((s) => s.refreshVersions);
+  const restoreVersionToDraft = useWorkflowStore((s) => s.restoreVersionToDraft);
+  const [restoreMessage, setRestoreMessage] = useState("");
 
   const selectedAgent = agents.find((agent) => agent.agent_id === selectedAgentId) ?? null;
   const agentRuns = useMemo(
@@ -43,6 +46,14 @@ export default function RunsPage() {
     () => Object.fromEntries(workflows.map((workflow) => [workflow.workflow_id, workflow.name])),
     [workflows]
   );
+  const agentWorkflowIds = useMemo(
+    () => workflows.filter((workflow) => workflow.agent_id === selectedAgentId).map((workflow) => workflow.workflow_id),
+    [selectedAgentId, workflows]
+  );
+  const agentVersions = useMemo(
+    () => versions.filter((version) => agentWorkflowIds.includes(version.workflow_id)),
+    [agentWorkflowIds, versions]
+  );
 
   useEffect(() => {
     if (workspace && selectedAgentId) {
@@ -50,6 +61,11 @@ export default function RunsPage() {
       void refreshWorkflows(workspace.orgId, workspace.userId, selectedAgentId);
     }
   }, [workspace, selectedAgentId, refreshRuns, refreshWorkflows]);
+
+  useEffect(() => {
+    if (!workspace || agentWorkflowIds.length === 0) return;
+    void refreshVersions(agentWorkflowIds, workspace.userId).catch(() => undefined);
+  }, [agentWorkflowIds, refreshVersions, workspace]);
 
   useEffect(() => {
     if (!selectedRunId) return;
@@ -64,6 +80,20 @@ export default function RunsPage() {
     await refreshRuns(workspace.orgId, workspace.userId);
     await loadNodeRuns(selectedRunId, workspace.userId);
   }, [loadNodeRuns, refreshRuns, selectedRunId, workspace]);
+
+  const restoreDraft = useCallback(async (versionId: string, versionNumber: number) => {
+    if (!workspace) return;
+    const shouldRestore = window.confirm(
+      `Restore v${versionNumber} as the editable draft? The currently published version will keep serving traffic until you publish again.`
+    );
+    if (!shouldRestore) return;
+    try {
+      await restoreVersionToDraft(workspace.userId, versionId);
+      setRestoreMessage(`v${versionNumber} has been restored as a draft. Review and publish it when ready.`);
+    } catch (error) {
+      setRestoreMessage(error instanceof Error ? error.message : "Unable to restore this version");
+    }
+  }, [restoreVersionToDraft, workspace]);
 
   useEffect(() => {
     if (!workspace || !selectedRunId || !selectedRun) return;
@@ -153,14 +183,40 @@ export default function RunsPage() {
           </Panel>
 
           <Panel title="发布版本" icon={<FileText size={17} />}>
-            {versions.length > 0 ? (
+            <p className="mb-3 text-xs text-[#667085]">
+              每个发布版本都是不可变快照。恢复只会更新草稿，不会改变当前线上版本。
+            </p>
+            {restoreMessage ? (
+              <p aria-live="polite" className="mb-3 rounded-md bg-[#eff8ff] px-3 py-2 text-xs text-[#175cd3]">
+                {restoreMessage}
+              </p>
+            ) : null}
+            {agentVersions.length > 0 ? (
               <div className="space-y-2">
-                {versions.map((version) => (
+                {agentVersions.map((version) => (
                   <div
                     key={version.version_id}
-                    className="rounded-lg border border-[#dfe4ee] bg-[#f8fafc] px-3 py-2 text-sm text-[#344054]"
+                    className="rounded-lg border border-[#dfe4ee] bg-[#f8fafc] px-3 py-3 text-sm text-[#344054]"
                   >
-                    v{version.version_number} · {version.version_id}
+                    <div className="flex flex-wrap items-center justify-between gap-2">
+                      <div>
+                        <div className="font-medium">v{version.version_number} · {workflowLabels[version.workflow_id] ?? version.workflow_id}</div>
+                        <div className="mt-1 text-xs text-[#667085]">
+                          {new Date(version.created_at).toLocaleString()} · {version.created_by}
+                        </div>
+                      </div>
+                      <button
+                        className="inline-flex items-center gap-1 rounded-md border border-[#d0d5dd] bg-white px-2.5 py-1.5 text-xs font-medium text-[#344054] hover:bg-[#f9fafb]"
+                        onClick={() => void restoreDraft(version.version_id, version.version_number)}
+                        type="button"
+                      >
+                        <RotateCcw aria-hidden="true" size={14} />
+                        恢复为草稿
+                      </button>
+                    </div>
+                    <p className="mt-2 text-xs text-[#475467]">
+                      {version.release_note || "未填写发布说明"}
+                    </p>
                   </div>
                 ))}
               </div>
