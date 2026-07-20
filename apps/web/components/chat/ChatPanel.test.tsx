@@ -19,11 +19,13 @@ const { chatState } = vi.hoisted(() => ({
     ],
     traceEvents: [],
     isGenerating: false,
+    isLoadingSession: false,
     intent: "旧意图",
     subtaskCount: 9,
     failedSendSnapshot: null,
     sendMessage: vi.fn(),
     retryLastMessage: vi.fn(),
+    cancelGeneration: vi.fn(),
     loadLatestSession: vi.fn(),
     loadSessionHistory: vi.fn(),
     loadMessages: vi.fn(),
@@ -111,5 +113,24 @@ describe("ChatPanel Agent rendering gate", () => {
 
     expect(screen.queryByText("旧 Agent 消息不得闪现")).not.toBeInTheDocument();
     expect(screen.queryByText("意图：旧意图 · 子任务：9")).not.toBeInTheDocument();
+  });
+
+  it("shows a loading state instead of the previous session while a selected session loads", () => {
+    chatState.agentId = "agent-old";
+    chatState.messages = [];
+    chatState.isLoadingSession = true;
+    render(
+      <ChatPanel
+        agentId="agent-old"
+        orgId="org-a"
+        actorUserId="user-a"
+        workflows={[]}
+        agent={agent("agent-old")}
+      />
+    );
+
+    expect(screen.getByText("正在加载会话…")).toBeInTheDocument();
+    expect(screen.getByRole("textbox")).toBeDisabled();
+    chatState.isLoadingSession = false;
   });
 });

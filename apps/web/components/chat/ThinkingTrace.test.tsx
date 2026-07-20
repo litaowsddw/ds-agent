@@ -65,4 +65,11 @@ describe("ThinkingTrace", () => {
     expect(screen.getByText("执行失败")).toBeInTheDocument();
     expect(screen.queryByText("执行中")).not.toBeInTheDocument();
   });
+
+  it("shows a neutral stopped state after a user cancellation", () => {
+    render(<ThinkingTrace events={[event(1, { event: "node_started", status: "cancelled" })]} />);
+
+    expect(screen.getByText("已停止")).toBeInTheDocument();
+    expect(screen.queryByText("执行中")).not.toBeInTheDocument();
+  });
 });

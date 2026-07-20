@@ -1,7 +1,7 @@
 "use client";
 
 import { useState } from "react";
-import { CheckCircle2, ChevronDown, ChevronUp, Eye, EyeOff, Loader2, Wrench, XCircle } from "lucide-react";
+import { CheckCircle2, ChevronDown, ChevronUp, CircleStop, Eye, EyeOff, Loader2, Wrench, XCircle } from "lucide-react";
 import type { ChatTraceEvent } from "@/stores/chat";
 
 export default function ThinkingTrace({ events }: { events: ChatTraceEvent[] }) {
@@ -11,11 +11,12 @@ export default function ThinkingTrace({ events }: { events: ChatTraceEvent[] }) 
     ["node_started", "node_finished", "skill_created", "error"].includes(event.event)
   );
   const failed = visibleEvents.some((event) => event.status === "failed");
+  const cancelled = !failed && visibleEvents.some((event) => event.status === "cancelled");
   const activeEvent = failed
     ? undefined
     : [...visibleEvents].reverse().find((event) => event.status === "running");
   const displayEvents = expanded ? visibleEvents : visibleEvents.slice(-5);
-  const heading = activeEvent ? "执行中" : failed ? "执行失败" : "执行 Trace";
+  const heading = activeEvent ? "执行中" : failed ? "执行失败" : cancelled ? "已停止" : "执行 Trace";
 
   if (hidden) {
     return (
@@ -33,11 +34,13 @@ export default function ThinkingTrace({ events }: { events: ChatTraceEvent[] }) 
 
   return (
     <div className="mb-3 rounded-lg border border-[#dfe4ee] bg-[#f8fafc] px-3 py-2 text-xs">
-      <div className={`mb-2 flex items-center gap-2 ${failed && !activeEvent ? "text-red-600" : "text-[#2f6feb]"}`}>
+      <div className={`mb-2 flex items-center gap-2 ${failed && !activeEvent ? "text-red-600" : cancelled ? "text-[#667085]" : "text-[#2f6feb]"}`}>
         {activeEvent ? (
           <Loader2 size={13} className="animate-spin" />
         ) : failed ? (
           <XCircle size={13} />
+        ) : cancelled ? (
+          <CircleStop size={13} />
         ) : (
           <CheckCircle2 size={13} className="text-emerald-500" />
         )}
@@ -106,6 +109,7 @@ function TraceIcon({ status, event }: { status: ChatTraceEvent["status"]; event:
   if (event === "skill_created") return <Wrench size={14} className="mt-0.5 text-emerald-500" />;
   if (status === "running") return <Loader2 size={14} className="mt-0.5 animate-spin text-blue-500" />;
   if (status === "failed") return <XCircle size={14} className="mt-0.5 text-red-500" />;
+  if (status === "cancelled") return <CircleStop size={14} className="mt-0.5 text-[#667085]" />;
   if (status === "succeeded") return <CheckCircle2 size={14} className="mt-0.5 text-emerald-500" />;
   return <CheckCircle2 size={14} className="mt-0.5 text-gray-300" />;
 }

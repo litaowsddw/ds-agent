@@ -198,6 +198,56 @@ describe("chat store retry safety", () => {
     });
   });
 
+  it("stops a stream locally, retains partial output, and closes running Trace entries", async () => {
+    const activeStream = delayedStream();
+    vi.stubGlobal("fetch", vi.fn().mockResolvedValue(activeStream.response));
+    const sending = useChatStore.getState().sendMessage("agent-a", "org-a", "请停止", "user-a");
+    await vi.waitFor(() => expect(activeStream.read).toHaveBeenCalled());
+    useChatStore.setState({
+      traceEvents: [
+        {
+          id: "trace-running",
+          event: "node_started",
+          status: "running",
+          data: {},
+          created_at: "2026-07-12T01:00:00Z",
+        },
+      ],
+    });
+
+    useChatStore.getState().cancelGeneration();
+    expect(useChatStore.getState()).toMatchObject({
+      isGenerating: false,
+      messages: [expect.objectContaining({ role: "user", content: "请停止" })],
+      traceEvents: [expect.objectContaining({ status: "cancelled" })],
+    });
+
+    activeStream.emit('event: token\ndata: {"text":"late"}\n\n');
+    await sending;
+    expect(useChatStore.getState().messages).toHaveLength(1);
+  });
+
+  it("keeps the most recently selected session when an older history request finishes last", async () => {
+    let resolveFirst: ((value: { messages: Array<{ message_id: string; role: "assistant"; content: string; sequence: number; created_at: string }> }) => void) | undefined;
+    let resolveSecond: ((value: { messages: Array<{ message_id: string; role: "assistant"; content: string; sequence: number; created_at: string }> }) => void) | undefined;
+    vi.mocked(apiRequest)
+      .mockReturnValueOnce(new Promise((resolve) => { resolveFirst = resolve; }))
+      .mockReturnValueOnce(new Promise((resolve) => { resolveSecond = resolve; }));
+
+    const first = useChatStore.getState().loadMessages("session-first");
+    const second = useChatStore.getState().loadMessages("session-second");
+    resolveSecond?.({ messages: [{ message_id: "second", role: "assistant", content: "newer", sequence: 0, created_at: "2026-07-12T01:00:00Z" }] });
+    await second;
+    resolveFirst?.({ messages: [{ message_id: "first", role: "assistant", content: "older", sequence: 0, created_at: "2026-07-12T01:00:00Z" }] });
+    await first;
+
+    expect(useChatStore.getState()).toMatchObject({
+      sessionId: "session-second",
+      isLoadingSession: false,
+      messages: [expect.objectContaining({ message_id: "second", content: "newer" })],
+    });
+  });
+
   it("ignores every late token, error, completion and final write from the previous Agent stream", async () => {
     const oldStream = delayedStream();
     vi.stubGlobal("fetch", vi.fn().mockResolvedValue(oldStream.response));

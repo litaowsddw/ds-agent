@@ -444,6 +444,8 @@ function NodeInspector({
 
   const type = String(node.type ?? "");
   const config = node.data.config ?? {};
+  const displayName = stringValue(config.display_name).trim() || node.data.label;
+  const displayDescription = stringValue(config.display_description).trim() || node.data.description || "";
   const providerKey = stringValue(config.provider);
   const modelOptions = modelProviders.find((provider) => provider.provider_key === providerKey)?.models ?? [];
 
@@ -451,7 +453,7 @@ function NodeInspector({
     <section className="rounded-lg border border-[#dfe4ee] bg-white">
       <div className="flex items-center justify-between border-b border-[#dfe4ee] px-4 py-3">
         <div>
-          <div className="text-sm font-semibold text-[#172033]">{node.data.label}</div>
+          <div className="text-sm font-semibold text-[#172033]">{displayName}</div>
           <div className="mt-1 font-mono text-xs text-[#667085]">{node.id}</div>
         </div>
         <span className={`rounded px-2 py-1 text-[10px] font-semibold uppercase ${node.data.capability === "schema" ? "bg-[#f8fafc] text-[#667085]" : "bg-[#ecfdf3] text-[#027a48]"}`}>
@@ -459,6 +461,37 @@ function NodeInspector({
         </span>
       </div>
       <div className="space-y-3 p-4">
+        {type !== "start" && type !== "end" ? (
+          <div className="space-y-3 rounded-lg border border-[#dfe4ee] bg-[#f8fafc] p-3">
+            <div>
+              <div className="text-xs font-semibold text-[#344054]">Node identity</div>
+              <div className="mt-1 text-xs leading-5 text-[#667085]">
+                Name this step for people reading the canvas. It does not change the node type or execution behavior.
+              </div>
+            </div>
+            <TextInput
+              label="Display name"
+              onChange={(display_name) => updateConfig({ display_name })}
+              placeholder={node.data.label}
+              value={displayName}
+            />
+            <TextArea
+              label="Display description"
+              onChange={(display_description) => updateConfig({ display_description })}
+              placeholder={node.data.description}
+              rows={2}
+              value={displayDescription}
+            />
+            <button
+              className="text-xs font-medium text-[#2f6feb] hover:text-[#1d4ed8]"
+              onClick={() => updateConfig({ display_name: undefined, display_description: undefined })}
+              type="button"
+            >
+              Restore node defaults
+            </button>
+          </div>
+        ) : null}
+
         {type === "start" || type === "end" ? <EmptyText text="This node has no required configuration" /> : null}
 
         {type === "llm" ? (

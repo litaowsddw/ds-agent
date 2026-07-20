@@ -77,6 +77,21 @@ class FinalUsageStreamProvider:
         )
 
 
+class FinalUsageThenEmptyUsageStreamProvider:
+    """A compatibility stream that emits an empty usage frame after its final facts."""
+
+    def stream_generate(self, _request: LLMCallRequest):
+        yield LLMStreamChunk(text="a")
+        yield LLMStreamChunk(
+            usage={
+                "prompt_tokens": 20,
+                "completion_tokens": 4,
+                "prompt_tokens_details": {"cached_tokens": 10},
+            }
+        )
+        yield LLMStreamChunk(usage={})
+
+
 class RejectingLimiter:
     async def require(self, **_kwargs: object) -> None:
         raise RateLimitExceeded("limited")
@@ -243,6 +258,28 @@ def test_gateway_records_only_final_stream_usage_with_nested_cache_tokens() -> N
     assert gateway.last_normalized_usage is not None
     assert gateway.last_normalized_usage.input_tokens == 20
     assert gateway.last_normalized_usage.cache_read_input_tokens == 10
+
+
+def test_gateway_does_not_replace_final_stream_usage_with_empty_usage_frame() -> None:
+    recorder = RecordingUsageRecorder()
+    gateway = LLMGateway(
+        providers={"mock": FinalUsageThenEmptyUsageStreamProvider()},
+        limiter=_AllowingLimiter(),
+        usage_recorder=recorder,
+    )
+
+    async def consume() -> list[str]:
+        return [chunk async for chunk in gateway.stream_generate(_request())]
+
+    assert asyncio.run(consume()) == ["a"]
+    assert len(recorder.events) == 1
+    event = recorder.events[0]
+    assert event.input_tokens == 20
+    assert event.output_tokens == 4
+    assert event.cache_read_input_tokens == 10
+    assert gateway.last_raw_usage["prompt_tokens"] == 20
+    assert gateway.last_normalized_usage is not None
+    assert gateway.last_normalized_usage.usage_status == "provider_final"
 
 
 @pytest.mark.parametrize(

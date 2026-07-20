@@ -343,7 +343,12 @@ class LLMGateway:
                 final_usage: dict[str, object] | None = None
                 for chunk in streamer(request):
                     if isinstance(chunk, LLMStreamChunk):
-                        if chunk.usage is not None:
+                        # Some OpenAI-compatible providers append an empty
+                        # usage object after their real terminal usage.  An
+                        # empty object is not an accounting fact and must not
+                        # erase the last provider-reported usage we already
+                        # received for this stream.
+                        if chunk.usage:
                             final_usage = chunk.usage
                         if chunk.text:
                             yield chunk.text

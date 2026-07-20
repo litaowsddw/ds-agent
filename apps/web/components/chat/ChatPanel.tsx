@@ -28,12 +28,14 @@ export default function ChatPanel({
     sessions,
     traceEvents,
     isGenerating,
+    isLoadingSession,
     intent,
     subtaskCount,
     failedSendSnapshot,
     actualContextUsage,
     sendMessage,
     retryLastMessage,
+    cancelGeneration,
     loadLatestSession,
     loadSessionHistory,
     loadMessages,
@@ -49,7 +51,9 @@ export default function ChatPanel({
   const contextTokenLimit = agent?.context_token_limit ?? 2400;
   const [executionMode, setExecutionMode] = useState<ChatExecutionMode>("autonomous");
   const [workflowId, setWorkflowId] = useState("");
-  const messagesEndRef = useRef<HTMLDivElement>(null);
+  const messageListRef = useRef<HTMLDivElement>(null);
+  const isNearBottomRef = useRef(true);
+  const [hasUnreadMessages, setHasUnreadMessages] = useState(false);
   const defaultWorkflowId = agent?.default_workflow_id ?? null;
   const publishedWorkflows = useMemo(
     () => workflows.filter((workflow) => workflow.agent_id === agentId && workflow.published_version_id),
@@ -69,7 +73,7 @@ export default function ChatPanel({
       : workflowModeBlockedReason === "请选择已发布 Workflow"
         ? "请选择一个已发布 Workflow 后再发送消息。"
         : "";
-  const isComposerDisabled = !isCurrentAgent || visibleIsGenerating || Boolean(workflowModeBlockedReason);
+  const isComposerDisabled = !isCurrentAgent || isLoadingSession || visibleIsGenerating || Boolean(workflowModeBlockedReason);
   const retryBlockedMessage =
     visibleFailedSnapshot?.options.executionMode === "workflow" &&
     (!visibleFailedSnapshot.options.workflowId ||
@@ -77,9 +81,31 @@ export default function ChatPanel({
       ? "上次消息使用的 Workflow 已不可用，请重新选择后发送。"
       : "";
 
+  const scrollToLatest = () => {
+    const container = messageListRef.current;
+    if (!container) return;
+    container.scrollTop = container.scrollHeight;
+    isNearBottomRef.current = true;
+    setHasUnreadMessages(false);
+  };
+
+  const handleMessageScroll = () => {
+    const container = messageListRef.current;
+    if (!container) return;
+    const isNearBottom = container.scrollHeight - container.scrollTop - container.clientHeight < 80;
+    isNearBottomRef.current = isNearBottom;
+    if (isNearBottom) setHasUnreadMessages(false);
+  };
+
   useEffect(() => {
-    messagesEndRef.current?.scrollIntoView({ behavior: "smooth" });
-  }, [visibleMessages, visibleTraceEvents, visibleIsGenerating]);
+    if (!isCurrentAgent || visibleMessages.length === 0) {
+      isNearBottomRef.current = true;
+      setHasUnreadMessages(false);
+      return;
+    }
+    if (isNearBottomRef.current) scrollToLatest();
+    else setHasUnreadMessages(true);
+  }, [isCurrentAgent, visibleMessages, visibleIsGenerating]);
 
   useEffect(() => {
     void loadLatestSession(agentId, actorUserId);
@@ -103,6 +129,8 @@ export default function ChatPanel({
 
   const handleSend = async (msg: string) => {
     if (isComposerDisabled) return;
+    isNearBottomRef.current = true;
+    setHasUnreadMessages(false);
     await sendMessage(agentId, orgId, msg, actorUserId, {
       executionMode,
       workflowId: executionMode === "workflow" ? workflowId : undefined,
@@ -147,17 +175,34 @@ export default function ChatPanel({
           </select>
         </div>
 
-        <div className="min-h-0 flex-1 space-y-3 overflow-y-auto px-4 py-3">
-          {visibleMessages.length === 0 ? (
-            <div className="mt-8 text-center text-[#98a2b3]">
-              <p className="text-sm">{isCurrentAgent ? "发送消息，开始与此 Agent 对话" : "正在加载 Agent 对话…"}</p>
-              {isCurrentAgent ? <p className="mt-1 text-xs">流式回答和执行 Trace 将显示在这里</p> : null}
-            </div>
+        <div className="relative min-h-0 flex-1">
+          <div
+            ref={messageListRef}
+            className="h-full space-y-3 overflow-y-auto px-4 py-3"
+            onScroll={handleMessageScroll}
+          >
+            {visibleMessages.length === 0 ? (
+              <div className="mt-8 text-center text-[#98a2b3]">
+                <p className="text-sm">
+                  {isLoadingSession ? "正在加载会话…" : isCurrentAgent ? "发送消息，开始与此 Agent 对话" : "正在加载 Agent 对话…"}
+                </p>
+                {isCurrentAgent && !isLoadingSession ? <p className="mt-1 text-xs">流式回答和执行 Trace 将显示在这里</p> : null}
+              </div>
+            ) : null}
+            {visibleMessages.map((message, index) => (
+              <MessageBubble key={message.message_id || index} message={message} />
+            ))}
+          </div>
+          {hasUnreadMessages ? (
+            <button
+              aria-label="跳到最新消息"
+              className="absolute bottom-3 left-1/2 -translate-x-1/2 rounded-full border border-[#c7d7fe] bg-white px-3 py-1.5 text-xs font-medium text-[#2f6feb] shadow-sm transition hover:bg-[#f5f8ff]"
+              onClick={scrollToLatest}
+              type="button"
+            >
+              跳到最新消息
+            </button>
           ) : null}
-          {visibleMessages.map((message, index) => (
-            <MessageBubble key={message.message_id || index} message={message} />
-          ))}
-          <div ref={messagesEndRef} />
         </div>
 
         <div className="border-t border-[#dfe4ee] bg-white px-4 py-3">
@@ -168,6 +213,8 @@ export default function ChatPanel({
             onSend={handleSend}
             onRetry={visibleFailedSnapshot ? retryLastMessage : undefined}
             retryBlockedMessage={retryBlockedMessage}
+            isGenerating={visibleIsGenerating}
+            onCancel={cancelGeneration}
             contextUsage={
               actualContextUsage
                 ? {
@@ -183,21 +230,10 @@ export default function ChatPanel({
                     tokenizerStatus: actualContextUsage.tokenizerStatus,
                     tokenizer: actualContextUsage.tokenizer,
                     promptBreakdown: actualContextUsage.promptBreakdown,
+                    calibrationStatus: actualContextUsage.calibrationStatus,
+                    activeWorkflowNodeId: actualContextUsage.activeWorkflowNodeId,
                   }
-                : {
-                    inputTokens: null,
-                    outputTokens: 0,
-                    contextTokens: null,
-                    outputTokenStatus: "unavailable",
-                    cacheReadInputTokens: null,
-                    limitTokens: contextTokenLimit,
-                    usageStatus: "unavailable",
-                    preflightInputTokens: null,
-                    stablePrefixTokens: null,
-                    tokenizerStatus: "characters_divided_by_4",
-                    tokenizer: null,
-                    promptBreakdown: [],
-                  }
+                : undefined
             }
           >
             <div className="mb-3 flex flex-wrap items-center gap-2">

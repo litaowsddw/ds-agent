@@ -10,6 +10,24 @@ export interface BaseNodeData extends Record<string, unknown> {
   capability?: "executable" | "schema";
 }
 
+/**
+ * Node labels used to be fixed by the node type, which made a canvas with
+ * several LLM or Tool nodes difficult to read.  Keep the runner-facing type
+ * stable, while allowing workflow authors to give the visual step a durable
+ * identity in its saved config.
+ */
+export function getNodeDisplay(data: BaseNodeData): { description: string; label: string } {
+  const config = (data.config ?? {}) as Record<string, unknown>;
+  const configuredLabel = typeof config.display_name === "string" ? config.display_name.trim() : "";
+  const configuredDescription =
+    typeof config.display_description === "string" ? config.display_description.trim() : "";
+
+  return {
+    label: configuredLabel || data.label,
+    description: configuredDescription || String(data.description ?? ""),
+  };
+}
+
 const nodeThemes: Record<string, { bg: string; border: string; iconBg: string; text: string }> = {
   start: { bg: "bg-[#f0fdf4]", border: "border-[#86efac]", iconBg: "bg-[#22c55e]", text: "text-[#166534]" },
   end: { bg: "bg-[#fef2f2]", border: "border-[#fca5a5]", iconBg: "bg-[#ef4444]", text: "text-[#991b1b]" },
@@ -41,7 +59,8 @@ function getNodeStatus(nodeType: string, data: Record<string, unknown>) {
 
 function BaseNode({ data, type }: NodeProps & { type?: string }) {
   const nodeType = type ?? "llm";
-  const label = String(data.label ?? "");
+  const display = getNodeDisplay(data as BaseNodeData);
+  const label = display.label;
   const theme = nodeThemes[nodeType] ?? nodeThemes.llm;
   const status = getNodeStatus(nodeType, data);
 
@@ -63,7 +82,7 @@ function BaseNode({ data, type }: NodeProps & { type?: string }) {
         </div>
         <div className="min-w-0">
           <div className={`truncate text-sm font-semibold ${theme.text}`}>{label}</div>
-          {data.description ? <div className="truncate text-xs text-[#667085]">{String(data.description)}</div> : null}
+          {display.description ? <div className="truncate text-xs text-[#667085]">{display.description}</div> : null}
         </div>
       </div>
 

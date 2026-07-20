@@ -20,6 +20,29 @@ describe("ChatComposer", () => {
     expect(onSend).toHaveBeenCalledWith("hello\nworld");
   });
 
+  it("does not send while a Chinese input method is composing", () => {
+    const onSend = vi.fn();
+    render(<ChatComposer disabled={false} onSend={onSend} />);
+    const textbox = screen.getByRole("textbox");
+    fireEvent.change(textbox, { target: { value: "ni" } });
+    fireEvent.keyDown(textbox, { key: "Enter", isComposing: true });
+
+    expect(onSend).not.toHaveBeenCalled();
+    expect(textbox).toHaveValue("ni");
+  });
+
+  it("exposes a stop action only while the answer is streaming", () => {
+    const onCancel = vi.fn();
+    const { rerender } = render(
+      <ChatComposer disabled={false} isGenerating={false} onCancel={onCancel} onSend={vi.fn()} />
+    );
+    expect(screen.queryByRole("button", { name: "停止生成" })).not.toBeInTheDocument();
+
+    rerender(<ChatComposer disabled onCancel={onCancel} isGenerating onSend={vi.fn()} />);
+    fireEvent.click(screen.getByRole("button", { name: "停止生成" }));
+    expect(onCancel).toHaveBeenCalledOnce();
+  });
+
   it("shows provider-reported input tokens and cache tokens", () => {
     const { container } = render(
       <ChatComposer

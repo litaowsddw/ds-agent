@@ -24,7 +24,7 @@ export interface ChatTraceEvent {
   event: string;
   node?: string;
   label?: string;
-  status: "running" | "succeeded" | "failed" | "info";
+  status: "running" | "succeeded" | "failed" | "cancelled" | "info";
   text?: string;
   data: Record<string, unknown>;
   created_at: string;
@@ -95,6 +95,7 @@ interface ChatState {
   messages: Message[];
   traceEvents: ChatTraceEvent[];
   isGenerating: boolean;
+  isLoadingSession: boolean;
   agentId: string | null;
   intent: string;
   subtaskCount: number;
@@ -110,6 +111,7 @@ interface ChatState {
     options?: SendMessageOptions
   ) => Promise<void>;
   retryLastMessage: () => Promise<void>;
+  cancelGeneration: () => void;
   loadLatestSession: (agentId: string, actorUserId: string) => Promise<void>;
   loadSessionHistory: (agentId: string, actorUserId: string) => Promise<void>;
   loadMessages: (sessionId: string) => Promise<void>;
@@ -118,6 +120,8 @@ interface ChatState {
 }
 
 let activeChatGeneration = 0;
+let activeSessionLoadGeneration = 0;
+let activeStream: { generation: number; controller: AbortController; assistantId: string } | null = null;
 
 export const useChatStore = create<ChatState>((set, get) => ({
   sessionId: null,
@@ -125,6 +129,7 @@ export const useChatStore = create<ChatState>((set, get) => ({
   messages: [],
   traceEvents: [],
   isGenerating: false,
+  isLoadingSession: false,
   agentId: null,
   intent: "",
   subtaskCount: 0,
@@ -134,6 +139,7 @@ export const useChatStore = create<ChatState>((set, get) => ({
 
   sendMessage: async (agentId, orgId, message, actorUserId, options) => {
     const generation = ++activeChatGeneration;
+    activeStream?.controller.abort();
     const isActive = () => generation === activeChatGeneration && get().agentId === agentId;
     const snapshot: FailedSendSnapshot = {
       agentId,
@@ -170,6 +176,8 @@ export const useChatStore = create<ChatState>((set, get) => ({
       sequence: get().messages.length + 1,
       created_at: new Date().toISOString(),
     };
+    const controller = new AbortController();
+    activeStream = { generation, controller, assistantId };
     set((state) => ({ messages: [...state.messages, userMsg, assistantMsg] }));
 
     try {
@@ -181,6 +189,7 @@ export const useChatStore = create<ChatState>((set, get) => ({
         sessionId: get().sessionId,
         executionMode: options?.executionMode ?? "autonomous",
         workflowId: options?.workflowId,
+        signal: controller.signal,
         onEvent: (event, data) => {
           if (!isActive()) return;
           if (event === "token") {
@@ -294,6 +303,8 @@ export const useChatStore = create<ChatState>((set, get) => ({
         isGenerating: false,
         failedSendSnapshot: snapshot,
       }));
+    } finally {
+      if (activeStream?.generation === generation) activeStream = null;
     }
   },
 
@@ -309,9 +320,30 @@ export const useChatStore = create<ChatState>((set, get) => ({
     );
   },
 
+  cancelGeneration: () => {
+    const stream = activeStream;
+    if (!stream) return;
+    activeStream = null;
+    activeChatGeneration += 1;
+    stream.controller.abort();
+    set((state) => ({
+      messages: state.messages.filter((message) =>
+        message.message_id !== stream.assistantId || Boolean(message.content.trim())
+      ),
+      traceEvents: state.traceEvents.map((event) =>
+        event.status === "running" ? { ...event, status: "cancelled" as const } : event
+      ),
+      isGenerating: false,
+      failedSendSnapshot: null,
+    }));
+  },
+
   loadLatestSession: async (agentId, actorUserId) => {
     if (!agentId || !actorUserId) return;
     const generation = ++activeChatGeneration;
+    const sessionLoadGeneration = ++activeSessionLoadGeneration;
+    activeStream?.controller.abort();
+    activeStream = null;
     set({
       agentId,
       sessionId: null,
@@ -320,6 +352,7 @@ export const useChatStore = create<ChatState>((set, get) => ({
       traceEvents: [],
       failedSendSnapshot: null,
       isGenerating: false,
+      isLoadingSession: true,
       intent: "",
       subtaskCount: 0,
       actualContextUsage: null,
@@ -329,16 +362,25 @@ export const useChatStore = create<ChatState>((set, get) => ({
       const result = await apiRequest<{ session_id: string | null; messages: Message[] }>(
         `/chat/agents/${agentId}/latest-session?actor_user_id=${actorUserId}`
       );
-      if (generation !== activeChatGeneration || get().agentId !== agentId) return;
+      if (
+        generation !== activeChatGeneration ||
+        sessionLoadGeneration !== activeSessionLoadGeneration ||
+        get().agentId !== agentId
+      ) return;
       set({
         agentId,
         sessionId: result.session_id,
         messages: result.messages || [],
         traceEvents: [],
+        isLoadingSession: false,
       });
     } catch {
-      if (generation !== activeChatGeneration || get().agentId !== agentId) return;
-      set({ agentId, sessionId: null, messages: [], traceEvents: [] });
+      if (
+        generation !== activeChatGeneration ||
+        sessionLoadGeneration !== activeSessionLoadGeneration ||
+        get().agentId !== agentId
+      ) return;
+      set({ agentId, sessionId: null, messages: [], traceEvents: [], isLoadingSession: false });
     }
   },
 
@@ -356,16 +398,40 @@ export const useChatStore = create<ChatState>((set, get) => ({
   },
 
   loadMessages: async (sessionId) => {
+    const sessionLoadGeneration = ++activeSessionLoadGeneration;
+    activeChatGeneration += 1;
+    activeStream?.controller.abort();
+    activeStream = null;
+    set({
+      sessionId,
+      messages: [],
+      traceEvents: [],
+      failedSendSnapshot: null,
+      isGenerating: false,
+      isLoadingSession: true,
+      actualContextUsage: null,
+      usageCalls: {},
+    });
     try {
       const result = await apiRequest<{ messages: Message[] }>(`/chat/sessions/${sessionId}/messages`);
-      set({ sessionId, messages: result.messages || [], actualContextUsage: null, usageCalls: {} });
+      if (sessionLoadGeneration !== activeSessionLoadGeneration || get().sessionId !== sessionId) return;
+      set({
+        messages: result.messages || [],
+        isLoadingSession: false,
+        actualContextUsage: null,
+        usageCalls: {},
+      });
     } catch {
-      // Keep the current local messages when history loading fails.
+      if (sessionLoadGeneration !== activeSessionLoadGeneration || get().sessionId !== sessionId) return;
+      set({ isLoadingSession: false });
     }
   },
 
   clearSession: () => {
     activeChatGeneration += 1;
+    activeSessionLoadGeneration += 1;
+    activeStream?.controller.abort();
+    activeStream = null;
     set({
       sessionId: null,
       sessions: [],
@@ -377,6 +443,7 @@ export const useChatStore = create<ChatState>((set, get) => ({
       usageCalls: {},
       failedSendSnapshot: null,
       isGenerating: false,
+      isLoadingSession: false,
     });
   },
 
@@ -487,6 +554,7 @@ async function streamChat({
   executionMode,
   workflowId,
   onEvent,
+  signal,
 }: {
   agentId: string;
   orgId: string;
@@ -496,6 +564,7 @@ async function streamChat({
   executionMode: ChatExecutionMode;
   workflowId?: string;
   onEvent: (event: string, data: Record<string, unknown>) => void;
+  signal?: AbortSignal;
 }) {
   const headers: Record<string, string> = { "Content-Type": "application/json" };
   const token = getAccessToken();
@@ -506,6 +575,7 @@ async function streamChat({
   const response = await fetch(`${API_BASE_URL}/chat/stream`, {
     method: "POST",
     headers,
+    signal,
     body: JSON.stringify({
       agent_id: agentId,
       message,

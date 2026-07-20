@@ -1,6 +1,6 @@
 "use client";
 
-import { useState, type ReactNode } from "react";
+import { useLayoutEffect, useRef, useState, type ReactNode } from "react";
 import { useChatStore } from "@/stores/chat";
 
 type ContextUsage = {
@@ -27,6 +27,8 @@ export default function ChatComposer({
   onRetry,
   retryBlockedMessage = "",
   contextUsage,
+  isGenerating = false,
+  onCancel,
   children,
 }: {
   disabled: boolean;
@@ -35,9 +37,12 @@ export default function ChatComposer({
   onRetry?: () => void | Promise<void>;
   retryBlockedMessage?: string;
   contextUsage?: ContextUsage;
+  isGenerating?: boolean;
+  onCancel?: () => void;
   children?: ReactNode;
 }) {
   const [input, setInput] = useState("");
+  const textareaRef = useRef<HTMLTextAreaElement>(null);
   const liveContextUsage = useChatStore((state) => state.actualContextUsage);
   const inputContextTokens = contextUsage?.usageStatus === "provider_final" && contextUsage.inputTokens !== null
     ? contextUsage.inputTokens
@@ -71,6 +76,15 @@ export default function ChatComposer({
     ? "未提供"
     : contextUsage?.outputTokens.toLocaleString();
 
+  useLayoutEffect(() => {
+    const textarea = textareaRef.current;
+    if (!textarea) return;
+    textarea.style.height = "auto";
+    const maxHeight = 160;
+    textarea.style.height = `${Math.min(textarea.scrollHeight, maxHeight)}px`;
+    textarea.style.overflowY = textarea.scrollHeight > maxHeight ? "auto" : "hidden";
+  }, [input]);
+
   const send = () => {
     const message = input.trim();
     if (!message || disabled) return;
@@ -98,10 +112,11 @@ export default function ChatComposer({
       <div className="flex gap-2">
         <textarea
           aria-label="消息"
+          ref={textareaRef}
           value={input}
           onChange={(event) => setInput(event.target.value)}
           onKeyDown={(event) => {
-            if (event.key === "Enter" && !event.shiftKey) {
+            if (event.key === "Enter" && !event.shiftKey && !event.nativeEvent.isComposing) {
               event.preventDefault();
               send();
             }
@@ -116,6 +131,7 @@ export default function ChatComposer({
             <div className="relative flex shrink-0 items-center gap-2 whitespace-nowrap text-xs text-[#667085]">
               <span
                 aria-label="当前上下文占比"
+                aria-live="polite"
                 title="请求前会先计算已知完整上下文；Skill 路由完成后会自动校正。流式过程中实时累加输出，结束后以供应商 usage 校准。"
               >
                 {contextSummary}
@@ -166,6 +182,16 @@ export default function ChatComposer({
                 </details>
               ) : null}
             </div>
+          ) : null}
+          {isGenerating && onCancel ? (
+            <button
+              aria-label="停止生成"
+              className="rounded-lg border border-[#fecaca] bg-white px-3 py-2 text-sm font-medium text-red-700 transition-colors hover:bg-red-50"
+              onClick={onCancel}
+              type="button"
+            >
+              停止
+            </button>
           ) : null}
           <button
             onClick={send}
