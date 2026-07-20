@@ -26,14 +26,17 @@ def upgrade() -> None:
         sa.Column("server_id", sa.String(length=64), nullable=False),
         sa.Column("tool_name", sa.String(length=255), nullable=False),
         sa.Column("risk_level", sa.String(length=16), nullable=False),
-        sa.Column("arguments_redacted", sa.Text(), nullable=False, server_default="{}"),
+        # MySQL rejects defaults on TEXT columns.  This is a newly-created
+        # table, so no backfill is required; ORM/application defaults provide
+        # these values on every insert instead.
+        sa.Column("arguments_redacted", sa.Text(), nullable=False),
         sa.Column("arguments_encrypted", sa.Text(), nullable=False),
         sa.Column("status", sa.String(length=32), nullable=False, server_default="pending"),
         sa.Column("requested_by", sa.String(length=64), nullable=False),
         sa.Column("decided_by", sa.String(length=64), nullable=True),
         sa.Column("decided_at", sa.DateTime(), nullable=True),
         sa.Column("execution_node_run_id", sa.String(length=64), nullable=True),
-        sa.Column("error_message", sa.Text(), nullable=False, server_default=""),
+        sa.Column("error_message", sa.Text(), nullable=False),
         sa.Column("created_at", sa.DateTime(), nullable=False),
         sa.ForeignKeyConstraint(["run_id"], ["workflow_runs.run_id"]),
         sa.PrimaryKeyConstraint("approval_id"),
