@@ -233,6 +233,9 @@ class RequestLoggingMiddleware(BaseHTTPMiddleware):
             response = await call_next(request)
         except Exception as exc:
             duration = time.time() - start_time
+            from app.core.metrics import record_api_request
+
+            record_api_request(request.method, request.url.path, 500, duration)
             logger.error(
                 f"✗ {request.method} {request.url.path} - 500 ({duration*1000:.0f}ms) - {exc}",
                 extra={"extra_data": {"duration_ms": duration * 1000, "error": str(exc)}},
@@ -241,6 +244,9 @@ class RequestLoggingMiddleware(BaseHTTPMiddleware):
             raise
 
         duration = time.time() - start_time
+        from app.core.metrics import record_api_request
+
+        record_api_request(request.method, request.url.path, response.status_code, duration)
 
         # 注入追踪头
         response.headers["X-Request-Id"] = req_id

@@ -4,11 +4,14 @@ This module intentionally keeps provider facts nullable. It creates no billing
 entries and never derives usage from prompt text or streamed characters.
 """
 
+import logging
 from dataclasses import dataclass, replace
 from datetime import datetime
 from typing import TYPE_CHECKING, Mapping, Protocol
 
 from apps.api.app.services.db.metering_db import UsageEventInput
+
+logger = logging.getLogger(__name__)
 
 if TYPE_CHECKING:
     from sqlalchemy.ext.asyncio import AsyncSession
@@ -108,7 +111,12 @@ class UsageContext:
 
 
 class SessionUsageRecorder:
-    """Record one terminal usage fact through the current request session."""
+    """Record one terminal usage fact through the current request session.
+
+    Terminal facts are persisted with an independent short session and their
+    own commit: request-scoped rollback (chat failure, client disconnect)
+    must never erase the provider-billable usage fact that already happened.
+    """
 
     def __init__(self, session: "AsyncSession") -> None:
         self._session = session
@@ -123,11 +131,16 @@ class SessionUsageRecorder:
         context = self._started.pop(call_id, None)
         if context is None:
             return
+        from app.database import async_session_factory
         from apps.api.app.services.db.metering_db import metering_db
 
-        await metering_db.record_event(
-            self._session, usage_event_for_terminal(context, outcome)
-        )
+        event = usage_event_for_terminal(context, outcome)
+        try:
+            async with async_session_factory() as usage_session:
+                await metering_db.record_event(usage_session, event)
+                await usage_session.commit()
+        except Exception:
+            logger.warning("计量事件独立落库失败", exc_info=True)
 
 
 def normalize_usage(raw: Mapping[str, object] | None) -> NormalizedUsage:

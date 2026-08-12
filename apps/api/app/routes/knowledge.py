@@ -153,8 +153,12 @@ async def upload_document_file(
 ) -> DocumentResponse:
     """上传文件并解析为知识库文档。"""
     try:
+        import asyncio
+
         payload = await file.read()
-        parsed = document_parser.parse(filename=file.filename or "document.txt", payload=payload)
+        parsed = await asyncio.to_thread(
+            document_parser.parse, filename=file.filename or "document.txt", payload=payload
+        )
 
         resolved_actor = resolve_actor(auth, actor_user_id)
         kb = await knowledge_base_db.get_by_id_required(session, kb_id, "kb_id")
@@ -214,10 +218,12 @@ async def search_knowledge_base(
             session, user_id=actor_user_id, org_id=kb.org_id
         )
 
-        # 尝试向量检索
+        # 尝试向量检索（embedding 计算是同步阻塞 I/O，移出事件循环）
+        import asyncio
+
         provider = _get_embedding_provider()
         index = _get_vector_index()
-        query_embedding = provider.embed_texts([request.query])[0]
+        query_embedding = (await asyncio.to_thread(provider.embed_texts, [request.query]))[0]
         vector_hits = index.search(
             org_id=kb.org_id,
             kb_id=kb_id,
@@ -256,9 +262,11 @@ async def _index_document(
         await document_db.update_status(session, doc.document_id, "failed")
         return
 
-    # 生成 Embedding
+    # 生成 Embedding（同步阻塞 I/O，移出事件循环）
+    import asyncio
+
     provider = _get_embedding_provider()
-    embeddings = provider.embed_texts(chunk_parts)
+    embeddings = await asyncio.to_thread(provider.embed_texts, chunk_parts)
 
     # 创建 Chunk 记录
     index = _get_vector_index()

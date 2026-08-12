@@ -91,6 +91,14 @@ async def lifespan(app: FastAPI):
     init_otel()
     logger.info("OpenTelemetry 初始化完成")
 
+    # 初始化 Prometheus（PROM_ENABLED=true 时注册客户端指标）
+    try:
+        from app.core.metrics import init_prometheus
+
+        init_prometheus()
+    except Exception as exc:
+        logger.warning(f"Prometheus 初始化失败（非致命）：{exc}")
+
     # 初始化数据库表。
     # 开发/测试环境直接 create_all；生产环境以 Alembic 迁移为准，仅校验版本并告警，
     # 避免 create_all 与迁移脚本并存导致的表结构漂移。

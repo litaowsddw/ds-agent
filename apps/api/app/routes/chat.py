@@ -156,9 +156,11 @@ def _build_default_chat_tools(db: AsyncSession, *, org_id: str, agent_id: str) -
     from packages.runtime.tools import build_system_tools
 
     async def rag_executor(query: str, collection: str = "default", top_k: int = 5, **_: Any) -> list[dict[str, Any]]:
+        import asyncio
+
         provider = build_embedding_provider_from_env()
         index = build_vector_index_from_env(embedding_dimension=provider.dimension)
-        query_embedding = provider.embed_texts([query])[0]
+        query_embedding = (await asyncio.to_thread(provider.embed_texts, [query]))[0]
         kb_ids: list[str] = []
         if collection and collection != "default":
             kb_ids = [collection]
@@ -893,7 +895,12 @@ async def _chat_stream_events(
                     # A transient vector outage must not discard a successful
                     # user-visible answer or the durable SQL memory record.
                     pass
-            if selected_skill_context is not None:
+            if (
+                selected_skill_context is not None
+                # 内置技能不落库，skill_evaluations.skill_id 有指向 skills 表的外键，
+                # 用 bdl_* ID 写库会违反外键约束；这类"平台标配"使用不需要评估跟踪。
+                and not str(selected_skill_context.skill_id).startswith("bdl_")
+            ):
                 await skill_evaluation_db.create_evaluation(
                     db,
                     evaluation_id=new_id("seval"),

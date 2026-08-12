@@ -57,7 +57,12 @@ async def import_agent_mcp(
         if request.transport != MCPTransport.STREAMABLE_HTTP:
             raise ValueError("当前仅支持 streamable_http MCP 导入；SSE/stdio 需要受管连接器")
         credential_headers = _credential_headers(request)
-        discovered_tools = discover_streamable_http_tools(request.url, credential_headers)
+        import asyncio
+
+        # MCP 发现是出站同步 I/O，移出事件循环
+        discovered_tools = await asyncio.to_thread(
+            discover_streamable_http_tools, request.url, credential_headers
+        )
         server = await mcp_server_db.create_server(
             session,
             server_id=new_id("mcp"),

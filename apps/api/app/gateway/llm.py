@@ -6,14 +6,16 @@
 """
 
 import json
+import time
+from collections import deque
 from collections.abc import Awaitable, Callable
 from dataclasses import dataclass, field
 from datetime import datetime
 from typing import Any, AsyncIterator, Protocol
-from urllib.error import HTTPError, URLError
-from urllib.request import Request, urlopen
+import httpx
 
 from apps.api.app.domain.identity import new_id, utc_now
+from apps.api.app.core.metrics import record_llm_call, record_rate_limit
 from apps.api.app.gateway.rate_limiter import (
     HybridRateLimiter,
     RateLimitExceeded,
@@ -35,6 +37,40 @@ class LLMProvider(Protocol):
 
     def generate(self, request: "LLMCallRequest") -> "LLMCallResponse":
         """生成模型响应。"""
+
+
+async def _await_maybe(value):
+    """Provider.generate 允许同步或异步实现（测试替身与第三方 Provider 兼容）。"""
+    import inspect as _inspect
+
+    if _inspect.isawaitable(value):
+        return await value
+    return value
+
+
+async def _aiter_provider_chunks(streamer, request):
+    """统一消费 provider 的同步/异步流式迭代器，并在收尾/取消时关闭源。"""
+    source = streamer(request)
+    try:
+        if hasattr(source, "__aiter__"):
+            async for item in source:
+                yield item
+        else:
+            for item in source:
+                yield item
+    finally:
+        # 提前退出（取消/异常）时必须显式关闭源：
+        # 异步源走 aclose()，同步生成器走 close()，
+        # 否则源内部 finally 不会执行（leak + 行为漂移）。
+        aclose = getattr(source, "aclose", None)
+        close = getattr(source, "close", None)
+        try:
+            if aclose is not None:
+                await aclose()
+            elif close is not None:
+                close()
+        except Exception:
+            pass
 
 
 @dataclass(slots=True)
@@ -91,7 +127,10 @@ class LLMStreamChunk:
 
 
 class OpenAICompatibleProvider:
-    """OpenAI-compatible Provider 适配器。"""
+    """OpenAI-compatible Provider 适配器（httpx 异步 + 连接池）。"""
+
+    # 按超时档位复用 AsyncClient，保住连接池/keep-alive 收益
+    _CLIENT_POOL: dict[float, httpx.AsyncClient] = {}
 
     def __init__(self, base_url: str, api_key: str, provider_key: str, timeout_seconds: int = 30) -> None:
         self.base_url = base_url
@@ -99,30 +138,45 @@ class OpenAICompatibleProvider:
         self.provider_key = provider_key
         self.timeout_seconds = timeout_seconds
 
-    def generate(self, request: LLMCallRequest) -> LLMCallResponse:
+    @classmethod
+    def _client(cls, timeout_seconds: float) -> httpx.AsyncClient:
+        client = cls._CLIENT_POOL.get(timeout_seconds)
+        if client is None or client.is_closed:
+            client = httpx.AsyncClient(
+                timeout=httpx.Timeout(timeout_seconds),
+                limits=httpx.Limits(max_connections=100, max_keepalive_connections=20),
+            )
+            cls._CLIENT_POOL[timeout_seconds] = client
+        return client
+
+    def _url(self) -> str:
+        return f"{self.base_url.rstrip('/')}/chat/completions"
+
+    def _headers(self) -> dict[str, str]:
+        return {
+            "Authorization": f"Bearer {self.api_key}",
+            "Content-Type": "application/json",
+        }
+
+    async def generate(self, request: LLMCallRequest) -> LLMCallResponse:
         if not self.api_key:
             raise GatewayProviderError("模型供应商未配置 API Key")
 
         payload = self._build_payload(request)
-        url = f"{self.base_url.rstrip('/')}/chat/completions"
-        http_request = Request(
-            url=url,
-            data=json.dumps(payload).encode("utf-8"),
-            headers={
-                "Authorization": f"Bearer {self.api_key}",
-                "Content-Type": "application/json",
-            },
-            method="POST",
-        )
+        client = self._client(self.timeout_seconds)
 
         try:
-            with urlopen(http_request, timeout=self.timeout_seconds) as response:
-                body = json.loads(response.read().decode("utf-8"))
-        except HTTPError as exc:
-            detail = exc.read().decode("utf-8", errors="ignore")
-            raise GatewayProviderError(f"模型供应商 HTTP {exc.code}: {detail[:300]}") from exc
-        except URLError as exc:
-            raise GatewayProviderError(f"模型供应商网络错误: {exc.reason}") from exc
+            response = await client.post(self._url(), json=payload, headers=self._headers())
+            if response.status_code >= 400:
+                detail = response.text[:300]
+                raise GatewayProviderError(f"模型供应商 HTTP {response.status_code}: {detail}")
+            body = response.json()
+        except GatewayProviderError:
+            raise
+        except httpx.RequestError as exc:
+            raise GatewayProviderError(f"模型供应商网络错误: {exc}") from exc
+        except json.JSONDecodeError as exc:
+            raise GatewayProviderError(f"模型供应商响应不是合法 JSON: {exc}") from exc
 
         text = self._extract_text(body)
         usage = self._extract_usage(body)
@@ -139,26 +193,22 @@ class OpenAICompatibleProvider:
             },
         )
 
-    def stream_generate(self, request: LLMCallRequest):
+    async def stream_generate(self, request: LLMCallRequest):
         if not self.api_key:
             raise GatewayProviderError("Model provider API key is not configured")
 
         payload = self._build_payload(request, stream=True)
-        url = f"{self.base_url.rstrip('/')}/chat/completions"
-        http_request = Request(
-            url=url,
-            data=json.dumps(payload).encode("utf-8"),
-            headers={
-                "Authorization": f"Bearer {self.api_key}",
-                "Content-Type": "application/json",
-            },
-            method="POST",
-        )
+        client = self._client(self.timeout_seconds)
 
         try:
-            with urlopen(http_request, timeout=self.timeout_seconds) as response:
-                for raw_line in response:
-                    line = raw_line.decode("utf-8", errors="ignore").strip()
+            async with client.stream(
+                "POST", self._url(), json=payload, headers=self._headers()
+            ) as response:
+                if response.status_code >= 400:
+                    detail = (await response.aread()).decode("utf-8", errors="ignore")[:300]
+                    raise GatewayProviderError(f"模型供应商 HTTP {response.status_code}: {detail}")
+                async for line in response.aiter_lines():
+                    line = line.strip()
                     if not line or not line.startswith("data:"):
                         continue
                     data = line.removeprefix("data:").strip()
@@ -174,11 +224,10 @@ class OpenAICompatibleProvider:
                     usage = self._extract_usage(body)
                     if usage:
                         yield LLMStreamChunk(usage=usage)
-        except HTTPError as exc:
-            detail = exc.read().decode("utf-8", errors="ignore")
-            raise GatewayProviderError(f"Model provider HTTP {exc.code}: {detail[:300]}") from exc
-        except URLError as exc:
-            raise GatewayProviderError(f"Model provider network error: {exc.reason}") from exc
+        except GatewayProviderError:
+            raise
+        except httpx.RequestError as exc:
+            raise GatewayProviderError(f"Model provider network error: {exc}") from exc
 
     def _build_payload(self, request: LLMCallRequest, stream: bool = False) -> dict[str, Any]:
         messages = request.messages or [{"role": "user", "content": request.prompt}]
@@ -214,6 +263,9 @@ class OpenAICompatibleProvider:
 class LLMGateway:
     """LLM 统一网关（支持异步限流）。"""
 
+    # 调用日志只保留最近 N 条（避免无界增长的内存泄漏）
+    _CALL_LOG_LIMIT = 500
+
     def __init__(
         self,
         providers: dict[str, LLMProvider] | None = None,
@@ -221,7 +273,7 @@ class LLMGateway:
         usage_recorder: UsageRecorder | None = None,
     ) -> None:
         self.providers = providers or {}
-        self.call_logs: list[LLMCallLog] = []
+        self.call_logs: deque[LLMCallLog] = deque(maxlen=self._CALL_LOG_LIMIT)
         self.prompt_compiler = PromptContextCompiler()
         self.limiter = limiter or rate_limiter
         self.usage_recorder = usage_recorder
@@ -250,10 +302,18 @@ class LLMGateway:
             )
             raise GatewayProviderError(error_message)
 
+        started_at = time.perf_counter()
         try:
             await self._check_rate_limit(request)
-            response = provider.generate(request)
+            response = await _await_maybe(provider.generate(request))
         except RateLimitExceeded:
+            record_rate_limit()
+            record_llm_call(
+                provider=request.provider,
+                model=request.model,
+                duration_seconds=time.perf_counter() - started_at,
+                error=True,
+            )
             error_message = "RateLimitExceeded: 限流超限，LLM 调用已被拒绝"
             await self._record_terminal(
                 usage_context, dispatch_status="rate_limited", error_category="rate_limit"
@@ -267,6 +327,12 @@ class LLMGateway:
             )
             raise
         except Exception as exc:
+            record_llm_call(
+                provider=request.provider,
+                model=request.model,
+                duration_seconds=time.perf_counter() - started_at,
+                error=True,
+            )
             error_message = self._normalize_error(exc)
             await self._record_terminal(
                 usage_context,
@@ -282,6 +348,13 @@ class LLMGateway:
             )
             raise GatewayProviderError(error_message) from exc
 
+        record_llm_call(
+            provider=request.provider,
+            model=request.model,
+            prompt_tokens=int(response.usage.get("prompt_tokens") or 0),
+            completion_tokens=int(response.usage.get("completion_tokens") or 0),
+            duration_seconds=time.perf_counter() - started_at,
+        )
         await self._record_terminal(
             usage_context, dispatch_status="succeeded", raw_usage=response.usage
         )
@@ -340,13 +413,14 @@ class LLMGateway:
             await self._check_rate_limit(request)
             streamer = getattr(provider, "stream_generate", None)
             if streamer is None:
-                response = provider.generate(request)
+                response = await _await_maybe(provider.generate(request))
                 for index in range(0, len(response.text), 24):
                     yield response.text[index : index + 24]
                 usage = response.usage
             else:
                 final_usage: dict[str, object] | None = None
-                for chunk in streamer(request):
+                chunk_iterator = _aiter_provider_chunks(streamer, request)
+                async for chunk in chunk_iterator:
                     if isinstance(chunk, LLMStreamChunk):
                         # Some OpenAI-compatible providers append an empty
                         # usage object after their real terminal usage.  An
@@ -399,6 +473,16 @@ class LLMGateway:
                 call_id=usage_context.gateway_call_id,
             )
         finally:
+            # 显式关闭 provider 流迭代器：消费方提前退出（aclose/异常）时
+            # 也需要让源（异步生成器/同步生成器）执行其收尾逻辑。
+            chunk_iterator_ref = locals().get("chunk_iterator")
+            if chunk_iterator_ref is not None:
+                iterator_aclose = getattr(chunk_iterator_ref, "aclose", None)
+                if iterator_aclose is not None:
+                    try:
+                        await iterator_aclose()
+                    except Exception:
+                        pass
             if not terminal_recorded:
                 await record_terminal_once(
                     dispatch_status="cancelled", error_category="cancelled"

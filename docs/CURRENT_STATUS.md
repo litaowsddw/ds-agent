@@ -1,5 +1,21 @@
 # 当前开发状态
 
+## v0.5.1 波次 3：性能与结构（2026-08-12）
+
+- **Provider 全量 httpx 化**：`OpenAICompatibleProvider` 迁移到 `httpx.AsyncClient`（连接池复用），
+  消除 urllib 同步阻塞；Gateway 增加 `sync/async provider 兼容`（`_await_maybe`）与
+  `同步/异步流式迭代器统一消费 + 显式关闭`（`_aiter_provider_chunks`）
+- **计量独立事务**：`SessionUsageRecorder.record_terminal` 改为独立短 session + 独立 commit，
+  请求失败/断流不再丢失已发生的计费事实
+- **可观测接电**：`LLMGateway.generate/stream_generate` 埋点 LLM 指标（调用数/耗时/Tokens/错误），
+  HTTP 中间件埋点 API 指标；`call_logs` 改有界 `deque(maxlen=500)`；`/metrics` 产出真实数据
+- **路由去阻塞**：knowledge embedding/文档解析、MCP 工具发现、chat RAG 工具的
+  同步 I/O 统一 `asyncio.to_thread` 移出事件循环
+- **健康检查分层**：`/health`（liveness）与 `/health/ready`（MySQL/Redis 依赖连通性）
+- **生产修复**：内置 skill（`bdl_*`）不再写入 `skill_evaluations`（外键约束失败导致
+  命中内置 skill 的 chat 500）
+- `requirements.txt` 新增 `httpx==0.28.1`
+
 ## v0.5 安全收口与工具链通电（2026-08-12）
 
 - **ReAct 工具循环通电**（此前生产从未工作）：
