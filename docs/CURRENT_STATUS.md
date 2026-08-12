@@ -1,5 +1,19 @@
 # 当前开发状态
 
+## v0.6 管线收敛与语义检索（2026-08-12）
+
+- **Chat 双路径收敛**：`/chat/` 不再有独立的会话/网关/执行栈，改为流通
+  `_chat_stream_events` 的薄适配器（记录状态码透传），stream 与 non-stream 编排
+  完全同路径；supervisor kind 映射为 `mode="supervisor"`；workflow 模式响应不变
+- **语义 Embedding 上线**：新增 `OpenAICompatibleEmbeddingProvider`
+  （`AGENTFLOW_EMBEDDING_PROVIDER=openai-compatible`），生产启用
+  `text-embedding-v4`（dim 1024，归一化后 IP 度量等价 cosine）；
+  新增兼容 `provider_id/provider_key` 的供应商解析；`.env.example` 文档化
+- **存量索引迁移**：14 篇存量文档已用新 embedding 重建进新 Milvus 集合
+  `agentflow_knowledge_chunks_te_v4`（相关/无关查询区分度从哈希级跃升为语义级
+  e.g. 0.369 vs 0.12-0.24）
+- **生产修复**：内置 skill（`bdl_*`）不再写 `skill_evaluations`（外键失败导致 500）
+
 ## v0.5.1 波次 3：性能与结构（2026-08-12）
 
 - **Provider 全量 httpx 化**：`OpenAICompatibleProvider` 迁移到 `httpx.AsyncClient`（连接池复用），

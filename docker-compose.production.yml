@@ -76,6 +76,12 @@ services:
       AGENTFLOW_VECTOR_BACKEND: milvus
       MILVUS_HOST: milvus
       MILVUS_PORT: "19530"
+      AGENTFLOW_EMBEDDING_PROVIDER: ${AGENTFLOW_EMBEDDING_PROVIDER:-local-hash}
+      AGENTFLOW_EMBEDDING_BASE_URL: ${AGENTFLOW_EMBEDDING_BASE_URL:-}
+      AGENTFLOW_EMBEDDING_API_KEY: ${AGENTFLOW_EMBEDDING_API_KEY:-}
+      AGENTFLOW_EMBEDDING_MODEL: ${AGENTFLOW_EMBEDDING_MODEL:-local-hash-embedding-v1}
+      AGENTFLOW_EMBEDDING_DIMENSION: ${AGENTFLOW_EMBEDDING_DIMENSION:-256}
+      MILVUS_COLLECTION: ${MILVUS_COLLECTION:-agentflow_knowledge_chunks}
     healthcheck:
       test: ["CMD", "python", "-c", "import urllib.request; urllib.request.urlopen('http://127.0.0.1:8000/health', timeout=5)"]
       interval: 10s

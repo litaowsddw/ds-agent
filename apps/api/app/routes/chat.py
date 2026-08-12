@@ -139,236 +139,68 @@ async def _build_chat_llm_stack(
     )
 
 
-def _build_default_chat_tools(db: AsyncSession, *, org_id: str, agent_id: str) -> list[Any]:
-    """Assemble the default agent-scoped tool set (opencode-style registry).
-
-    Knowledge search, memory recall, and skill discovery are safe read paths,
-    so every Supervisor SubAgent receives them by default; higher-risk MCP
-    tools stay behind the workflow approval path.
-    """
-    from apps.api.app.services.db.runtime_db import skill_db
-    from apps.api.app.services.db.workflow_db import knowledge_base_db
-    from app.services.knowledge_vector_index import (
-        build_embedding_provider_from_env,
-        build_vector_index_from_env,
-    )
-    from app.services.memory_vector import memory_vector_service
-    from packages.runtime.tools import build_system_tools
-
-    async def rag_executor(query: str, collection: str = "default", top_k: int = 5, **_: Any) -> list[dict[str, Any]]:
-        import asyncio
-
-        provider = build_embedding_provider_from_env()
-        index = build_vector_index_from_env(embedding_dimension=provider.dimension)
-        query_embedding = (await asyncio.to_thread(provider.embed_texts, [query]))[0]
-        kb_ids: list[str] = []
-        if collection and collection != "default":
-            kb_ids = [collection]
-        else:
-            kbs, _ = await knowledge_base_db.list_org_kbs(db, org_id)
-            kb_ids = [str(kb.kb_id) for kb in kbs]
-        hits: list[tuple[float, str]] = []
-        for kb_id in kb_ids:
-            for hit in index.search(org_id=org_id, kb_id=kb_id, query_embedding=query_embedding, limit=top_k):
-                hits.append((hit.score, hit.chunk_id))
-        hits.sort(key=lambda item: item[0], reverse=True)
-        return [{"chunk_id": chunk_id, "score": score} for score, chunk_id in hits[:top_k]]
-
-    async def memory_accessor(query: str, org_id: str, agent_id: str, top_k: int = 5, **_: Any) -> list[dict[str, Any]]:
-        memories = await memory_vector_service.recall(
-            db, org_id=org_id, agent_id=agent_id, query=query, limit=top_k
-        )
-        return [
-            {
-                key: getattr(memory, key)
-                for key in ("memory_id", "memory_type", "content", "summary", "confidence")
-                if hasattr(memory, key)
-            }
-            for memory in memories
-        ]
-
-    async def skill_search_accessor(query: str, org_id: str, agent_id: str, top_k: int = 5, **_: Any) -> list[dict[str, Any]]:
-        allowed = await skill_db.list_agent_allowed_skills(db, agent_id=agent_id, org_id=org_id)
-        needle = query.strip().lower()
-        matched = [
-            skill
-            for skill in allowed
-            if not needle or needle in f"{skill.name} {skill.description}".lower()
-        ]
-        return [
-            {"name": skill.name, "description": skill.description, "scope": str(getattr(skill, "scope", ""))}
-            for skill in matched[:top_k]
-        ]
-
-    return build_system_tools(
-        org_id=org_id,
-        agent_id=agent_id,
-        rag_executor=rag_executor,
-        memory_accessor=memory_accessor,
-        skill_search_accessor=skill_search_accessor,
-    )
-
-
 @router.post("/", response_model=ChatResponse)
 async def chat(
     request: ChatRequest,
     auth: AuthenticatedUser,
     db: AsyncSession = Depends(get_db_session),
 ) -> ChatResponse:
-    """Chat with an Agent through its configured real model provider."""
+    """Non-stream chat：单一流式编排管线的薄适配器。
 
-    try:
-        _require_server_authenticated_identity(auth)
+    非流式执行全部走 `_chat_stream_events`（与 `/chat/stream` 完全同一条编排
+    路径），本适配器只负责把事件流折叠回历史 JSON 契约。这样可以消灭
+    双路径各自的会话/网关/执行逻辑漂移——任何 chat 行为差异只会出现在
+    输出适配层，而不是在编排层。
+    """
+    final: dict[str, Any] = {}
+    error_detail = ""
+    error_status = 502
+
+    async for block in _chat_stream_events(request=request, auth=auth, db=db):
+        name, payload = _decode_sse_event(block)
+        if name == "run_finished":
+            final = payload
+        elif name == "error":
+            error_detail = str(payload.get("error") or "chat failed")
+            error_status = int(payload.get("status_code") or 500)
+
+    if error_detail:
+        raise HTTPException(status_code=error_status, detail=error_detail)
+
+    response_text = str(final.get("response") or "")
+    session_id = str(final.get("session_id") or "")
+    mode = str(final.get("mode") or "")
+    if request.execution_mode == "workflow":
+        mode = "workflow"
+    elif not mode:
         from apps.api.app.services.db.agent_db import agent_db
-        from apps.api.app.services.db.identity_db import membership_db
-        from apps.api.app.services.db.session_db import session_db, session_message_db
-        from packages.runtime.agent_runtime import AgentKind, AgentRuntime
-        from packages.runtime.system_prompt import build_agent_system_prompt
 
-        try:
-            agent = await agent_db.get_agent_required(db, request.agent_id)
-        except ValueError as exc:
-            raise HTTPException(status_code=404, detail="Agent not found") from exc
+        agent = await agent_db.get_agent_required(db, request.agent_id)
+        mode = "supervisor" if str(agent.kind or "") == "SUPERVISOR" else "llm"
 
-        org_id = str(agent.org_id)
-        await membership_db.assert_org_access(db, user_id=auth.user_id, org_id=org_id)
-        actor_user_id = auth.user_id
+    return ChatResponse(
+        response=response_text,
+        agent_id=request.agent_id,
+        session_id=session_id,
+        mode=mode,
+        workflow_id=str(final.get("workflow_id") or ""),
+        workflow_run_id=str(final.get("workflow_run_id") or ""),
+    )
 
-        session_id = ""
-        if request.session_id:
+
+def _decode_sse_event(block: str) -> tuple[str, dict[str, Any]]:
+    """把一段 SSE 文本解析为 (event, payload)。"""
+    name = ""
+    payload: dict[str, Any] = {}
+    for line in block.splitlines():
+        if line.startswith("event:"):
+            name = line[6:].strip()
+        elif line.startswith("data:"):
             try:
-                existing_session = await session_db.get_session_required(db, request.session_id)
-                if existing_session.org_id != org_id or existing_session.agent_id != request.agent_id:
-                    raise ValueError("Session does not belong to this agent")
-                session_id = existing_session.session_id
+                payload = json.loads(line[5:].strip())
             except ValueError:
-                session_id = ""
-
-        if not session_id:
-            session = await session_db.create_session(
-                db,
-                session_id=new_id("ses"),
-                org_id=org_id,
-                agent_id=request.agent_id,
-                user_id=agent.created_by,
-            )
-            session_id = str(session.session_id)
-
-        await session_message_db.append_message(
-            db,
-            message_id=new_id("msg"),
-            session_id=session_id,
-            org_id=org_id,
-            agent_id=request.agent_id,
-            role="user",
-            content=request.message,
-            estimated_tokens=max(1, len(request.message) // 4),
-        )
-
-        if request.execution_mode == "workflow":
-            from apps.api.app.routes.workflow_runs import execute_workflow_version_for_chat
-
-            workflow = await _resolve_workflow_for_chat(db, agent=agent, request=request)
-
-            run = await execute_workflow_version_for_chat(
-                db,
-                version_id=workflow.published_version_id,
-                input_data={"text": request.message},
-                actor_user_id=actor_user_id,
-            )
-            response_text = json.dumps(json.loads(run.output_data), ensure_ascii=False, sort_keys=True)
-            await session_message_db.append_message(
-                db,
-                message_id=new_id("msg"),
-                session_id=session_id,
-                org_id=org_id,
-                agent_id=request.agent_id,
-                role="assistant",
-                content=response_text,
-                estimated_tokens=max(1, len(response_text) // 4),
-                meta_info=_workflow_message_metadata(workflow.workflow_id, run.run_id),
-            )
-            await db.commit()
-            return ChatResponse(
-                response=response_text,
-                agent_id=request.agent_id,
-                session_id=session_id,
-                mode="workflow",
-                workflow_id=workflow.workflow_id,
-                workflow_run_id=run.run_id,
-            )
-
-        gateway, adapter, chat_model = await _build_chat_llm_stack(
-            db,
-            agent=agent,
-            actor_user_id=actor_user_id,
-            source="chat_autonomous",
-            session_id=str(session_id),
-        )
-
-        runtime = AgentRuntime(
-            agent_id=request.agent_id,
-            org_id=org_id,
-            model_provider=agent.model_provider or "",
-            model_name=agent.model_name or "",
-            workspace_id=agent.workspace_id or "",
-            llm_caller=adapter,
-            system_prompt=build_agent_system_prompt(
-                agent_name=str(agent.name or "Agent"),
-                agent_description=str(agent.description or ""),
-                agent_instructions=str(agent.system_prompt or ""),
-            ),
-            system_tools=_build_default_chat_tools(db, org_id=org_id, agent_id=str(agent.agent_id)),
-        )
-
-        agent_kind_str = agent.kind or "USER_SUB"
-        if agent_kind_str == AgentKind.SUPERVISOR.value or agent_kind_str == "SUPERVISOR":
-            runtime.init_supervisor(chat_model=chat_model, llm_caller=adapter)
-
-        if request.async_exec:
-            raise HTTPException(
-                status_code=501,
-                detail="Async supervisor execution is disabled until metered attribution is available.",
-            )
-
-        result = await runtime.chat(request.message, session_id=session_id)
-        if result.get("error"):
-            raise HTTPException(status_code=502, detail=str(result["error"]))
-
-        response_text = str(result.get("response") or "")
-        if response_text:
-            try:
-                await session_message_db.append_message(
-                    db,
-                    message_id=new_id("msg"),
-                    session_id=session_id,
-                    org_id=org_id,
-                    agent_id=request.agent_id,
-                    role="assistant",
-                    content=response_text,
-                    estimated_tokens=max(1, len(response_text) // 4),
-                )
-            except Exception as exc:
-                logger.warning("保存助手消息失败: %s", exc)
-
-        await db.commit()
-        return ChatResponse(
-            response=response_text,
-            agent_id=request.agent_id,
-            session_id=session_id,
-            mode=str(result.get("mode") or ("supervisor" if agent_kind_str == "SUPERVISOR" else "direct")),
-            intent=str(result.get("intent") or ""),
-            subtask_count=int(result.get("subtask_count") or 0),
-            succeeded_count=int(result.get("succeeded_count") or 0),
-            plan_id=str(result.get("plan_id") or ""),
-        )
-
-    except HTTPException:
-        await db.rollback()
-        raise
-    except Exception as exc:
-        await db.rollback()
-        raise HTTPException(status_code=500, detail=f"Chat failed: {exc}") from exc
+                payload = {}
+    return name, payload
 
 
 @router.post("/stream")
@@ -980,7 +812,8 @@ async def _chat_stream_events(
     except Exception as exc:
         await db.rollback()
         detail = exc.detail if isinstance(exc, HTTPException) else str(exc)
-        yield await emit("error", error=str(detail))
+        status_code = exc.status_code if isinstance(exc, HTTPException) else 500
+        yield await emit("error", error=str(detail), status_code=status_code)
 
 
 def _build_agent_prompt(

@@ -358,6 +358,70 @@ class MilvusVectorIndex:
         return value.replace("\\", "\\\\").replace('"', '\\"')
 
 
+class OpenAICompatibleEmbeddingProvider:
+    """OpenAI-compatible 语义 embedding provider（如 text-embedding-v4 / ada）。
+
+    与 local-hash 的确定性哈希完全不同：这是真正的语义向量。向量经 L2 归一化，
+    与 Milvus IP 度量（归一化后等价 cosine）配合。
+    """
+
+    def __init__(
+        self,
+        base_url: str,
+        api_key: str,
+        model_name: str,
+        dimension: int,
+        timeout_seconds: int = 30,
+    ) -> None:
+        self.base_url = base_url.rstrip("/")
+        self.api_key = api_key
+        self.model_name = model_name
+        self.dimension = dimension
+        self.timeout_seconds = timeout_seconds
+
+    def embed_texts(self, texts: list[str]) -> list[list[float]]:
+        if not texts:
+            return []
+        import httpx
+
+        payload = {"model": self.model_name, "input": texts}
+        response = httpx.post(
+            url=f"{self.base_url}/embeddings",
+            json=payload,
+            headers={
+                "Authorization": f"Bearer {self.api_key}",
+                "Content-Type": "application/json",
+            },
+            timeout=self.timeout_seconds,
+        )
+        if response.status_code >= 400:
+            detail = response.text[:300]
+            raise RuntimeError(f"Embedding HTTP {response.status_code}: {detail}")
+
+        body = response.json()
+        data = body.get("data") or []
+        # 供应商按 input 顺序返回向量，explicitly sort by index 对齐
+        ordered = sorted(data, key=lambda item: int(item.get("index", 0)))
+        if len(ordered) != len(texts):
+            raise RuntimeError(
+                f"Embedding 返回数量不匹配: expect {len(texts)}, got {len(ordered)}"
+            )
+
+        vectors: list[list[float]] = []
+        for item in ordered:
+            embedding = item.get("embedding")
+            if not isinstance(embedding, list):
+                raise RuntimeError("Embedding 响应缺少 embedding 字段")
+            vector = [float(value) for value in embedding]
+            if len(vector) != self.dimension:
+                raise RuntimeError(
+                    f"Embedding 维度不匹配: expect {self.dimension}, got {len(vector)}"
+                )
+            norm = math.sqrt(sum(value * value for value in vector))
+            vectors.append(vector if norm == 0 else [value / norm for value in vector])
+        return vectors
+
+
 def build_embedding_provider_from_env() -> EmbeddingProvider:
     """根据环境变量创建 embedding provider。"""
 
@@ -367,6 +431,19 @@ def build_embedding_provider_from_env() -> EmbeddingProvider:
     if provider == "ollama":
         return OllamaEmbeddingProvider(
             base_url=os.getenv("AGENTFLOW_EMBEDDING_BASE_URL", "http://127.0.0.1:11434"),
+            model_name=model_name,
+            dimension=dimension,
+            timeout_seconds=int(os.getenv("AGENTFLOW_EMBEDDING_TIMEOUT_SECONDS", "30")),
+        )
+    if provider in ("openai-compatible", "openai_compatible", "openai"):
+        api_key = os.getenv("AGENTFLOW_EMBEDDING_API_KEY", "")
+        if not api_key:
+            raise RuntimeError(
+                "AGENTFLOW_EMBEDDING_PROVIDER=openai-compatible 需要设置 AGENTFLOW_EMBEDDING_API_KEY"
+            )
+        return OpenAICompatibleEmbeddingProvider(
+            base_url=os.getenv("AGENTFLOW_EMBEDDING_BASE_URL", "").rstrip("/"),
+            api_key=api_key,
             model_name=model_name,
             dimension=dimension,
             timeout_seconds=int(os.getenv("AGENTFLOW_EMBEDDING_TIMEOUT_SECONDS", "30")),
