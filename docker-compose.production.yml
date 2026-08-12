@@ -41,8 +41,8 @@ services:
     environment:
       ETCD_ENDPOINTS: etcd:2379
       MINIO_ADDRESS: minio:9000
-      MINIO_ACCESS_KEY: ${MINIO_ROOT_USER:?Set MINIO_ROOT_USER in the external env file}
-      MINIO_SECRET_KEY: ${MINIO_ROOT_PASSWORD:?Set MINIO_ROOT_PASSWORD in the external env file}
+      MINIO_ACCESS_KEY_ID: ${MINIO_ROOT_USER:?Set MINIO_ROOT_USER in the external env file}
+      MINIO_SECRET_ACCESS_KEY: ${MINIO_ROOT_PASSWORD:?Set MINIO_ROOT_PASSWORD in the external env file}
 
   prometheus:
     restart: unless-stopped
@@ -73,6 +73,9 @@ services:
       JWT_SECRET: ${JWT_SECRET:?Set JWT_SECRET in the external env file}
       ENCRYPTION_KEY: ${ENCRYPTION_KEY:?Set ENCRYPTION_KEY in the external env file}
       STRICT_JWT: "true"
+      AGENTFLOW_VECTOR_BACKEND: milvus
+      MILVUS_HOST: milvus
+      MILVUS_PORT: "19530"
     healthcheck:
       test: ["CMD", "python", "-c", "import urllib.request; urllib.request.urlopen('http://127.0.0.1:8000/health', timeout=5)"]
       interval: 10s
@@ -125,6 +128,9 @@ services:
     restart: unless-stopped
     ports:
       - "127.0.0.1:18080:8080"
+    environment:
+      DEPLOY_USER: ${DEPLOY_USER:?Set DEPLOY_USER in the external env file}
+      DEPLOY_PASSWORD_HASH: ${DEPLOY_PASSWORD_HASH:?Set DEPLOY_PASSWORD_HASH in the external env file}
     volumes:
       - ./deploy/Caddyfile:/etc/caddy/Caddyfile:ro
     healthcheck:

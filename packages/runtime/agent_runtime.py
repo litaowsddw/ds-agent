@@ -3,21 +3,20 @@
 AgentRuntime 是每个 Agent 的运行时门面，API、Workflow Worker、后台 Agent
 都应该通过它访问上下文、Skill、MCP、Memory 等能力。
 
-v0.4 升级 — LangGraph + LangChain：
+v0.4 — LangGraph + LangChain 单一执行路径：
 - Supervisor 使用 LangGraph StateGraph（plan → delegate → reflect → respond）
 - SubAgent 使用 LangGraph ReAct Agent（支持真正的工具调用循环）
 - LLM 调用通过 GatewayChatModel 桥接到 LLMGateway
 - 工具（MCP/RAG/Skill/Memory）包装为 LangChain BaseTool
-- 保留旧接口兼容，新增 langgraph 模式
 """
 
+import logging
 from dataclasses import dataclass, field
 from typing import Any, Protocol
 
-from packages.runtime.supervisor import SupervisorAgent, SubAgentRun, TaskStatus
-from packages.runtime.subagent import SubAgentRegistry, AgentKind, SubAgentConfig, create_system_subagents
-from packages.runtime.session_router import SessionRouter
-from packages.runtime.execution_engine import SubAgentExecutionEngine
+from packages.runtime.subagent import SubAgentRegistry, AgentKind, create_system_subagents
+
+logger = logging.getLogger(__name__)
 
 
 class LLMCaller(Protocol):
@@ -54,9 +53,6 @@ class AgentRuntime:
     # Workspace ID
     workspace_id: str = ""
 
-    # 运行模式：legacy（旧版手写循环）或 langgraph（LangGraph StateGraph）
-    runtime_mode: str = "langgraph"
-
     # enabled_capabilities
     enabled_capabilities: list[str] = field(
         default_factory=lambda: [
@@ -66,24 +62,15 @@ class AgentRuntime:
         ]
     )
 
-    # Supervisor Agent（仅 kind=SUPERVISOR 时使用）
-    supervisor: SupervisorAgent | None = None
-
     # SubAgent 注册表
     subagent_registry: SubAgentRegistry | None = None
 
-    # Session 路由器
-    session_router: SessionRouter | None = None
-
-    # SubAgent 执行引擎（legacy 模式）
-    execution_engine: SubAgentExecutionEngine | None = None
-
-    # LangGraph 组件（langgraph 模式）
+    # LangGraph 组件
     langgraph_chat_model: Any = None  # GatewayChatModel
     langgraph_executor: Any = None    # LangGraphReActExecutor
     langgraph_supervisor_graph: Any = None  # 编译后的 Supervisor StateGraph
 
-    # LLM 调用器
+    # LLM 调用器（普通 Agent 直接对话路径）
     llm_caller: Any = None  # LLMCaller | None
 
     # 已由 API/A2A 边界编译的稳定平台提示词。直接对话也必须带上它，
@@ -97,35 +84,20 @@ class AgentRuntime:
     # 数据库访问器
     db_accessor: Any = None  # DBAccessor | None
 
-    def init_supervisor(self, llm_caller: Any = None, chat_model: Any = None) -> None:
+    def init_supervisor(self, chat_model: Any, llm_caller: Any = None) -> None:
         """初始化 Supervisor 模式。
 
         参数：
-            llm_caller: LLM 调用器（legacy 模式）
-            chat_model: LangChain BaseChatModel（langgraph 模式）
+            chat_model: LangChain BaseChatModel（GatewayChatModel）。Supervisor 的
+                plan/reflect 和 SubAgent ReAct 循环都依赖它，必须真实提供。
+            llm_caller: 兼容用途的文本调用器（可选）。
         """
         self.kind = AgentKind.SUPERVISOR
         self.llm_caller = llm_caller
         self.langgraph_chat_model = chat_model
 
-        # 初始化 legacy 组件
-        self.supervisor = SupervisorAgent(
-            agent_id=self.agent_id,
-            org_id=self.org_id,
-            model_provider=self.model_provider,
-            model_name=self.model_name,
-            llm_caller=llm_caller,
-        )
         self.subagent_registry = SubAgentRegistry()
-        self.session_router = SessionRouter()
-        self.execution_engine = SubAgentExecutionEngine(llm_caller=llm_caller)
-
-        # 初始化 LangGraph 组件
-        if self.runtime_mode == "langgraph":
-            self._init_langgraph_components()
-
-        # 创建主会话路由
-        self.session_router.create_main_session(self.agent_id)
+        self._init_langgraph_components()
 
         # 注册系统 SubAgent
         system_subagents = create_system_subagents(self.org_id, self.workspace_id)
@@ -160,19 +132,15 @@ class AgentRuntime:
 
     async def chat(self, user_input: str, session_id: str | None = None) -> dict[str, Any]:
         """处理用户输入，返回响应。"""
-        if self.kind == AgentKind.SUPERVISOR and self.supervisor:
-            if self.runtime_mode == "langgraph" and self.langgraph_supervisor_graph:
-                return await self._langgraph_supervisor_chat(user_input, session_id)
-            else:
-                return await self._supervisor_chat(user_input, session_id)
-        else:
-            return await self._direct_chat(user_input, session_id)
+        if self.kind == AgentKind.SUPERVISOR and self.langgraph_supervisor_graph:
+            return await self._supervisor_chat(user_input, session_id)
+        return await self._direct_chat(user_input, session_id)
 
-    # ---- LangGraph 模式 ----
-
-    async def _langgraph_supervisor_chat(self, user_input: str, session_id: str | None = None) -> dict[str, Any]:
-        """LangGraph Supervisor 模式。"""
-        available_subagents = self.subagent_registry.list_available_for_supervisor()
+    async def _supervisor_chat(self, user_input: str, session_id: str | None = None) -> dict[str, Any]:
+        """Supervisor 模式：plan → delegate → reflect → respond。"""
+        available_subagents = (
+            self.subagent_registry.list_available_for_supervisor() if self.subagent_registry else []
+        )
 
         if self.db_accessor and self.workspace_id:
             try:
@@ -180,8 +148,8 @@ class AgentRuntime:
                 for sa in db_subagents:
                     if sa.get("agent_id") != self.agent_id:
                         available_subagents.append(sa)
-            except Exception:
-                pass
+            except Exception as exc:
+                logger.warning("加载工作区 SubAgent 失败，使用内置注册表: %s", exc)
 
         initial_state = {
             "user_input": user_input,
@@ -207,8 +175,8 @@ class AgentRuntime:
             try:
                 await self.db_accessor.save_message(session_id, "user", user_input)
                 await self.db_accessor.save_message(session_id, "assistant", final_response)
-            except Exception:
-                pass
+            except Exception as exc:
+                logger.warning("保存会话消息失败: %s", exc)
 
         return {
             "response": final_response,
@@ -218,74 +186,6 @@ class AgentRuntime:
             "failed_count": len([r for r in subtask_results if r.status == "failed"]),
             "reflection_rounds": result_state.get("iteration", 0),
             "runtime_mode": "langgraph",
-        }
-
-    # ---- Legacy 模式（保留向后兼容）----
-
-    async def _supervisor_chat(self, user_input: str, session_id: str | None = None) -> dict[str, Any]:
-        """Legacy Supervisor 模式。"""
-        if not self.supervisor or not self.subagent_registry:
-            return {"error": "Supervisor 未初始化"}
-
-        available_subagents = self.subagent_registry.list_available_for_supervisor()
-
-        if self.db_accessor and self.workspace_id:
-            try:
-                db_subagents = await self.db_accessor.list_subagents(self.workspace_id, self.org_id)
-                for sa in db_subagents:
-                    if sa.get("agent_id") != self.agent_id:
-                        available_subagents.append(sa)
-            except Exception:
-                pass
-
-        plan = await self.supervisor.plan(user_input, available_subagents)
-
-        for run in plan.subtasks:
-            self.supervisor.spawn(run)
-
-        if self.execution_engine:
-            execution_results = await self.execution_engine.execute_sync(plan.subtasks, self.org_id)
-        else:
-            for run in plan.subtasks:
-                run.status = TaskStatus.SUCCEEDED
-                run.frozen_result_text = f"[降级执行] {run.task}"
-
-        plan = await self.supervisor.reflect(plan)
-
-        max_iterations = 3
-        iteration = 0
-        while not plan.final_response and iteration < max_iterations:
-            new_runs = [r for r in plan.subtasks if r.status == TaskStatus.PENDING]
-            if not new_runs:
-                break
-            for run in new_runs:
-                self.supervisor.spawn(run)
-            if self.execution_engine:
-                await self.execution_engine.execute_sync(new_runs, self.org_id)
-            plan = await self.supervisor.reflect(plan)
-            iteration += 1
-
-        if not plan.final_response:
-            final_response = self.supervisor.aggregate(plan)
-        else:
-            final_response = plan.final_response
-
-        if self.db_accessor and session_id:
-            try:
-                await self.db_accessor.save_message(session_id, "user", user_input)
-                await self.db_accessor.save_message(session_id, "assistant", final_response)
-            except Exception:
-                pass
-
-        return {
-            "response": final_response,
-            "plan_id": plan.plan_id,
-            "intent": plan.intent,
-            "subtask_count": len(plan.subtasks),
-            "succeeded_count": len([s for s in plan.subtasks if s.status == TaskStatus.SUCCEEDED]),
-            "failed_count": len([s for s in plan.subtasks if s.status == TaskStatus.FAILED]),
-            "reflection_rounds": iteration,
-            "runtime_mode": "legacy",
         }
 
     async def _direct_chat(self, user_input: str, session_id: str | None = None) -> dict[str, Any]:
@@ -310,8 +210,8 @@ class AgentRuntime:
                 try:
                     await self.db_accessor.save_message(session_id, "user", user_input)
                     await self.db_accessor.save_message(session_id, "assistant", response_text)
-                except Exception:
-                    pass
+                except Exception as exc:
+                    logger.warning("保存会话消息失败: %s", exc)
 
             return {"response": response_text, "mode": "llm"}
         except Exception as exc:
@@ -324,7 +224,6 @@ class AgentRuntime:
             "agent_id": self.agent_id,
             "kind": self.kind,
             "workspace_id": self.workspace_id,
-            "runtime_mode": self.runtime_mode,
         }
 
         result: dict[str, Any] = {
@@ -336,13 +235,7 @@ class AgentRuntime:
             ],
         }
 
-        if self.supervisor:
-            result["supervisor"] = self.supervisor.describe()
-
         if self.subagent_registry:
             result["subagents"] = self.subagent_registry.list_available_for_supervisor()
-
-        if self.execution_engine:
-            result["execution_history_count"] = len(self.execution_engine.get_execution_history())
 
         return result

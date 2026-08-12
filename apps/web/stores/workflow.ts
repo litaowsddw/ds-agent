@@ -31,6 +31,43 @@ import type {
 type ConditionBranch = "true" | "false";
 export type EditableExecutionLimits = { max_steps: string; max_llm_calls: string };
 
+interface CanvasSnapshot {
+  nodes: Node<CustomNodeData>[];
+  edges: Edge[];
+}
+
+interface CanvasHistory {
+  past: CanvasSnapshot[];
+  future: CanvasSnapshot[];
+}
+
+const HISTORY_LIMIT = 80;
+const PROTECTED_NODE_TYPES = new Set(["start", "end"]);
+
+function takeSnapshot(nodes: Node<CustomNodeData>[], edges: Edge[]): CanvasSnapshot {
+  return {
+    nodes: nodes.map((node) => ({
+      ...node,
+      position: { ...node.position },
+      data: {
+        ...node.data,
+        config: node.data.config ? { ...node.data.config } : node.data.config,
+      },
+    })),
+    edges: edges.map((edge) => ({ ...edge })),
+  };
+}
+
+function pushHistory(history: CanvasHistory, nodes: Node<CustomNodeData>[], edges: Edge[]): CanvasHistory {
+  return {
+    past: [...history.past.slice(-(HISTORY_LIMIT - 1)), takeSnapshot(nodes, edges)],
+    future: [],
+  };
+}
+
+/** Node ids currently being dragged; one history snapshot per drag gesture. */
+const dragSnapshotIds = new Set<string>();
+
 interface WorkflowStore {
   nodes: Node<CustomNodeData>[];
   edges: Edge[];
@@ -45,6 +82,9 @@ interface WorkflowStore {
   workflowForm: { name: string; description: string; input: string };
   executionLimits: EditableExecutionLimits;
   validation: WorkflowValidationResult | null;
+  history: CanvasHistory;
+  /** Flow position where a palette click should drop a node (tracks canvas pointer). */
+  pendingAddPosition: { x: number; y: number } | null;
 
   onNodesChange: (changes: NodeChange[]) => void;
   onEdgesChange: (changes: EdgeChange[]) => void;
@@ -56,8 +96,35 @@ interface WorkflowStore {
   ) => WorkflowConnectionResult;
   connectNodes: (sourceId: string, targetId: string, branch?: ConditionBranch) => WorkflowConnectionResult;
   addNode: (item: WorkflowPaletteItem) => void;
+  addNodeAt: (item: WorkflowPaletteItem, position: { x: number; y: number }) => void;
+  /** Creates a node at `position` and wires it to `sourceId` in one undo step. */
+  connectNewNode: (
+    sourceId: string | null,
+    branch: ConditionBranch | undefined,
+    item: WorkflowPaletteItem,
+    position: { x: number; y: number }
+  ) => WorkflowConnectionResult;
+  /** Splits an existing edge and inserts a new node between its ends. */
+  insertNodeIntoEdge: (
+    edgeId: string,
+    item: WorkflowPaletteItem,
+    position: { x: number; y: number }
+  ) => boolean;
+  /** Renames a node's display name (empty string restores the type default). */
+  renameNode: (nodeId: string, displayName: string) => void;
+  /** Copies selected non-protected nodes to the clipboard; returns the count. */
+  copySelection: () => number;
+  /** Pastes clipboard nodes at an optional position; returns the count. */
+  pasteClipboard: (position?: { x: number; y: number }) => number;
+  selectAllNodes: () => void;
+  duplicateSelectedNodes: () => number;
+  deleteSelection: () => void;
   removeSelectedNode: () => void;
   removeSelectedEdge: () => void;
+  undo: () => void;
+  redo: () => void;
+  applyAutoLayout: () => void;
+  setPendingAddPosition: (position: { x: number; y: number } | null) => void;
   setSelectedNodeId: (id: string) => void;
   setSelectedEdgeId: (id: string) => void;
   updateSelectedNodeConfig: (patch: Record<string, unknown>) => void;
@@ -178,9 +245,14 @@ function parseMaybeJson(value: unknown): unknown {
 }
 
 function hydrateNodes(definition: WorkflowDefinition): Node<CustomNodeData>[] {
-  return definition.nodes.map((node, index) =>
-    makeNode(node.type, node.id, { x: 80 + index * 280, y: 260 }, node.config)
-  );
+  return definition.nodes.map((node, index) => {
+    const savedPosition = node.position;
+    const position =
+      savedPosition && Number.isFinite(savedPosition.x) && Number.isFinite(savedPosition.y)
+        ? { x: savedPosition.x, y: savedPosition.y }
+        : { x: 80 + index * 300, y: 260 };
+    return makeNode(node.type, node.id, position, node.config);
+  });
 }
 
 function hydrateEdges(definition: WorkflowDefinition): Edge[] {
@@ -268,6 +340,61 @@ function wouldCreateCycle(edges: Edge[], sourceId: string, targetId: string): bo
   return false;
 }
 
+/** Guards around the ids the canvas must never remove. */
+function isProtectedNode(node: Node<CustomNodeData> | undefined, nodeId?: string): boolean {
+  if (node) return PROTECTED_NODE_TYPES.has(String(node.type ?? ""));
+  return nodeId === "start" || nodeId === "end";
+}
+
+/** Computes a layered DAG layout. Layers come from BFS depth off the start node. */
+export function computeAutoLayoutPositions(
+  nodes: Node<CustomNodeData>[],
+  edges: Edge[]
+): Map<string, { x: number; y: number }> {
+  const LAYER_WIDTH = 320;
+  const ROW_HEIGHT = 150;
+  const layerById = new Map<string, number>();
+  const startNode = nodes.find((node) => node.type === "start") ?? nodes[0];
+  if (startNode) {
+    layerById.set(startNode.id, 0);
+    const queue = [startNode.id];
+    // A cyclic draft (legacy data) must not spin forever: stop once every
+    // reachable node settled at its deepest layer, at most |nodes| passes.
+    let remainingPasses = nodes.length + 1;
+    while (queue.length > 0 && remainingPasses > 0) {
+      remainingPasses -= 1;
+      const current = queue.shift() as string;
+      const currentLayer = layerById.get(current) ?? 0;
+      for (const edge of edges) {
+        if (edge.source !== current) continue;
+        const nextLayer = currentLayer + 1;
+        if (nextLayer > nodes.length) continue;
+        if (!layerById.has(edge.target) || (layerById.get(edge.target) ?? 0) < nextLayer) {
+          layerById.set(edge.target, nextLayer);
+          queue.push(edge.target);
+        }
+      }
+    }
+  }
+  // Nodes unreachable from start are appended after the deepest known layer.
+  const orphanLayer = 1 + Math.max(0, ...layerById.values());
+  const grouped = new Map<number, string[]>();
+  for (const node of nodes) {
+    const layer = layerById.get(node.id) ?? orphanLayer;
+    grouped.set(layer, [...(grouped.get(layer) ?? []), node.id]);
+  }
+  const positions = new Map<string, { x: number; y: number }>();
+  for (const [layer, ids] of grouped) {
+    ids.forEach((id, index) => {
+      positions.set(id, {
+        x: 120 + layer * LAYER_WIDTH,
+        y: 300 - (ids.length - 1) * (ROW_HEIGHT / 2) + index * ROW_HEIGHT,
+      });
+    });
+  }
+  return positions;
+}
+
 function checkConnection(
   nodes: Node<CustomNodeData>[],
   edges: Edge[],
@@ -325,20 +452,50 @@ export const useWorkflowStore = create<WorkflowStore>((set, get) => ({
   workflowForm: { name: "", description: "", input: "" },
   executionLimits: { max_steps: "", max_llm_calls: "" },
   validation: null,
+  history: { past: [], future: [] },
+  pendingAddPosition: null,
 
-  onNodesChange: (changes) =>
+  onNodesChange: (changes) => {
+    const nodesById = new Map(get().nodes.map((node) => [node.id, node]));
+    const allowedChanges = changes.filter((change) => {
+      if (change.type !== "remove") return true;
+      return !isProtectedNode(nodesById.get(change.id), change.id);
+    });
+    if (allowedChanges.length === 0) return;
+
+    const hasRemoval = allowedChanges.some((change) => change.type === "remove");
+    let dragStarted = false;
+    for (const change of allowedChanges) {
+      if (change.type === "position" && change.dragging && !dragSnapshotIds.has(change.id)) {
+        dragSnapshotIds.add(change.id);
+        dragStarted = true;
+      } else if (change.type === "position" && change.dragging === false) {
+        dragSnapshotIds.delete(change.id);
+      }
+    }
+
     set((state) => ({
-      nodes: applyNodeChanges(changes, state.nodes) as Node<CustomNodeData>[],
+      nodes: applyNodeChanges(allowedChanges, state.nodes) as Node<CustomNodeData>[],
       validation: null,
-    })),
-  onEdgesChange: (changes) =>
+      history: hasRemoval || dragStarted ? pushHistory(state.history, state.nodes, state.edges) : state.history,
+      selectedNodeId: allowedChanges.some(
+        (change) => change.type === "remove" && change.id === state.selectedNodeId
+      )
+        ? ""
+        : state.selectedNodeId,
+    }));
+  },
+  onEdgesChange: (changes) => {
+    const hasRemoval = changes.some((change) => change.type === "remove");
     set((state) => ({
       edges: applyEdgeChanges(changes, state.edges),
       validation: null,
+      history: hasRemoval ? pushHistory(state.history, state.nodes, state.edges) : state.history,
       selectedEdgeId: changes.some((change) => change.type === "remove" && change.id === state.selectedEdgeId)
         ? ""
         : state.selectedEdgeId,
-    })),
+    }));
+  },
   validateConnection: (sourceId, targetId, branch) =>
     checkConnection(get().nodes, get().edges, sourceId, targetId, branch),
 
@@ -347,6 +504,7 @@ export const useWorkflowStore = create<WorkflowStore>((set, get) => ({
     if (!result.valid) return result;
 
     set((state) => ({
+      history: pushHistory(state.history, state.nodes, state.edges),
       edges: addEdge(
         {
           id: `${sourceId}-${targetId}-${Date.now().toString(36)}`,
@@ -375,96 +533,299 @@ export const useWorkflowStore = create<WorkflowStore>((set, get) => ({
   },
 
   addNode: (item) => {
+    const state = get();
+    const anchor =
+      state.nodes.find((node) => node.id === state.selectedNodeId) ??
+      state.nodes.find((node) => node.type === "end") ??
+      state.nodes[state.nodes.length - 1];
+    const fallback = anchor
+      ? { x: anchor.position.x + 40, y: anchor.position.y + 160 }
+      : { x: 260 + state.nodes.length * 24, y: 140 + state.nodes.length * 16 };
+    get().addNodeAt(item, state.pendingAddPosition ?? fallback);
+  },
+
+  addNodeAt: (item, position) => {
     const nodeIndex = get().nodes.length + 1;
+    const id = `${item.type}_${Date.now().toString(36)}_${nodeIndex}`;
+    set((state) => ({
+      history: pushHistory(state.history, state.nodes, state.edges),
+      nodes: [...state.nodes, makeNode(item.type, id, position)],
+      selectedNodeId: id,
+      selectedEdgeId: "",
+      validation: null,
+    }));
+  },
+
+  connectNewNode: (sourceId, branch, item, position) => {
+    const state = get();
+    const nodeIndex = state.nodes.length + 1;
     const timestamp = Date.now().toString(36);
     const id = `${item.type}_${timestamp}_${nodeIndex}`;
-    set((state) => {
-      let anchor = state.nodes.find((node) => node.id === state.selectedNodeId)
-        ?? state.nodes.find((node) => node.id === "llm")
-        ?? state.nodes[0];
-      let sourceId = anchor?.id ?? "";
-      let targetId = "";
-      let replacedEdgeId = "";
-
-      if (anchor?.type === "end") {
-        const incomingEdge = state.edges.find((edge) => edge.target === anchor?.id);
-        if (incomingEdge) {
-          sourceId = incomingEdge.source;
-          targetId = incomingEdge.target;
-          replacedEdgeId = incomingEdge.id;
-          anchor = state.nodes.find((node) => node.id === sourceId) ?? anchor;
-        }
-      } else if (sourceId) {
-        const outgoingEdge = state.edges.find((edge) => edge.source === sourceId);
-        if (outgoingEdge) {
-          targetId = outgoingEdge.target;
-          replacedEdgeId = outgoingEdge.id;
-        }
-      }
-
-      const basePosition = anchor?.position ?? { x: 260, y: 260 };
-      const position = { x: basePosition.x + 300, y: basePosition.y };
-      const shiftedNodes = state.nodes.map((node) => {
-        if (node.position.x >= position.x && node.id !== sourceId) {
-          return { ...node, position: { ...node.position, x: node.position.x + 280 } };
-        }
-        return node;
-      });
-      const remainingEdges = replacedEdgeId
-        ? state.edges.filter((edge) => edge.id !== replacedEdgeId)
-        : state.edges;
-      const sourceNode = state.nodes.find((node) => node.id === sourceId);
-      const replacedEdge = state.edges.find((edge) => edge.id === replacedEdgeId);
-      const inheritedBranch = sourceNode?.type === "condition" &&
-        (replacedEdge?.sourceHandle === "true" || replacedEdge?.sourceHandle === "false")
-        ? replacedEdge.sourceHandle
-        : undefined;
-      const insertedEdges = sourceId
+    const candidate = makeNode(item.type, id, position);
+    if (sourceId) {
+      // The node does not exist yet, so validate against a hypothetical canvas.
+      const check = checkConnection([...state.nodes, candidate], state.edges, sourceId, id, branch);
+      if (!check.valid) return check;
+    }
+    const branchLabelStyle = branch ? { fill: "#475467", fontSize: 11, fontWeight: 600 } : undefined;
+    set((current) => ({
+      history: pushHistory(current.history, current.nodes, current.edges),
+      nodes: [...current.nodes, candidate],
+      edges: sourceId
         ? [
+            ...current.edges,
             {
               id: `${sourceId}-${id}-${timestamp}`,
               source: sourceId,
               target: id,
-              sourceHandle: inheritedBranch,
-              label: inheritedBranch,
+              sourceHandle: branch,
+              label: branch,
+              labelStyle: branchLabelStyle,
               animated: true,
             },
-            ...(targetId && item.type === "condition"
-              ? (["true", "false"] as const).map((branch) => ({
-                  id: `${id}-${branch}-${targetId}-${timestamp}`,
-                  source: id,
-                  target: targetId,
-                  sourceHandle: branch,
-                  label: branch,
-                  animated: true,
-                }))
-              : targetId
-                ? [{
-                    id: `${id}-${targetId}-${timestamp}`,
-                    source: id,
-                    target: targetId,
-                    animated: true,
-                  }]
-                : []),
           ]
-        : [];
-
-      return {
-        nodes: [...shiftedNodes, makeNode(item.type, id, position)],
-        edges: [...remainingEdges, ...insertedEdges],
-        selectedNodeId: id,
-        validation: null,
-      };
-    });
+        : current.edges,
+      selectedNodeId: id,
+      selectedEdgeId: "",
+      validation: null,
+    }));
+    return { valid: true, message: "Connection is valid" };
   },
 
-  removeSelectedNode: () => {
-    const selectedNodeId = get().selectedNodeId;
-    if (!selectedNodeId || selectedNodeId === "start" || selectedNodeId === "end") return;
+  duplicateSelectedNodes: () => {
+    const state = get();
+    const candidates = state.nodes.filter(
+      (node) => (node.selected || node.id === state.selectedNodeId) && !isProtectedNode(node)
+    );
+    if (candidates.length === 0) return 0;
+    const timestamp = Date.now().toString(36);
+    const copies: Node<CustomNodeData>[] = candidates.map((node, index) => ({
+      ...node,
+      id: `${node.type}_${timestamp}_dup${index}_${state.nodes.length + index + 1}`,
+      position: { x: node.position.x + 48, y: node.position.y + 48 },
+      selected: false,
+      data: { ...node.data, config: node.data.config ? { ...node.data.config } : node.data.config },
+    }));
+    set((current) => ({
+      history: pushHistory(current.history, current.nodes, current.edges),
+      nodes: [...current.nodes, ...copies],
+      selectedNodeId: copies[0]?.id ?? current.selectedNodeId,
+      selectedEdgeId: "",
+      validation: null,
+    }));
+    return copies.length;
+  },
+
+  deleteSelection: () => {
+    const state = get();
+    const removedNodeIds = new Set(
+      state.nodes
+        .filter((node) => (node.selected || node.id === state.selectedNodeId) && !isProtectedNode(node))
+        .map((node) => node.id)
+    );
+    const removedEdgeIds = new Set(state.edges.filter((edge) => edge.selected).map((edge) => edge.id));
+    if (state.selectedEdgeId) removedEdgeIds.add(state.selectedEdgeId);
+    if (removedNodeIds.size === 0 && removedEdgeIds.size === 0) return;
+    set((current) => ({
+      history: pushHistory(current.history, current.nodes, current.edges),
+      nodes: current.nodes.filter((node) => !removedNodeIds.has(node.id)),
+      edges: current.edges.filter(
+        (edge) =>
+          !removedEdgeIds.has(edge.id) && !removedNodeIds.has(edge.source) && !removedNodeIds.has(edge.target)
+      ),
+      selectedNodeId: removedNodeIds.has(current.selectedNodeId) ? "" : current.selectedNodeId,
+      selectedEdgeId: "",
+      validation: null,
+    }));
+  },
+
+  undo: () => {
+    const { history } = get();
+    const previous = history.past[history.past.length - 1];
+    if (!previous) return;
     set((state) => ({
-      nodes: state.nodes.filter((node) => node.id !== selectedNodeId),
-      edges: state.edges.filter((edge) => edge.source !== selectedNodeId && edge.target !== selectedNodeId),
-      selectedNodeId: "llm",
+      history: {
+        past: history.past.slice(0, -1),
+        future: [...history.future, takeSnapshot(state.nodes, state.edges)],
+      },
+      nodes: previous.nodes,
+      edges: previous.edges,
+      selectedNodeId: previous.nodes.some((node) => node.id === state.selectedNodeId)
+        ? state.selectedNodeId
+        : "",
+      selectedEdgeId: previous.edges.some((edge) => edge.id === state.selectedEdgeId)
+        ? state.selectedEdgeId
+        : "",
+      validation: null,
+    }));
+  },
+
+  redo: () => {
+    const { history } = get();
+    const next = history.future[history.future.length - 1];
+    if (!next) return;
+    set((state) => ({
+      history: {
+        past: [...history.past, takeSnapshot(state.nodes, state.edges)],
+        future: history.future.slice(0, -1),
+      },
+      nodes: next.nodes,
+      edges: next.edges,
+      selectedNodeId: next.nodes.some((node) => node.id === state.selectedNodeId)
+        ? state.selectedNodeId
+        : "",
+      selectedEdgeId: next.edges.some((edge) => edge.id === state.selectedEdgeId)
+        ? state.selectedEdgeId
+        : "",
+      validation: null,
+    }));
+  },
+
+  applyAutoLayout: () =>
+    set((state) => {
+      const positions = computeAutoLayoutPositions(state.nodes, state.edges);
+      return {
+        history: pushHistory(state.history, state.nodes, state.edges),
+        nodes: state.nodes.map((node) =>
+          positions.has(node.id) ? { ...node, position: positions.get(node.id) as { x: number; y: number } } : node
+        ),
+        validation: null,
+      };
+    }),
+
+  setPendingAddPosition: (position) => set({ pendingAddPosition: position }),
+
+  insertNodeIntoEdge: (edgeId, item, position) => {
+    const state = get();
+    const edge = state.edges.find((entry) => entry.id === edgeId);
+    if (!edge) return false;
+    const timestamp = Date.now().toString(36);
+    const id = `${item.type}_${timestamp}_${state.nodes.length + 1}`;
+    const branch =
+      edge.sourceHandle === "true" || edge.sourceHandle === "false" ? edge.sourceHandle : undefined;
+    const branchLabelStyle = branch ? { fill: "#475467", fontSize: 11, fontWeight: 600 } : undefined;
+    set((current) => ({
+      history: pushHistory(current.history, current.nodes, current.edges),
+      nodes: [...current.nodes, makeNode(item.type, id, position)],
+      edges: [
+        ...current.edges.filter((entry) => entry.id !== edgeId),
+        {
+          id: `${edge.source}-${id}-${timestamp}`,
+          source: edge.source,
+          target: id,
+          sourceHandle: branch,
+          label: branch,
+          labelStyle: branchLabelStyle,
+          animated: true,
+        },
+        {
+          id: `${id}-${edge.target}-${timestamp}`,
+          source: id,
+          target: edge.target,
+          animated: true,
+        },
+      ],
+      selectedNodeId: id,
+      selectedEdgeId: "",
+      validation: null,
+    }));
+    return true;
+  },
+
+  renameNode: (nodeId, displayName) =>
+    set((state) => ({
+      history: pushHistory(state.history, state.nodes, state.edges),
+      nodes: state.nodes.map((node) =>
+        node.id === nodeId
+          ? {
+              ...node,
+              data: {
+                ...node.data,
+                config: { ...(node.data.config ?? {}), display_name: displayName },
+              },
+            }
+          : node
+      ),
+      validation: null,
+    })),
+
+  copySelection: () => {
+    const state = get();
+    const selected = state.nodes.filter(
+      (node) => (node.selected || node.id === state.selectedNodeId) && !isProtectedNode(node)
+    );
+    if (selected.length === 0) return 0;
+    const minX = Math.min(...selected.map((node) => node.position.x));
+    const minY = Math.min(...selected.map((node) => node.position.y));
+    const payload = {
+      kind: "agentflow-workflow-nodes",
+      nodes: selected.map((node) => ({
+        type: String(node.type ?? ""),
+        offset: { x: node.position.x - minX, y: node.position.y - minY },
+        config: node.data.config ?? {},
+      })),
+    };
+    try {
+      window.localStorage.setItem("agentflow-workflow-clipboard", JSON.stringify(payload));
+    } catch {
+      return 0;
+    }
+    return selected.length;
+  },
+
+  pasteClipboard: (position) => {
+    if (typeof window === "undefined") return 0;
+    let payload: {
+      kind: string;
+      nodes: Array<{ type: string; offset: { x: number; y: number }; config: Record<string, unknown> }>;
+    } | null = null;
+    try {
+      payload = JSON.parse(window.localStorage.getItem("agentflow-workflow-clipboard") ?? "null");
+    } catch {
+      return 0;
+    }
+    if (!payload || payload.kind !== "agentflow-workflow-nodes" || payload.nodes.length === 0) return 0;
+    const state = get();
+    const anchor =
+      position ??
+      state.pendingAddPosition ?? {
+        x: 200 + state.nodes.length * 16,
+        y: 160 + state.nodes.length * 12,
+      };
+    const timestamp = Date.now().toString(36);
+    const copies = payload.nodes.map((item, index) =>
+      makeNode(
+        item.type,
+        `${item.type}_${timestamp}_paste${index}_${state.nodes.length + index + 1}`,
+        { x: anchor.x + item.offset.x, y: anchor.y + item.offset.y },
+        { ...item.config }
+      )
+    );
+    set((current) => ({
+      history: pushHistory(current.history, current.nodes, current.edges),
+      nodes: [...current.nodes, ...copies],
+      selectedNodeId: copies[0]?.id ?? current.selectedNodeId,
+      selectedEdgeId: "",
+      validation: null,
+    }));
+    return copies.length;
+  },
+
+  selectAllNodes: () =>
+    set((state) => ({
+      nodes: state.nodes.map((node) => ({ ...node, selected: true })),
+    })),
+
+  removeSelectedNode: () => {
+    const state = get();
+    const selectedNodeId = state.selectedNodeId;
+    const selected = state.nodes.find((node) => node.id === selectedNodeId);
+    if (!selectedNodeId || isProtectedNode(selected, selectedNodeId)) return;
+    set((current) => ({
+      history: pushHistory(current.history, current.nodes, current.edges),
+      nodes: current.nodes.filter((node) => node.id !== selectedNodeId),
+      edges: current.edges.filter((edge) => edge.source !== selectedNodeId && edge.target !== selectedNodeId),
+      selectedNodeId: "",
       selectedEdgeId: "",
       validation: null,
     }));
@@ -474,6 +835,7 @@ export const useWorkflowStore = create<WorkflowStore>((set, get) => ({
     const selectedEdgeId = get().selectedEdgeId;
     if (!selectedEdgeId) return;
     set((state) => ({
+      history: pushHistory(state.history, state.nodes, state.edges),
       edges: state.edges.filter((edge) => edge.id !== selectedEdgeId),
       selectedEdgeId: "",
       validation: null,
@@ -508,6 +870,7 @@ export const useWorkflowStore = create<WorkflowStore>((set, get) => ({
     const definition = cloneWorkflowDefinition(template.definition);
     const nodes = hydrateNodes(definition);
     set((state) => ({
+      history: pushHistory(state.history, state.nodes, state.edges),
       nodes,
       edges: hydrateEdges(definition),
       // A template is always a fresh draft. Retaining an existing ID would
@@ -546,20 +909,23 @@ export const useWorkflowStore = create<WorkflowStore>((set, get) => ({
       },
       executionLimits: editableExecutionLimits(workflow.draft_definition),
       validation: null,
+      history: { past: [], future: [] },
     });
   },
 
   setSelectedRunId: (id) => set({ selectedRunId: id }),
 
   resetCanvas: () =>
-    set({
+    set((state) => ({
+      history: pushHistory(state.history, state.nodes, state.edges),
       nodes: INITIAL_NODES as Node<CustomNodeData>[],
       edges: INITIAL_EDGES as Edge[],
       selectedNodeId: "llm",
+      selectedEdgeId: "",
       nodeRuns: [],
       executionLimits: { max_steps: "", max_llm_calls: "" },
       validation: null,
-    }),
+    })),
 
   getWorkflowDraft: () => {
     const { nodes, edges, executionLimits } = get();
@@ -602,7 +968,12 @@ export const useWorkflowStore = create<WorkflowStore>((set, get) => ({
           delete config.true_label;
           delete config.false_label;
         }
-        return { id: node.id, type: nodeType, config: cleanConfig(config) };
+        return {
+          id: node.id,
+          type: nodeType,
+          config: cleanConfig(config),
+          position: { x: Math.round(node.position.x), y: Math.round(node.position.y) },
+        };
       }),
       edges: edges.map((edge) => {
         const branch = edge.sourceHandle === "true" || edge.sourceHandle === "false"
@@ -728,6 +1099,7 @@ export const useWorkflowStore = create<WorkflowStore>((set, get) => ({
       selectedEdgeId: "",
       executionLimits: editableExecutionLimits(workflow.draft_definition),
       validation: null,
+      history: { past: [], future: [] },
     }));
   },
 
@@ -778,6 +1150,8 @@ export const useWorkflowStore = create<WorkflowStore>((set, get) => ({
       workflowForm: { name: "", description: "", input: "" },
       executionLimits: { max_steps: "", max_llm_calls: "" },
       validation: null,
+      history: { past: [], future: [] },
+      pendingAddPosition: null,
     }),
 
   refreshWorkflows: async (orgId, actorUserId, agentId) => {
@@ -801,6 +1175,9 @@ export const useWorkflowStore = create<WorkflowStore>((set, get) => ({
           ? editableExecutionLimits(selectedWorkflow.draft_definition)
           : state.executionLimits,
         validation: null,
+        history: selectedWorkflow && selectedWorkflowId === state.selectedWorkflowId
+          ? state.history
+          : { past: [], future: [] },
       };
     });
   },

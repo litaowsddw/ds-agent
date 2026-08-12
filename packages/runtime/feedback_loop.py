@@ -61,7 +61,7 @@ class FeedbackLoopResult:
     # analysis 是运行分析
     analysis: RunAnalysis | None = None
     # evolution_records 是进化记录
-    evolution_records: list[EvolutionRecord] = list
+    evolution_records: list[EvolutionRecord] = field(default_factory=list)
     # applied_count 是已应用的进化数
     applied_count: int = 0
     # pending_approval_count 是待审批的进化数
@@ -121,6 +121,11 @@ class FeedbackLoop:
         # 5. 执行进化
         evolution_records = await self.evolver.evolve(agent_id, org_id)
         result.evolution_records = evolution_records[:self.config.max_evolution_per_cycle]
+
+        # 记录进化时间戳，让冷却期真正生效（此前 _last_evolution_time 从未写入）
+        from datetime import datetime, timezone
+
+        self._last_evolution_time[agent_id] = datetime.now(timezone.utc).isoformat()
 
         # 6. 应用进化
         for record in result.evolution_records:
@@ -183,7 +188,7 @@ class FeedbackLoop:
 
     def _check_cooldown(self, agent_id: str) -> bool:
         """检查冷却时间。"""
-        from datetime import datetime, timedelta
+        from datetime import datetime, timedelta, timezone
 
         last_time = self._last_evolution_time.get(agent_id)
         if not last_time:
@@ -192,7 +197,7 @@ class FeedbackLoop:
         try:
             last_dt = datetime.fromisoformat(last_time)
             cooldown = timedelta(hours=self.config.cooldown_hours)
-            return datetime.utcnow() - last_dt >= cooldown
+            return datetime.now(timezone.utc) - last_dt >= cooldown
         except (ValueError, TypeError):
             return True
 

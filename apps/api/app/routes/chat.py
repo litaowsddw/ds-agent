@@ -2,6 +2,7 @@
 
 import asyncio
 import json
+import logging
 import os
 from dataclasses import dataclass
 from pathlib import Path
@@ -28,6 +29,8 @@ from app.services.stream_usage import StreamUsageReporter
 
 if TYPE_CHECKING:
     from apps.api.app.gateway.llm import LLMCallRequest, LLMGateway
+
+logger = logging.getLogger(__name__)
 
 router = APIRouter()
 
@@ -116,6 +119,94 @@ def _require_server_authenticated_identity(auth: AuthenticatedUser) -> None:
         raise HTTPException(status_code=401, detail="Bearer token or service API key required")
 
 
+async def _build_chat_llm_stack(
+    db: AsyncSession,
+    *,
+    agent: Any,
+    actor_user_id: str,
+    source: str,
+    session_id: str,
+) -> tuple["LLMGateway", Any, Any]:
+    """Delegate to the shared chat LLM stack builder (see services.chat_llm_stack)."""
+    from app.services.chat_llm_stack import build_chat_llm_stack
+
+    return await build_chat_llm_stack(
+        db,
+        agent=agent,
+        actor_user_id=actor_user_id,
+        source=source,
+        session_id=session_id,
+    )
+
+
+def _build_default_chat_tools(db: AsyncSession, *, org_id: str, agent_id: str) -> list[Any]:
+    """Assemble the default agent-scoped tool set (opencode-style registry).
+
+    Knowledge search, memory recall, and skill discovery are safe read paths,
+    so every Supervisor SubAgent receives them by default; higher-risk MCP
+    tools stay behind the workflow approval path.
+    """
+    from apps.api.app.services.db.runtime_db import skill_db
+    from apps.api.app.services.db.workflow_db import knowledge_base_db
+    from app.services.knowledge_vector_index import (
+        build_embedding_provider_from_env,
+        build_vector_index_from_env,
+    )
+    from app.services.memory_vector import memory_vector_service
+    from packages.runtime.tools import build_system_tools
+
+    async def rag_executor(query: str, collection: str = "default", top_k: int = 5, **_: Any) -> list[dict[str, Any]]:
+        provider = build_embedding_provider_from_env()
+        index = build_vector_index_from_env(embedding_dimension=provider.dimension)
+        query_embedding = provider.embed_texts([query])[0]
+        kb_ids: list[str] = []
+        if collection and collection != "default":
+            kb_ids = [collection]
+        else:
+            kbs, _ = await knowledge_base_db.list_org_kbs(db, org_id)
+            kb_ids = [str(kb.kb_id) for kb in kbs]
+        hits: list[tuple[float, str]] = []
+        for kb_id in kb_ids:
+            for hit in index.search(org_id=org_id, kb_id=kb_id, query_embedding=query_embedding, limit=top_k):
+                hits.append((hit.score, hit.chunk_id))
+        hits.sort(key=lambda item: item[0], reverse=True)
+        return [{"chunk_id": chunk_id, "score": score} for score, chunk_id in hits[:top_k]]
+
+    async def memory_accessor(query: str, org_id: str, agent_id: str, top_k: int = 5, **_: Any) -> list[dict[str, Any]]:
+        memories = await memory_vector_service.recall(
+            db, org_id=org_id, agent_id=agent_id, query=query, limit=top_k
+        )
+        return [
+            {
+                key: getattr(memory, key)
+                for key in ("memory_id", "memory_type", "content", "summary", "confidence")
+                if hasattr(memory, key)
+            }
+            for memory in memories
+        ]
+
+    async def skill_search_accessor(query: str, org_id: str, agent_id: str, top_k: int = 5, **_: Any) -> list[dict[str, Any]]:
+        allowed = await skill_db.list_agent_allowed_skills(db, agent_id=agent_id, org_id=org_id)
+        needle = query.strip().lower()
+        matched = [
+            skill
+            for skill in allowed
+            if not needle or needle in f"{skill.name} {skill.description}".lower()
+        ]
+        return [
+            {"name": skill.name, "description": skill.description, "scope": str(getattr(skill, "scope", ""))}
+            for skill in matched[:top_k]
+        ]
+
+    return build_system_tools(
+        org_id=org_id,
+        agent_id=agent_id,
+        rag_executor=rag_executor,
+        memory_accessor=memory_accessor,
+        skill_search_accessor=skill_search_accessor,
+    )
+
+
 @router.post("/", response_model=ChatResponse)
 async def chat(
     request: ChatRequest,
@@ -126,13 +217,10 @@ async def chat(
 
     try:
         _require_server_authenticated_identity(auth)
-        from apps.api.app.gateway.llm import LLMGateway, OpenAICompatibleProvider, llm_gateway
         from apps.api.app.services.db.agent_db import agent_db
         from apps.api.app.services.db.identity_db import membership_db
-        from apps.api.app.services.db.runtime_db import model_provider_db
         from apps.api.app.services.db.session_db import session_db, session_message_db
         from packages.runtime.agent_runtime import AgentKind, AgentRuntime
-        from packages.runtime.llm_caller import LLMCallerAdapter
         from packages.runtime.system_prompt import build_agent_system_prompt
 
         try:
@@ -208,51 +296,19 @@ async def chat(
                 workflow_run_id=run.run_id,
             )
 
-        model_provider = agent.model_provider or ""
-        model_name = agent.model_name or ""
-        if not model_provider or not model_name:
-            raise HTTPException(status_code=400, detail="Agent has no model provider or model configured")
-
-        provider_config = await model_provider_db.get_by_key(db, org_id, model_provider)
-        if provider_config is None or not provider_config.is_enabled:
-            raise HTTPException(status_code=400, detail=f"Model provider not configured: {model_provider}")
-
-        gateway = LLMGateway(
-            providers={
-                model_provider: OpenAICompatibleProvider(
-                    base_url=provider_config.base_url,
-                    api_key=(
-                        decrypt_api_key(provider_config.api_key_encrypted)
-                        if provider_config.api_key_encrypted
-                        else ""
-                    ),
-                    provider_key=model_provider,
-                )
-            },
-            limiter=llm_gateway.limiter,
-            usage_recorder=SessionUsageRecorder(db),
-        )
-        adapter = LLMCallerAdapter(
-            gateway=gateway,
-            provider=model_provider,
-            model=model_name,
-            org_id=org_id,
+        gateway, adapter, chat_model = await _build_chat_llm_stack(
+            db,
+            agent=agent,
             actor_user_id=actor_user_id,
-            metadata=UsageContext(
-                org_id=org_id,
-                actor_user_id=actor_user_id,
-                source="chat_autonomous",
-                api_name="chat.completions",
-                agent_id=str(agent.agent_id),
-                session_id=str(session_id),
-            ).as_metadata(),
+            source="chat_autonomous",
+            session_id=str(session_id),
         )
 
         runtime = AgentRuntime(
             agent_id=request.agent_id,
             org_id=org_id,
-            model_provider=model_provider,
-            model_name=model_name,
+            model_provider=agent.model_provider or "",
+            model_name=agent.model_name or "",
             workspace_id=agent.workspace_id or "",
             llm_caller=adapter,
             system_prompt=build_agent_system_prompt(
@@ -260,30 +316,17 @@ async def chat(
                 agent_description=str(agent.description or ""),
                 agent_instructions=str(agent.system_prompt or ""),
             ),
+            system_tools=_build_default_chat_tools(db, org_id=org_id, agent_id=str(agent.agent_id)),
         )
 
         agent_kind_str = agent.kind or "USER_SUB"
         if agent_kind_str == AgentKind.SUPERVISOR.value or agent_kind_str == "SUPERVISOR":
-            runtime.init_supervisor(llm_caller=adapter)
+            runtime.init_supervisor(chat_model=chat_model, llm_caller=adapter)
 
         if request.async_exec:
             raise HTTPException(
                 status_code=501,
                 detail="Async supervisor execution is disabled until metered attribution is available.",
-            )
-            from apps.worker.app.tasks.subagent import supervisor_run_cycle
-
-            supervisor_run_cycle.delay(
-                supervisor_agent_id=request.agent_id,
-                org_id=org_id,
-                user_input=request.message,
-            )
-            await db.commit()
-            return ChatResponse(
-                response="Task submitted and running asynchronously.",
-                agent_id=request.agent_id,
-                session_id=session_id,
-                mode="async",
             )
 
         result = await runtime.chat(request.message, session_id=session_id)
@@ -303,8 +346,8 @@ async def chat(
                     content=response_text,
                     estimated_tokens=max(1, len(response_text) // 4),
                 )
-            except Exception:
-                pass
+            except Exception as exc:
+                logger.warning("保存助手消息失败: %s", exc)
 
         await db.commit()
         return ChatResponse(
@@ -347,13 +390,12 @@ async def _chat_stream_events(
     auth: AuthenticatedUser,
     db: AsyncSession,
 ) -> AsyncIterator[str]:
-    from apps.api.app.gateway.llm import LLMCallRequest, LLMGateway, OpenAICompatibleProvider, llm_gateway
+    from apps.api.app.gateway.llm import LLMCallRequest
     from apps.api.app.services.db.agent_db import agent_db
     from apps.api.app.services.db.identity_db import membership_db
     from apps.api.app.services.db.runtime_db import (
         agent_skill_policy_db,
         memory_db,
-        model_provider_db,
         skill_db,
         skill_evaluation_db,
     )
@@ -372,7 +414,6 @@ async def _chat_stream_events(
         format_recent_messages,
     )
     from app.services.memory_vector import memory_vector_service
-    from packages.runtime.llm_caller import LLMCallerAdapter
 
     run_id = new_id("chatrun")
     actor_user_id = auth.user_id
@@ -483,41 +524,12 @@ async def _chat_stream_events(
 
         model_provider = agent.model_provider or ""
         model_name = agent.model_name or ""
-        if not model_provider or not model_name:
-            raise HTTPException(status_code=400, detail="Agent has no model provider or model configured")
-
-        provider_config = await model_provider_db.get_by_key(db, org_id, model_provider)
-        if provider_config is None or not provider_config.is_enabled:
-            raise HTTPException(status_code=400, detail=f"Model provider not configured: {model_provider}")
-        gateway = LLMGateway(
-            providers={
-                model_provider: OpenAICompatibleProvider(
-                    base_url=provider_config.base_url,
-                    api_key=(
-                        decrypt_api_key(provider_config.api_key_encrypted)
-                        if provider_config.api_key_encrypted
-                        else ""
-                    ),
-                    provider_key=model_provider,
-                )
-            },
-            limiter=llm_gateway.limiter,
-            usage_recorder=SessionUsageRecorder(db),
-        )
-        adapter = LLMCallerAdapter(
-            gateway=gateway,
-            provider=model_provider,
-            model=model_name,
-            org_id=org_id,
+        gateway, adapter, chat_model = await _build_chat_llm_stack(
+            db,
+            agent=agent,
             actor_user_id=actor_user_id,
-            metadata=UsageContext(
-                org_id=org_id,
-                actor_user_id=actor_user_id,
-                source="chat_stream",
-                api_name="chat.completions",
-                agent_id=str(agent.agent_id),
-                session_id=str(session_id),
-            ).as_metadata(),
+            source="chat_stream",
+            session_id=str(session_id),
         )
         # Persist the current input before dispatch for resilience, but do not
         # feed it back as historical context.  It is appended exactly once as
@@ -558,11 +570,16 @@ async def _chat_stream_events(
         allowed_skills = []
         skill_catalog = ""
         if not skill_intent.is_skill_request:
-            allowed_skills = await skill_db.list_agent_allowed_skills(
-                db,
-                agent_id=agent.agent_id,
-                org_id=org_id,
-            )
+            from app.services.bundled_skills import list_bundled_skills
+
+            allowed_skills = [
+                *await skill_db.list_agent_allowed_skills(
+                    db,
+                    agent_id=agent.agent_id,
+                    org_id=org_id,
+                ),
+                *list_bundled_skills(),
+            ]
             skill_catalog = format_skill_description_catalog(allowed_skills)
 
         supervisors = await agent_db.list_org_agents(db, org_id, kind="SUPERVISOR")

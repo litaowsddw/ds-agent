@@ -5,9 +5,15 @@ import type { Agent } from "@/types/agent";
 
 const { chatState } = vi.hoisted(() => ({
   chatState: {
-    agentId: "agent-old",
-    sessionId: null,
-    sessions: [],
+    agentId: "agent-old" as string,
+    sessionId: null as string | null,
+    sessions: [] as Array<{
+      session_id: string;
+      status: string;
+      compact_summary: string;
+      created_at: string;
+      updated_at: string;
+    }>,
     messages: [
       {
         message_id: "old-message",

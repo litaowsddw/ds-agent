@@ -50,6 +50,22 @@ def client() -> TestClient:
         yield test_client
 
 
+@pytest.fixture(autouse=True)
+def _no_skill_router_selection(monkeypatch: pytest.MonkeyPatch) -> None:
+    """平台内置 Skill 会让路由器在每次流式对话中触发一次 generate 调用；
+    默认路由结果为“不使用 Skill”，需要选择 Skill 的测试再自行覆盖。"""
+    from apps.api.app.gateway.llm import LLMCallResponse
+
+    async def _generate(_self: LLMGateway, _request: object) -> LLMCallResponse:
+        return LLMCallResponse(
+            text=json.dumps({"use_skill": False, "skill_id": "", "reason": "general chat"}),
+            provider="stub",
+            model="stub",
+        )
+
+    monkeypatch.setattr(LLMGateway, "generate", _generate)
+
+
 def _create_streaming_agent(client: TestClient) -> tuple[str, dict[str, str]]:
     suffix = uuid4().hex[:8]
     email = f"skill-intent-{suffix}@example.com"

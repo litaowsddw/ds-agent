@@ -24,7 +24,6 @@ from typing import Any, TypedDict
 from langchain_core.messages import AIMessage, HumanMessage, SystemMessage
 from langgraph.graph import END, START, StateGraph
 
-from packages.runtime.supervisor import TaskStatus
 from packages.runtime.system_prompt import (
     PLATFORM_AGENT_CONTRACT,
     SUPERVISOR_PLANNING_CONTRACT,

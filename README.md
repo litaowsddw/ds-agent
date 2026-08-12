@@ -116,18 +116,19 @@ apps/
     └── app/tasks/           # 异步任务（workflow, subagent, evolver）
 
 packages/
-├── runtime/      # Agent Runtime
+├── runtime/      # Agent Runtime（LangGraph 单一执行路径）
 │   ├── agent_runtime.py     # 核心 Runtime 对象（Supervisor chat 循环）
-│   ├── supervisor.py        # Supervisor Agent（LLM plan + ReAct reflect）
-│   ├── execution_engine.py  # SubAgent 执行引擎
+│   ├── langgraph_supervisor.py  # Supervisor StateGraph（plan→delegate→reflect→respond）
+│   ├── langgraph_executor.py    # SubAgent ReAct 执行引擎（工具调用循环）
+│   ├── langchain_gateway.py     # LLMGateway → LangChain ChatModel 桥接
 │   ├── llm_caller.py        # LLM 调用适配器
 │   ├── skill_evolver.py     # Harmes Skill Evolver 核心
 │   ├── feedback_loop.py     # Harmes 反馈循环调度器
 │   ├── subagent.py          # SubAgent 注册表
-│   ├── session_router.py    # Session 路由器
-│   ├── skill_registry.py    # Skill 注册表
 │   ├── context_engine.py    # 上下文引擎
-│   └── prompt_compiler.py   # Prompt 编译器
+│   ├── system_prompt.py     # 系统提示词契约
+│   ├── tools/               # 默认系统工具（RAG/Memory/Skill/MCP 包装器）
+│   └── prompt_compiler.py   # Prompt 编译器（prefix-cache 友好）
 ├── workflow/     # Workflow DSL + 执行器
 └── a2a/          # A2A 协议
     ├── agent_card.py        # Agent Card 元数据

@@ -1,5 +1,31 @@
 # 当前开发状态
 
+## v0.4 运行时收敛与清理（2026-08-11）
+
+- **Supervisor 断链修复**：`/chat/` 与 A2A Task 现在为 Supervisor 构建真实的
+  `GatewayChatModel`（此前只注入文本调用器，导致规划永远走规则降级、子任务全部失败）。
+- **默认系统工具接入**：`/chat/` 的 Supervisor SubAgent 默认装配 `knowledge_search` /
+  `memory_recall` / `skill_search`（`packages/runtime/tools/registry.py`，opencode 风格
+  注册表）；高风险 MCP 工具仍走 Workflow 审批路径。
+- **LangGraph 单一执行路径**：删除 legacy `supervisor.py` / `execution_engine.py` /
+  `session_router.py`；`AgentRuntime` 不再保留双模式。
+- **死代码清理**：删除 12 个已被 `services/db/*` 取代的进程内存 store
+  （`agent_store` / `identity_store` / `session_store` / `workflow_store` /
+  `workflow_run_store` / `skill_store` / `mcp_store` / `memory_store` /
+  `knowledge_store` / `model_provider_store` / `background_agent_store` /
+  `storage/local_state.py`）及对应的内存实现测试；删除 runtime 桩模块
+  （`memory_manager` / `mcp_registry` / `skill_registry`）。
+- **A2A 修复**：`Depends(get_db_session)` 空依赖、错误的 session 写入 API、未提交事务、
+  硬编码 `base_url`（改 `AGENTFLOW_PUBLIC_BASE_URL`）均已修复；异步 Task 明确返回 501。
+- **平台内置 Skill**：`apps/api/app/assets/skills/*/SKILL.md` 经
+  `services/bundled_skills.py` 加载，对全部组织默认可用（当前内置 `workflow-builder`）。
+- **前缀缓存观测**：`GatewayChatModel` 调用现在携带系统提示词的 `prefix_hash`，
+  计量侧可按前缀聚合缓存表现（Reasonix 风格）。
+- **反馈循环修复**：`evolution_records` 默认值为类的 bug、冷却时间从未写入的 bug 已修复，
+  新增 `packages/runtime/tests/test_feedback_loop.py` 门控测试。
+- **生产 schema 管理**：`APP_ENV=production` 时启动只做 Alembic 版本一致性校验并告警，
+  不再 `create_all`；CORS 来源改由 `AGENTFLOW_CORS_ORIGINS` 配置。
+
 ## Gateway usage metering release notes
 
 The current feature branch includes organization-scoped Gateway usage metering

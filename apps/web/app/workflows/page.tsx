@@ -2,26 +2,25 @@
 
 "use client";
 
-import "@xyflow/react/dist/style.css";
-
-import { Background, Controls, MiniMap, ReactFlow, type EdgeMouseHandler, type NodeMouseHandler } from "@xyflow/react";
 import {
+  CopyPlus,
   Database,
   GitBranch,
-  MousePointer2,
+  LayoutGrid,
   Play,
   Plus,
+  Redo2,
   RotateCcw,
   Save,
   Search,
   Send,
   Sparkles,
   Trash2,
+  Undo2,
   Workflow,
 } from "lucide-react";
 import { useEffect, useMemo, useState } from "react";
 import { showToast } from "@/components/layout/AppLayout";
-import { nodeTypes } from "@/components/nodes";
 import { PrimaryButton } from "@/components/ui/Button";
 import { EmptyText, Metric } from "@/components/ui/DataDisplay";
 import { SelectInput, TextArea, TextInput } from "@/components/ui/Form";
@@ -29,11 +28,12 @@ import AgentRequired from "@/components/ui/AgentRequired";
 import WorkspaceRequired from "@/components/ui/WorkspaceRequired";
 import WorkflowResponsiveLayout from "@/components/workflows/WorkflowResponsiveLayout";
 import WorkflowTemplateLibrary from "@/components/workflows/WorkflowTemplateLibrary";
+import WorkflowEditorCanvas from "@/components/workflows/editor/WorkflowEditorCanvas";
 import WorkflowVariablePicker, {
   appendWorkflowReference,
   directUpstreamNodes,
 } from "@/components/workflows/WorkflowVariablePicker";
-import { NODE_PALETTE, type WorkflowPaletteItem } from "@/lib/constants";
+import { NODE_PALETTE } from "@/lib/constants";
 import { useKnowledgeStore } from "@/stores/knowledge";
 import { useRuntimeStore } from "@/stores/runtime";
 import { useWorkflowStore } from "@/stores/workflow";
@@ -53,12 +53,7 @@ function numberValue(value: unknown, fallback: number): string {
   return String(fallback);
 }
 
-function groupedPalette(items: WorkflowPaletteItem[]) {
-  return items.reduce<Record<string, WorkflowPaletteItem[]>>((groups, item) => {
-    groups[item.group] = [...(groups[item.group] ?? []), item];
-    return groups;
-  }, {});
-}
+const EXECUTABLE_PALETTE = NODE_PALETTE.filter((item) => item.capability === "executable");
 
 export default function WorkflowsPage() {
   const workspace = useWorkspaceStore((state) => state.workspace);
@@ -73,20 +68,16 @@ export default function WorkflowsPage() {
   const nodeRuns = useWorkflowStore((state) => state.nodeRuns);
   const selectedWorkflowId = useWorkflowStore((state) => state.selectedWorkflowId);
   const selectedNodeId = useWorkflowStore((state) => state.selectedNodeId);
-  const selectedEdgeId = useWorkflowStore((state) => state.selectedEdgeId);
   const workflowForm = useWorkflowStore((state) => state.workflowForm);
   const executionLimits = useWorkflowStore((state) => state.executionLimits);
   const validation = useWorkflowStore((state) => state.validation);
-  const onNodesChange = useWorkflowStore((state) => state.onNodesChange);
-  const onEdgesChange = useWorkflowStore((state) => state.onEdgesChange);
-  const onConnect = useWorkflowStore((state) => state.onConnect);
-  const validateConnection = useWorkflowStore((state) => state.validateConnection);
-  const connectNodes = useWorkflowStore((state) => state.connectNodes);
+  const canUndo = useWorkflowStore((state) => state.history.past.length > 0);
+  const canRedo = useWorkflowStore((state) => state.history.future.length > 0);
+  const undo = useWorkflowStore((state) => state.undo);
+  const redo = useWorkflowStore((state) => state.redo);
+  const applyAutoLayout = useWorkflowStore((state) => state.applyAutoLayout);
+  const deleteSelection = useWorkflowStore((state) => state.deleteSelection);
   const addNode = useWorkflowStore((state) => state.addNode);
-  const removeSelectedNode = useWorkflowStore((state) => state.removeSelectedNode);
-  const removeSelectedEdge = useWorkflowStore((state) => state.removeSelectedEdge);
-  const setSelectedNodeId = useWorkflowStore((state) => state.setSelectedNodeId);
-  const setSelectedEdgeId = useWorkflowStore((state) => state.setSelectedEdgeId);
   const updateSelectedNodeConfig = useWorkflowStore((state) => state.updateSelectedNodeConfig);
   const setWorkflowForm = useWorkflowStore((state) => state.setWorkflowForm);
   const setExecutionLimits = useWorkflowStore((state) => state.setExecutionLimits);
@@ -112,17 +103,15 @@ export default function WorkflowsPage() {
   const selectedWorkflow = workflows.find((workflow) => workflow.workflow_id === selectedWorkflowId);
   const selectedAgent = agents.find((agent) => agent.agent_id === selectedAgentId);
   const [nodeSearch, setNodeSearch] = useState("");
-  const paletteGroups = useMemo(() => {
+  const [templateOpen, setTemplateOpen] = useState(false);
+  const paletteItems = useMemo(() => {
     const query = nodeSearch.trim().toLowerCase();
-    const items = query
-      ? NODE_PALETTE.filter((item) =>
-          `${item.label} ${item.description} ${item.group}`.toLowerCase().includes(query)
-        )
-      : NODE_PALETTE;
-    return groupedPalette(items);
+    if (!query) return EXECUTABLE_PALETTE;
+    return EXECUTABLE_PALETTE.filter((item) =>
+      `${item.label} ${item.description} ${item.group}`.toLowerCase().includes(query)
+    );
   }, [nodeSearch]);
   const latestRun = runs.find((run) => run.workflow_id === selectedWorkflowId);
-  const schemaNodeCount = nodes.filter((node) => node.data.capability === "schema").length;
   const hasWorkflow = Boolean(selectedWorkflowId && selectedWorkflow);
   const isPublished = Boolean(selectedWorkflow?.published_version_id);
   const workflowCanRun = hasWorkflow && isPublished;
@@ -140,15 +129,6 @@ export default function WorkflowsPage() {
     void refreshRuns(workspace.orgId, workspace.userId);
   }, [workspace, selectedAgentId, refreshRuntimeData, refreshKbs, refreshWorkflows, refreshRuns]);
 
-  const handleNodeClick: NodeMouseHandler = (_, node) => {
-    setSelectedNodeId(node.id);
-    setSelectedEdgeId("");
-  };
-
-  const handleEdgeClick: EdgeMouseHandler = (_, edge) => {
-    setSelectedEdgeId(edge.id);
-  };
-
   if (!workspace) {
     return <WorkspaceRequired />;
   }
@@ -157,256 +137,248 @@ export default function WorkflowsPage() {
     return <AgentRequired description="请先选择或创建一个 Agent，再为它设计 Workflow 策略。" />;
   }
 
+  const handleSave = () =>
+    void saveWorkflowDraft(workspace.userId)
+      .then(() => showToast("success", "Draft saved"))
+      .catch((error) => showToast("error", error instanceof Error ? error.message : "Save failed"));
+
+  const handleCheck = () =>
+    void validateWorkflow(workspace.userId)
+      .then((result) => {
+        showToast(result.valid ? "success" : "error", result.valid ? "Preflight passed" : `${result.errors.length} issue(s) need attention`);
+      })
+      .catch((error) => showToast("error", error instanceof Error ? error.message : "Check failed"));
+
+  const handlePublish = () =>
+    void publishWorkflow(workspace.userId)
+      .then(() => showToast("success", "Published"))
+      .catch((error) => showToast("error", error instanceof Error ? error.message : "Publish failed"));
+
+  const handleRun = () =>
+    void runWorkflow(workspace.userId, workflowForm.input)
+      .then(() => showToast("success", "Run complete"))
+      .catch((error) => showToast("error", error instanceof Error ? error.message : "Run failed"));
+
+  const headerLeft = (
+    <div>
+      <div className="truncate text-sm font-semibold text-[#172033]">
+        {selectedAgent ? selectedAgent.name : "Selected Agent"} · {selectedWorkflow ? selectedWorkflow.name : "Draft"}
+        <span className="ml-2 text-xs font-normal text-[#667085]">{nodes.length} nodes · {edges.length} edges</span>
+      </div>
+      <WorkflowProgress
+        hasAgent={Boolean(selectedAgentId)}
+        hasWorkflow={hasWorkflow}
+        isPublished={isPublished}
+        hasRun={Boolean(latestRun)}
+      />
+    </div>
+  );
+
+  const headerRight = (
+    <>
+      <ToolbarIconButton disabled={!canUndo} icon={<Undo2 size={14} />} onClick={undo} title="撤销 (Ctrl+Z)" />
+      <ToolbarIconButton disabled={!canRedo} icon={<Redo2 size={14} />} onClick={redo} title="重做 (Ctrl+Y)" />
+      <ToolbarIconButton icon={<LayoutGrid size={14} />} onClick={applyAutoLayout} title="自动布局" />
+      <ToolbarIconButton icon={<RotateCcw size={14} />} onClick={resetCanvas} title="重置画布" />
+      <ToolbarIconButton icon={<Trash2 size={14} />} danger onClick={deleteSelection} title="删除选中节点或连线 (Delete)" />
+
+      <div className="relative">
+        <button
+          className="inline-flex h-8 items-center gap-1.5 rounded-lg border border-[#cfd7e6] bg-white px-2.5 text-xs font-medium text-[#172033] transition hover:border-[#2f6feb]"
+          onClick={() => setTemplateOpen((open) => !open)}
+          type="button"
+        >
+          <CopyPlus size={14} />
+          模板
+        </button>
+        {templateOpen ? (
+          <>
+            <button
+              aria-label="关闭模板库"
+              className="fixed inset-0 z-20 cursor-default"
+              onClick={() => setTemplateOpen(false)}
+              tabIndex={-1}
+              type="button"
+            />
+            <div className="absolute right-0 top-10 z-30 max-h-[70vh] w-[360px] overflow-y-auto shadow-xl">
+              <WorkflowTemplateLibrary
+                onSelect={(template) => {
+                  applyWorkflowTemplate(template);
+                  setTemplateOpen(false);
+                  showToast("success", `已载入“${template.name}”新草稿；请完成所需配置后再创建。`);
+                }}
+              />
+            </div>
+          </>
+        ) : null}
+      </div>
+
+      <span className="mx-1 h-5 w-px bg-[#dfe4ee]" />
+      <ActionButton icon={<Save size={14} />} label="保存" onClick={handleSave} />
+      <ActionButton icon={<Search size={14} />} label="检查" onClick={handleCheck} />
+      <ActionButton icon={<Send size={14} />} label="发布" onClick={handlePublish} />
+      <ActionButton
+        disabled={!workflowCanRun}
+        icon={<Play size={14} />}
+        label="运行"
+        onClick={handleRun}
+        title={runDisabledReason || undefined}
+      />
+    </>
+  );
+
   return (
     <WorkflowResponsiveLayout
       palette={
         <>
-        <div className="border-b border-[#dfe4ee] px-4 py-3">
-          <div className="flex items-center gap-2 text-sm font-semibold text-[#172033]">
-            <Sparkles size={15} />
-            Nodes
-          </div>
-          <div className="mt-1 text-xs text-[#667085]">Build an optional stable process for the selected Agent.</div>
-          <label className="mt-3 flex h-9 items-center gap-2 rounded-lg border border-[#dfe4ee] bg-[#f8fafc] px-3 text-sm">
-            <Search size={15} className="text-[#667085]" />
-            <input
-              className="min-w-0 flex-1 bg-transparent outline-none placeholder:text-[#98a2b3]"
-              onChange={(event) => setNodeSearch(event.target.value)}
-              placeholder="Search nodes"
-              value={nodeSearch}
-            />
-          </label>
-        </div>
-        <div className="h-[calc(100%-112px)] overflow-y-auto px-3 py-3">
-          {Object.entries(paletteGroups).map(([group, items]) => (
-            <div key={group} className="mb-4">
-              <div className="mb-2 text-[11px] font-semibold uppercase tracking-normal text-[#667085]">{group}</div>
-              <div className="space-y-2">
-                {items.map((item) => (
-                  <button
-                    key={item.type}
-                    type="button"
-                    onClick={() => addNode(item)}
-                    className="w-full rounded-lg border border-[#dfe4ee] bg-white px-3 py-2 text-left transition hover:border-[#2f6feb] hover:bg-[#f8fbff] hover:shadow-sm"
-                  >
-                    <div className="flex items-center justify-between gap-2">
-                      <span className="text-sm font-medium text-[#172033]">{item.label}</span>
-                      <span className={`rounded px-1.5 py-0.5 text-[10px] font-semibold ${item.capability === "executable" ? "bg-[#ecfdf3] text-[#027a48]" : "bg-[#f8fafc] text-[#667085]"}`}>
-                        {item.capability === "executable" ? "live" : "schema"}
-                      </span>
-                    </div>
-                    <div className="mt-1 text-xs leading-5 text-[#667085]">
-                      {item.description}
-                      {item.capability === "schema" ? " 可设计，暂不参与真实执行。" : ""}
-                    </div>
-                  </button>
-                ))}
-              </div>
-            </div>
-          ))}
-          {Object.keys(paletteGroups).length === 0 ? <EmptyText text="No matching nodes" /> : null}
-        </div>
-        </>
-      }
-      canvas={
-        <>
-        <div className="flex items-center justify-between border-b border-[#dfe4ee] px-4 py-3">
-          <div>
-            <div className="text-sm font-semibold text-[#172033]">Agent Workflow Strategy</div>
-            <div className="mt-1 text-xs text-[#667085]">
-              {selectedAgent ? selectedAgent.name : "Selected Agent"} · {selectedWorkflow ? selectedWorkflow.name : "Draft"} · {nodes.length} nodes · {edges.length} edges
-            </div>
-            <WorkflowProgress
-              hasAgent={Boolean(selectedAgentId)}
-              hasWorkflow={hasWorkflow}
-              isPublished={isPublished}
-              hasRun={Boolean(latestRun)}
-            />
-          </div>
-          <div className="flex items-center gap-2">
-            <ActionButton icon={<RotateCcw size={14} />} label="Reset" onClick={resetCanvas} />
-            <button
-              type="button"
-              onClick={removeSelectedNode}
-              className="inline-flex h-9 w-9 items-center justify-center rounded-lg border border-[#cfd7e6] bg-white text-[#667085] transition hover:border-[#b42318] hover:text-[#b42318]"
-              title="Delete selected node"
-            >
-              <Trash2 size={16} />
-            </button>
-            <button
-              type="button"
-              disabled={!selectedEdgeId}
-              onClick={removeSelectedEdge}
-              className="inline-flex h-9 w-9 items-center justify-center rounded-lg border border-[#cfd7e6] bg-white text-[#667085] transition hover:border-[#b42318] hover:text-[#b42318] disabled:cursor-not-allowed disabled:opacity-40"
-              title={selectedEdgeId ? "Delete selected connection" : "Select a connection to delete"}
-            >
-              <GitBranch size={16} />
-            </button>
-          </div>
-        </div>
-
-        <div className="relative min-h-0 flex-1 bg-[#f7f8fa]">
-          <ReactFlow
-            connectionLineStyle={{ stroke: "#2f6feb", strokeWidth: 2 }}
-            defaultEdgeOptions={{
-              animated: true,
-              style: { stroke: "#94a3b8", strokeWidth: 2 },
-              type: "smoothstep",
-            }}
-            edges={edges}
-            fitView
-            fitViewOptions={{ padding: 0.22 }}
-            nodeTypes={nodeTypes}
-            nodes={nodes}
-            onConnect={onConnect}
-            onEdgeClick={handleEdgeClick}
-            onEdgesChange={onEdgesChange}
-            onNodeClick={handleNodeClick}
-            onNodesChange={onNodesChange}
-            isValidConnection={(connection) => validateConnection(
-              connection.source,
-              connection.target,
-              connection.sourceHandle === "true" || connection.sourceHandle === "false"
-                ? connection.sourceHandle
-                : undefined
-            ).valid}
-            panOnScroll
-            selectionOnDrag
-            snapGrid={[20, 20]}
-            snapToGrid
-          >
-            <Background color="#d9e0ec" gap={18} />
-            <Controls />
-            <MiniMap pannable zoomable className="!rounded-lg !border !border-[#dfe4ee] !shadow-sm" nodeStrokeWidth={3} />
-          </ReactFlow>
-          <div className="pointer-events-none absolute left-4 top-4 flex items-center gap-2 rounded-lg border border-[#dfe4ee] bg-white/90 px-3 py-2 text-xs text-[#667085] shadow-sm">
-            <MousePointer2 size={14} />
-            Select a node, then add from the left to insert into the chain.
-          </div>
-        </div>
-        </>
-      }
-      inspector={
-        <>
-        <WorkflowTemplateLibrary
-          onSelect={(template) => {
-            applyWorkflowTemplate(template);
-            showToast("success", `已载入“${template.name}”新草稿；请完成所需配置后再创建。`);
-          }}
-        />
-
-        <section className="rounded-lg border border-[#dfe4ee] bg-white">
           <div className="border-b border-[#dfe4ee] px-4 py-3">
             <div className="flex items-center gap-2 text-sm font-semibold text-[#172033]">
-              <Workflow size={16} />
-              Workflow
+              <Sparkles size={15} />
+              Nodes
             </div>
-          </div>
-          <div className="space-y-3 p-4">
-            <div className="grid grid-cols-2 gap-2">
-              <Metric label="Workflows" value={workflows.length} />
-              <Metric label="Runs" value={runs.length} />
-            </div>
-            <TextInput label="Name" value={workflowForm.name} onChange={(name) => setWorkflowForm({ ...workflowForm, name })} />
-            <TextArea label="Description" rows={2} value={workflowForm.description} onChange={(description) => setWorkflowForm({ ...workflowForm, description })} />
-            <TextArea label="Run input" rows={3} value={workflowForm.input} onChange={(input) => setWorkflowForm({ ...workflowForm, input })} />
-            <ExecutionLimitsEditor limits={executionLimits} onChange={setExecutionLimits} />
-            <PrimaryButton
-              busy={busy}
-              icon={<Plus size={15} />}
-              label="Create"
-              onClick={async () => {
-                try {
-                  if (!selectedAgentId) throw new Error("Select an agent first");
-                  await createWorkflow(workspace.userId, selectedAgentId);
-                  showToast("success", "Workflow created");
-                } catch (error) {
-                  showToast("error", error instanceof Error ? error.message : "Create failed");
-                }
-              }}
-            />
-            <div className="grid grid-cols-4 gap-2">
-              <ActionButton icon={<Save size={14} />} label="Save" onClick={() => void saveWorkflowDraft(workspace.userId).then(() => showToast("success", "Draft saved")).catch((error) => showToast("error", error instanceof Error ? error.message : "Save failed"))} />
-              <ActionButton
-                icon={<Search size={14} />}
-                label="Check"
-                onClick={() => void validateWorkflow(workspace.userId).then((result) => {
-                  showToast(result.valid ? "success" : "error", result.valid ? "Preflight passed" : `${result.errors.length} issue(s) need attention`);
-                }).catch((error) => showToast("error", error instanceof Error ? error.message : "Check failed"))}
+            <div className="mt-1 text-xs text-[#667085]">拖到画布放置，或点击添加到指针位置。</div>
+            <label className="mt-3 flex h-9 items-center gap-2 rounded-lg border border-[#dfe4ee] bg-[#f8fafc] px-3 text-sm">
+              <Search size={15} className="text-[#667085]" />
+              <input
+                className="min-w-0 flex-1 bg-transparent outline-none placeholder:text-[#98a2b3]"
+                onChange={(event) => setNodeSearch(event.target.value)}
+                placeholder="Search nodes"
+                value={nodeSearch}
               />
-              <ActionButton icon={<Send size={14} />} label="Publish" onClick={() => void publishWorkflow(workspace.userId).then(() => showToast("success", "Published")).catch((error) => showToast("error", error instanceof Error ? error.message : "Publish failed"))} />
-              <ActionButton
-                disabled={!workflowCanRun}
-                icon={<Play size={14} />}
-                label="Run"
-                onClick={() => void runWorkflow(workspace.userId, workflowForm.input).then(() => showToast("success", "Run complete")).catch((error) => showToast("error", error instanceof Error ? error.message : "Run failed"))}
-                title={runDisabledReason || undefined}
-              />
+            </label>
+          </div>
+          <div className="h-[calc(100%-112px)] overflow-y-auto px-3 py-3">
+            <div className="space-y-2">
+              {paletteItems.map((item) => (
+                <button
+                  className="w-full cursor-grab rounded-lg border border-[#dfe4ee] bg-white px-3 py-2 text-left transition hover:border-[#2f6feb] hover:bg-[#f8fbff] hover:shadow-sm active:cursor-grabbing"
+                  draggable
+                  key={item.type}
+                  onClick={() => addNode(item)}
+                  onDragStart={(event) => {
+                    event.dataTransfer.setData("application/agentflow-node", item.type);
+                    event.dataTransfer.effectAllowed = "move";
+                  }}
+                  type="button"
+                >
+                  <div className="flex items-center justify-between gap-2">
+                    <span className="text-sm font-medium text-[#172033]">{item.label}</span>
+                    <span className="rounded bg-[#ecfdf3] px-1.5 py-0.5 text-[10px] font-semibold text-[#027a48]">live</span>
+                  </div>
+                  <div className="mt-1 text-xs leading-5 text-[#667085]">{item.description}</div>
+                </button>
+              ))}
             </div>
-            {runDisabledReason ? <ActionHint text={runDisabledReason} /> : null}
-            {validation ? <WorkflowPreflight validation={validation} /> : null}
-            {schemaNodeCount > 0 ? (
-              <ActionHint text={`${schemaNodeCount} schema-only node${schemaNodeCount > 1 ? "s are" : " is"} design-only in this phase.`} />
-            ) : null}
+            {paletteItems.length === 0 ? <EmptyText text="No matching nodes" /> : null}
           </div>
-        </section>
+        </>
+      }
+      canvas={<WorkflowEditorCanvas headerLeft={headerLeft} headerRight={headerRight} />}
+      inspector={
+        <>
+          <section className="rounded-lg border border-[#dfe4ee] bg-white">
+            <div className="border-b border-[#dfe4ee] px-4 py-3">
+              <div className="flex items-center gap-2 text-sm font-semibold text-[#172033]">
+                <Workflow size={16} />
+                Workflow
+              </div>
+            </div>
+            <div className="space-y-3 p-4">
+              <div className="grid grid-cols-2 gap-2">
+                <Metric label="Workflows" value={workflows.length} />
+                <Metric label="Runs" value={runs.length} />
+              </div>
+              <TextInput label="Name" value={workflowForm.name} onChange={(name) => setWorkflowForm({ ...workflowForm, name })} />
+              <TextArea label="Description" rows={2} value={workflowForm.description} onChange={(description) => setWorkflowForm({ ...workflowForm, description })} />
+              <TextArea label="Run input" rows={3} value={workflowForm.input} onChange={(input) => setWorkflowForm({ ...workflowForm, input })} />
+              <ExecutionLimitsEditor limits={executionLimits} onChange={setExecutionLimits} />
+              <PrimaryButton
+                busy={busy}
+                icon={<Plus size={15} />}
+                label="Create"
+                onClick={async () => {
+                  try {
+                    if (!selectedAgentId) throw new Error("Select an agent first");
+                    await createWorkflow(workspace.userId, selectedAgentId);
+                    showToast("success", "Workflow created");
+                  } catch (error) {
+                    showToast("error", error instanceof Error ? error.message : "Create failed");
+                  }
+                }}
+              />
+              {runDisabledReason ? <ActionHint text={runDisabledReason} /> : null}
+              {validation ? <WorkflowPreflight validation={validation} /> : null}
+            </div>
+          </section>
 
-        <NodeInspector
-          edges={edges}
-          knowledgeBases={knowledgeBases}
-          mcpTools={mcpTools}
-          modelProviders={modelProviders}
-          node={selectedNode}
-          nodes={nodes}
-          updateConfig={updateSelectedNodeConfig}
-        />
+          <NodeInspector
+            edges={edges}
+            knowledgeBases={knowledgeBases}
+            mcpTools={mcpTools}
+            modelProviders={modelProviders}
+            node={selectedNode}
+            nodes={nodes}
+            updateConfig={updateSelectedNodeConfig}
+          />
 
-        <ConnectionInspector
-          edges={edges}
-          node={selectedNode}
-          nodes={nodes}
-          onAddConnection={(sourceId, targetId, branch) => {
-            const result = connectNodes(sourceId, targetId, branch);
-            showToast(result.valid ? "success" : "error", result.valid ? "Connection added" : result.message);
-            return result.valid;
-          }}
-          onDeleteSelected={removeSelectedEdge}
-          onSelectEdge={setSelectedEdgeId}
-          onSelectNode={setSelectedNodeId}
-          selectedEdgeId={selectedEdgeId}
-          validateConnection={validateConnection}
-        />
+          <section className="rounded-lg border border-[#dfe4ee] bg-white">
+            <div className="border-b border-[#dfe4ee] px-4 py-3 text-sm font-semibold text-[#172033]">Saved Workflows</div>
+            <div className="space-y-2 p-4">
+              {workflows.length === 0 ? <EmptyText text="No saved workflows" /> : null}
+              {workflows.slice(0, 6).map((workflow) => (
+                <button
+                  key={workflow.workflow_id}
+                  type="button"
+                  onClick={() => setSelectedWorkflowId(workflow.workflow_id)}
+                  className={`w-full rounded-lg border p-3 text-left text-sm transition ${selectedWorkflowId === workflow.workflow_id ? "border-[#2f6feb] bg-[#eef4ff]" : "border-[#dfe4ee] bg-white hover:border-[#93c5fd]"}`}
+                >
+                  <div className="font-medium text-[#172033]">{workflow.name}</div>
+                  <div className="mt-1 text-xs text-[#667085]">{workflow.published_version_id ? "published" : "draft"}</div>
+                </button>
+              ))}
+            </div>
+          </section>
 
-        <section className="rounded-lg border border-[#dfe4ee] bg-white">
-          <div className="border-b border-[#dfe4ee] px-4 py-3 text-sm font-semibold text-[#172033]">Saved Workflows</div>
-          <div className="space-y-2 p-4">
-            {workflows.length === 0 ? <EmptyText text="No saved workflows" /> : null}
-            {workflows.slice(0, 6).map((workflow) => (
-              <button
-                key={workflow.workflow_id}
-                type="button"
-                onClick={() => setSelectedWorkflowId(workflow.workflow_id)}
-                className={`w-full rounded-lg border p-3 text-left text-sm transition ${selectedWorkflowId === workflow.workflow_id ? "border-[#2f6feb] bg-[#eef4ff]" : "border-[#dfe4ee] bg-white hover:border-[#93c5fd]"}`}
-              >
-                <div className="font-medium text-[#172033]">{workflow.name}</div>
-                <div className="mt-1 text-xs text-[#667085]">{workflow.published_version_id ? "published" : "draft"}</div>
-              </button>
-            ))}
-          </div>
-        </section>
-
-        <section className="rounded-lg border border-[#dfe4ee] bg-white">
-          <div className="border-b border-[#dfe4ee] px-4 py-3 text-sm font-semibold text-[#172033]">Run Trace</div>
-          <div className="space-y-2 p-4">
-            {nodeRuns.length === 0 ? <EmptyText text="Run a workflow to see node results" /> : null}
-            {nodeRuns.map((run) => (
-              <NodeRunRow key={run.node_run_id} run={run} />
-            ))}
-          </div>
-        </section>
+          <section className="rounded-lg border border-[#dfe4ee] bg-white">
+            <div className="border-b border-[#dfe4ee] px-4 py-3 text-sm font-semibold text-[#172033]">Run Trace</div>
+            <div className="space-y-2 p-4">
+              {nodeRuns.length === 0 ? <EmptyText text="Run a workflow to see node results" /> : null}
+              {nodeRuns.map((run) => (
+                <NodeRunRow key={run.node_run_id} run={run} />
+              ))}
+            </div>
+          </section>
         </>
       }
     />
+  );
+}
+
+function ToolbarIconButton({
+  danger = false,
+  disabled = false,
+  icon,
+  onClick,
+  title,
+}: {
+  danger?: boolean;
+  disabled?: boolean;
+  icon: React.ReactNode;
+  onClick: () => void;
+  title: string;
+}) {
+  return (
+    <button
+      className={`inline-flex h-8 w-8 items-center justify-center rounded-lg border border-[#cfd7e6] bg-white text-[#667085] transition disabled:cursor-not-allowed disabled:opacity-40 ${
+        danger ? "hover:border-[#b42318] hover:text-[#b42318]" : "hover:border-[#2f6feb] hover:text-[#175cd3]"
+      }`}
+      disabled={disabled}
+      onClick={onClick}
+      title={title}
+      type="button"
+    >
+      {icon}
+    </button>
   );
 }
 
@@ -428,11 +400,11 @@ function WorkflowProgress({
     { label: "Run complete", done: hasRun },
   ];
   return (
-    <div className="mt-2 flex flex-wrap gap-1.5">
+    <div className="mt-1.5 flex flex-wrap gap-1.5">
       {steps.map((step) => (
         <span
           key={step.label}
-          className={`rounded px-2 py-1 text-[11px] font-medium ${
+          className={`rounded px-2 py-0.5 text-[11px] font-medium ${
             step.done ? "bg-[#ecfdf3] text-[#027a48]" : "bg-[#f8fafc] text-[#667085]"
           }`}
         >
@@ -554,7 +526,7 @@ function ActionButton({
       disabled={disabled}
       onClick={onClick}
       title={title}
-      className="inline-flex items-center justify-center gap-1 rounded-lg border border-[#cfd7e6] bg-white px-2 py-2 text-xs font-medium text-[#172033] transition hover:border-[#2f6feb] disabled:cursor-not-allowed disabled:opacity-50"
+      className="inline-flex items-center justify-center gap-1 rounded-lg border border-[#cfd7e6] bg-white px-2 py-1.5 text-xs font-medium text-[#172033] transition hover:border-[#2f6feb] disabled:cursor-not-allowed disabled:opacity-50"
     >
       {icon}
       {label}
@@ -765,47 +737,6 @@ function NodeInspector({
             </ConfigurationHint>
           </>
         ) : null}
-
-        {type === "http" ? (
-          <>
-            <SelectInput label="Method" value={stringValue(config.method) || "GET"} onChange={(method) => updateConfig({ method })} options={["GET", "POST", "PUT", "PATCH", "DELETE"].map((method) => ({ label: method, value: method }))} />
-            <TextInput label="URL" value={stringValue(config.url)} onChange={(url) => updateConfig({ url })} />
-            <TextArea label="Headers JSON" rows={4} value={stringValue(config.headers)} onChange={(headers) => updateConfig({ headers })} />
-            <TextArea label="Body" rows={4} value={stringValue(config.body)} onChange={(body) => updateConfig({ body })} />
-            <SchemaNotice />
-          </>
-        ) : null}
-
-        {type === "code" ? (
-          <>
-            <SelectInput label="Language" value={stringValue(config.language) || "python"} onChange={(language) => updateConfig({ language })} options={[{ label: "python", value: "python" }, { label: "javascript", value: "javascript" }]} />
-            <TextArea label="Code" rows={7} value={stringValue(config.code)} onChange={(code) => updateConfig({ code })} />
-            <SchemaNotice />
-          </>
-        ) : null}
-
-        {type === "variable" ? (
-          <>
-            <TextInput label="Name" value={stringValue(config.name)} onChange={(name) => updateConfig({ name })} />
-            <TextArea label="Value" rows={3} value={stringValue(config.value)} onChange={(value) => updateConfig({ value })} />
-            <SchemaNotice />
-          </>
-        ) : null}
-
-        {type === "template" ? (
-          <>
-            <TextArea label="Template" rows={6} value={stringValue(config.template)} onChange={(template) => updateConfig({ template })} />
-            <SchemaNotice />
-          </>
-        ) : null}
-
-        {type === "human" ? (
-          <>
-            <TextInput label="Title" value={stringValue(config.title)} onChange={(title) => updateConfig({ title })} />
-            <TextArea label="Instructions" rows={4} value={stringValue(config.instructions)} onChange={(instructions) => updateConfig({ instructions })} />
-            <SchemaNotice />
-          </>
-        ) : null}
       </div>
     </section>
   );
@@ -1008,225 +939,10 @@ function jsonObjectError(value: string): string | null {
   }
 }
 
-function ConnectionInspector({
-  edges,
-  node,
-  nodes,
-  onAddConnection,
-  onDeleteSelected,
-  onSelectEdge,
-  onSelectNode,
-  selectedEdgeId,
-  validateConnection,
-}: {
-  edges: Array<{ id: string; source: string; target: string; sourceHandle?: string | null }>;
-  node: { id: string; type?: string; data: CustomNodeData } | undefined;
-  nodes: Array<{ id: string; type?: string; data: CustomNodeData }>;
-  onAddConnection: (sourceId: string, targetId: string, branch?: "true" | "false") => boolean;
-  onDeleteSelected: () => void;
-  onSelectEdge: (id: string) => void;
-  onSelectNode: (id: string) => void;
-  selectedEdgeId: string;
-  validateConnection: (
-    sourceId: string | null | undefined,
-    targetId: string | null | undefined,
-    branch?: "true" | "false"
-  ) => { valid: boolean; message: string };
-}) {
-  const [targetId, setTargetId] = useState("");
-  const [branch, setBranch] = useState<"true" | "false">("true");
-  const selectedEdge = edges.find((edge) => edge.id === selectedEdgeId);
-  const incoming = node ? edges.filter((edge) => edge.target === node.id) : [];
-  const outgoing = node ? edges.filter((edge) => edge.source === node.id) : [];
-  const targetOptions = node
-    ? nodes
-        .filter((candidate) => candidate.id !== node.id && candidate.type !== "start")
-        .map((candidate) => ({ label: `${canvasNodeLabel(candidate)} (${candidate.type ?? "node"})`, value: candidate.id }))
-    : [];
-  const connectionCheck = node && targetId
-    ? validateConnection(node.id, targetId, node.type === "condition" ? branch : undefined)
-    : { valid: false, message: "Choose a target step to add a connection" };
-
-  useEffect(() => {
-    setTargetId("");
-    setBranch("true");
-  }, [node?.id]);
-
-  return (
-    <section className="rounded-lg border border-[#dfe4ee] bg-white">
-      <div className="flex items-center justify-between border-b border-[#dfe4ee] px-4 py-3">
-        <div className="flex items-center gap-2 text-sm font-semibold text-[#172033]">
-          <GitBranch size={16} />
-          Connections
-        </div>
-        <span className="rounded bg-[#f8fafc] px-2 py-1 text-[10px] font-semibold text-[#667085]">
-          {edges.length} total
-        </span>
-      </div>
-      <div className="space-y-3 p-4">
-        {!node ? <EmptyText text="Select a step to review and connect its execution path" /> : null}
-        {node ? (
-          <>
-            <div className="rounded-lg border border-[#dfe4ee] bg-[#f8fafc] px-3 py-2 text-xs leading-5 text-[#667085]">
-              <span className="font-semibold text-[#344054]">{canvasNodeLabel(node)}</span>{node.type === "condition"
-                ? " receives its selected data input and routes to exactly one named true or false output."
-                : " receives the complete output of each incoming step and passes its own output to every outgoing step."}
-            </div>
-            <ConnectionList
-              emptyText="This step has no incoming connection"
-              label="Input from"
-              nodes={nodes}
-              onSelectEdge={onSelectEdge}
-              onSelectNode={onSelectNode}
-              relatedEdges={incoming}
-              selectedEdgeId={selectedEdgeId}
-              side="source"
-            />
-            <ConnectionList
-              emptyText="This step has no outgoing connection"
-              label="Output to"
-              nodes={nodes}
-              onSelectEdge={onSelectEdge}
-              onSelectNode={onSelectNode}
-              relatedEdges={outgoing}
-              selectedEdgeId={selectedEdgeId}
-              side="target"
-            />
-            {node.type !== "end" ? (
-              <div className="space-y-2 border-t border-[#eaecf0] pt-3">
-                <SelectInput
-                  label="Connect this step to"
-                  onChange={setTargetId}
-                  options={[{ label: "Choose a target step", value: "" }, ...targetOptions]}
-                  value={targetId}
-                />
-                {node.type === "condition" ? (
-                  <SelectInput
-                    label="Condition output"
-                    onChange={(nextBranch) => setBranch(nextBranch as "true" | "false")}
-                    options={[
-                      { label: "true — condition matches", value: "true" },
-                      { label: "false — condition does not match", value: "false" },
-                    ]}
-                    value={branch}
-                  />
-                ) : null}
-                {targetId ? (
-                  <div className={`text-xs ${connectionCheck.valid ? "text-[#027a48]" : "text-[#b42318]"}`}>
-                    {connectionCheck.valid ? "Ready to connect. The downstream step will receive this step's output." : connectionCheck.message}
-                  </div>
-                ) : null}
-                <button
-                  className="w-full rounded-lg border border-[#2f6feb] bg-[#eef4ff] px-3 py-2 text-xs font-semibold text-[#175cd3] transition hover:bg-[#dbeafe] disabled:cursor-not-allowed disabled:border-[#d0d5dd] disabled:bg-[#f8fafc] disabled:text-[#98a2b3]"
-                  disabled={!connectionCheck.valid}
-                  onClick={() => {
-                    if (!node || !targetId) return;
-                    if (onAddConnection(node.id, targetId, node.type === "condition" ? branch : undefined)) setTargetId("");
-                  }}
-                  type="button"
-                >
-                  Add connection
-                </button>
-              </div>
-            ) : (
-              <ActionHint text="End is terminal and cannot connect to another step." />
-            )}
-          </>
-        ) : null}
-
-        {selectedEdge ? (
-          <div className="rounded-lg border border-[#bfdbfe] bg-[#eff6ff] p-3">
-            <div className="text-xs font-semibold text-[#1d4ed8]">Selected connection</div>
-            <div className="mt-1 text-xs text-[#344054]">
-              {canvasNodeLabel(findCanvasNode(nodes, selectedEdge.source))} → {canvasNodeLabel(findCanvasNode(nodes, selectedEdge.target))}
-              {selectedEdge.sourceHandle === "true" || selectedEdge.sourceHandle === "false"
-                ? ` (${selectedEdge.sourceHandle})`
-                : ""}
-            </div>
-            <button
-              className="mt-2 text-xs font-semibold text-[#b42318] hover:text-[#912018]"
-              onClick={onDeleteSelected}
-              type="button"
-            >
-              Delete connection
-            </button>
-          </div>
-        ) : (
-          <div className="text-xs leading-5 text-[#667085]">Tip: click a canvas connection to inspect or delete it. The editor blocks self-links, duplicate links, invalid Start/End directions, and cycles before save.</div>
-        )}
-      </div>
-    </section>
-  );
-}
-
-function ConnectionList({
-  emptyText,
-  label,
-  nodes,
-  onSelectEdge,
-  onSelectNode,
-  relatedEdges,
-  selectedEdgeId,
-  side,
-}: {
-  emptyText: string;
-  label: string;
-  nodes: Array<{ id: string; type?: string; data: CustomNodeData }>;
-  onSelectEdge: (id: string) => void;
-  onSelectNode: (id: string) => void;
-  relatedEdges: Array<{ id: string; source: string; target: string; sourceHandle?: string | null }>;
-  selectedEdgeId: string;
-  side: "source" | "target";
-}) {
-  return (
-    <div>
-      <div className="mb-1.5 text-[11px] font-semibold uppercase tracking-normal text-[#667085]">{label}</div>
-      {relatedEdges.length === 0 ? <div className="text-xs text-[#98a2b3]">{emptyText}</div> : null}
-      <div className="flex flex-wrap gap-1.5">
-        {relatedEdges.map((edge) => {
-          const relatedNodeId = edge[side];
-          const relatedNode = findCanvasNode(nodes, relatedNodeId);
-          return (
-            <button
-              key={edge.id}
-              className={`rounded border px-2 py-1 text-xs transition ${selectedEdgeId === edge.id ? "border-[#2f6feb] bg-[#eef4ff] text-[#175cd3]" : "border-[#dfe4ee] bg-white text-[#475467] hover:border-[#93c5fd]"}`}
-              onClick={() => {
-                onSelectEdge(edge.id);
-                onSelectNode(relatedNodeId);
-              }}
-              type="button"
-            >
-              {canvasNodeLabel(relatedNode)}
-              {side === "target" && (edge.sourceHandle === "true" || edge.sourceHandle === "false")
-                ? ` (${edge.sourceHandle})`
-                : ""}
-            </button>
-          );
-        })}
-      </div>
-    </div>
-  );
-}
-
-function findCanvasNode(
-  nodes: Array<{ id: string; type?: string; data: CustomNodeData }>,
-  id: string
-) {
-  return nodes.find((node) => node.id === id);
-}
-
 function canvasNodeLabel(node: { id: string; data: CustomNodeData } | undefined): string {
   if (!node) return "Unknown step";
   const config = node.data.config ?? {};
   return stringValue(config.display_name).trim() || node.data.label || node.id;
-}
-
-function SchemaNotice() {
-  return (
-    <div className="rounded-lg border border-[#fde68a] bg-[#fffbeb] px-3 py-2 text-xs leading-5 text-[#854d0e]">
-      This node is saved in the workflow DSL, but the backend executor is not wired yet.
-    </div>
-  );
 }
 
 function NodeRunRow({ run }: { run: NodeRun }) {

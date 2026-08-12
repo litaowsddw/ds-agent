@@ -48,10 +48,15 @@ describe("WorkflowResponsiveLayout", () => {
 
 describe("Workflow canvas sizing", () => {
   it("uses flex sizing instead of a fixed header-height calculation", () => {
-    const source = readFileSync(resolve(process.cwd(), "app/workflows/page.tsx"), "utf8");
+    const pageSource = readFileSync(resolve(process.cwd(), "app/workflows/page.tsx"), "utf8");
+    const canvasSource = readFileSync(
+      resolve(process.cwd(), "components/workflows/editor/WorkflowEditorCanvas.tsx"),
+      "utf8"
+    );
 
-    expect(source).not.toContain("h-[calc(100%-58px)]");
-    expect(source).toContain('className="relative min-h-0 flex-1 bg-[#f7f8fa]"');
+    expect(pageSource).not.toContain("h-[calc(100%-58px)]");
+    expect(canvasSource).not.toContain("h-[calc(100%-58px)]");
+    expect(canvasSource).toContain('className="relative min-h-0 flex-1 bg-[#f7f8fa]"');
   });
 });
 

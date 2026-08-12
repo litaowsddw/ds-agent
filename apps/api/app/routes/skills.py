@@ -120,7 +120,24 @@ async def list_skills(
     except ValueError as exc:
         raise HTTPException(status_code=403, detail=str(exc)) from exc
 
-    return [_to_skill_response(skill) for skill in skills]
+    # 平台内置 Skill 对所有组织可见（opencode 默认 Skill 思路），不落库。
+    from apps.api.app.domain.skill import SkillScope
+    from app.services.bundled_skills import list_bundled_skills
+
+    bundled = [
+        SkillResponse(
+            skill_id=skill.skill_id,
+            org_id="",
+            team_id=None,
+            agent_id=None,
+            scope=SkillScope.BUNDLED,
+            name=skill.name,
+            description=skill.description,
+            enabled=True,
+        )
+        for skill in list_bundled_skills()
+    ]
+    return [*(_to_skill_response(skill) for skill in skills), *bundled]
 
 
 @router.put("/agents/{agent_id}/policy")

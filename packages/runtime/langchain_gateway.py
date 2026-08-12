@@ -9,6 +9,7 @@
 - bind_tools 支持：将 LangChain Tool 的 schema 传给 LLM
 """
 
+import hashlib
 import json
 import logging
 from typing import Any
@@ -160,10 +161,19 @@ class GatewayChatModel(BaseChatModel):
 
         prompt_text = _messages_to_prompt(messages)
 
+        # Reasonix 风格前缀缓存观测：系统消息构成稳定前缀，对其取 hash 后
+        # 计量侧可以按 prefix_hash 聚合缓存命中表现（与 LLMCallerAdapter 一致）。
+        system_prefix = "\n\n".join(
+            str(message.content) for message in messages if isinstance(message, SystemMessage)
+        )
+
         request = LLMCallRequest(
             provider=self.provider,
             model=self.model,
             prompt=prompt_text,
+            prefix_hash=(
+                hashlib.sha256(system_prefix.encode("utf-8")).hexdigest() if system_prefix else ""
+            ),
             parameters={
                 "temperature": kwargs.get("temperature", 0.3),
                 "max_tokens": kwargs.get("max_tokens", 2048),

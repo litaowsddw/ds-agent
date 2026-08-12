@@ -264,3 +264,244 @@ describe("workflow run requests", () => {
     expect(template.definition.nodes.find((node) => node.id === "retrieve_knowledge")?.config.kb_id).toBe("");
   });
 });
+
+describe("canvas editor", () => {
+  function seedCanvas() {
+    useWorkflowStore.setState({
+      nodes: [
+        { id: "start", type: "start", position: { x: 80, y: 260 }, data: { label: "Start", config: {} } },
+        { id: "llm", type: "llm", position: { x: 380, y: 260 }, data: { label: "LLM", config: { provider: "p", model: "m" } } },
+        { id: "end", type: "end", position: { x: 680, y: 260 }, data: { label: "End", config: {} } },
+      ] as never,
+      edges: [
+        { id: "start-llm", source: "start", target: "llm", animated: true },
+        { id: "llm-end", source: "llm", target: "end", animated: true },
+      ],
+      selectedNodeId: "",
+      selectedEdgeId: "",
+      history: { past: [], future: [] },
+      pendingAddPosition: null,
+      validation: null,
+    });
+  }
+
+  const paletteLlm = { type: "rag", label: "Knowledge Retrieval", description: "", group: "Knowledge" as const, icon: "", capability: "executable" as const };
+
+  beforeEach(() => {
+    seedCanvas();
+  });
+
+  it("persists canvas positions in the workflow draft and hydrates them back", () => {
+    const draft = useWorkflowStore.getState().getWorkflowDraft();
+    expect(draft.nodes.map((node) => node.position)).toEqual([
+      { x: 80, y: 260 },
+      { x: 380, y: 260 },
+      { x: 680, y: 260 },
+    ]);
+
+    useWorkflowStore.setState({
+      workflows: [{
+        workflow_id: "positioned",
+        agent_id: "agent-1",
+        name: "Positioned",
+        description: "",
+        draft_definition: {
+          version: "1.0",
+          nodes: [
+            { id: "start", type: "start", config: {}, position: { x: 10, y: 20 } },
+            { id: "llm", type: "llm", config: { provider: "p", model: "m" } },
+            { id: "end", type: "end", config: {}, position: { x: 900, y: 40 } },
+          ],
+          edges: [
+            { source: "start", target: "llm" },
+            { source: "llm", target: "end" },
+          ],
+        },
+        published_version_id: null,
+      }],
+    });
+    useWorkflowStore.getState().setSelectedWorkflowId("positioned");
+    const positions = Object.fromEntries(
+      useWorkflowStore.getState().nodes.map((node) => [node.id, node.position])
+    );
+    expect(positions.start).toEqual({ x: 10, y: 20 });
+    expect(positions.end).toEqual({ x: 900, y: 40 });
+    // Nodes without saved coordinates fall back to a deterministic layout.
+    expect(positions.llm.y).toBe(260);
+  });
+
+  it("places palette-added nodes at the canvas pointer position", () => {
+    useWorkflowStore.setState({ pendingAddPosition: { x: 500, y: 320 } });
+    useWorkflowStore.getState().addNode(paletteLlm);
+    const added = useWorkflowStore.getState().nodes.find((node) => node.type === "rag");
+    expect(added?.position).toEqual({ x: 500, y: 320 });
+    expect(useWorkflowStore.getState().selectedNodeId).toBe(added?.id);
+  });
+
+  it("connects a quick-added node to its source in one undoable step", () => {
+    const result = useWorkflowStore.getState().connectNewNode("llm", undefined, paletteLlm, { x: 520, y: 120 });
+    expect(result.valid).toBe(true);
+    const state = useWorkflowStore.getState();
+    const added = state.nodes.find((node) => node.type === "rag");
+    expect(added).toBeDefined();
+    expect(state.edges).toEqual(expect.arrayContaining([
+      expect.objectContaining({ source: "llm", target: added?.id }),
+    ]));
+    expect(state.history.past).toHaveLength(1);
+
+    state.undo();
+    expect(useWorkflowStore.getState().nodes.find((node) => node.type === "rag")).toBeUndefined();
+    state.redo();
+    expect(useWorkflowStore.getState().nodes.find((node) => node.type === "rag")).toBeDefined();
+  });
+
+  it("rejects a quick-add when the source branch is already occupied", () => {
+    useWorkflowStore.setState({
+      nodes: [
+        { id: "start", type: "start", position: { x: 0, y: 0 }, data: { label: "Start", config: {} } },
+        { id: "check", type: "condition", position: { x: 200, y: 0 }, data: { label: "Condition", config: { left: "{{input.text}}", operator: "exists" } } },
+        { id: "end", type: "end", position: { x: 400, y: 0 }, data: { label: "End", config: {} } },
+      ] as never,
+      edges: [
+        { id: "start-check", source: "start", target: "check" },
+        { id: "check-end-true", source: "check", target: "end", sourceHandle: "true" },
+      ],
+    });
+
+    const result = useWorkflowStore.getState().connectNewNode("check", "true", paletteLlm, { x: 0, y: 0 });
+    expect(result).toEqual({ valid: false, message: "The true branch is already connected" });
+    expect(useWorkflowStore.getState().nodes.filter((node) => node.type === "rag")).toHaveLength(0);
+  });
+
+  it("duplicates selected nodes except start and end, with new ids and offsets", () => {
+    useWorkflowStore.setState({ selectedNodeId: "llm" });
+    const count = useWorkflowStore.getState().duplicateSelectedNodes();
+    expect(count).toBe(1);
+    const state = useWorkflowStore.getState();
+    const copy = state.nodes.find((node) => node.type === "llm" && node.id !== "llm");
+    expect(copy?.position).toEqual({ x: 428, y: 308 });
+    expect(copy?.id).not.toBe("llm");
+    expect(state.nodes.filter((node) => node.type === "start")).toHaveLength(1);
+
+    useWorkflowStore.setState({ selectedNodeId: "start" });
+    expect(useWorkflowStore.getState().duplicateSelectedNodes()).toBe(0);
+  });
+
+  it("deletes the current selection while protecting start and end", () => {
+    useWorkflowStore.setState({ selectedNodeId: "llm", selectedEdgeId: "" });
+    useWorkflowStore.getState().deleteSelection();
+    let state = useWorkflowStore.getState();
+    expect(state.nodes.map((node) => node.id)).toEqual(["start", "end"]);
+    expect(state.edges).toEqual([]);
+
+    useWorkflowStore.setState({ selectedNodeId: "start" });
+    useWorkflowStore.getState().deleteSelection();
+    state = useWorkflowStore.getState();
+    expect(state.nodes.map((node) => node.id)).toEqual(["start", "end"]);
+  });
+
+  it("restores the previous canvas on undo and clears redo history on the next edit", () => {
+    useWorkflowStore.getState().addNodeAt(paletteLlm, { x: 100, y: 100 });
+    expect(useWorkflowStore.getState().history.past).toHaveLength(1);
+
+    useWorkflowStore.getState().undo();
+    expect(useWorkflowStore.getState().nodes.map((node) => node.id)).toEqual(["start", "llm", "end"]);
+    expect(useWorkflowStore.getState().history.future).toHaveLength(1);
+
+    useWorkflowStore.getState().redo();
+    expect(useWorkflowStore.getState().nodes.some((node) => node.type === "rag")).toBe(true);
+
+    useWorkflowStore.getState().undo();
+    useWorkflowStore.getState().addNodeAt(paletteLlm, { x: 200, y: 200 });
+    expect(useWorkflowStore.getState().history.future).toEqual([]);
+  });
+
+  it("lays out nodes in topological layers from the start node", () => {
+    useWorkflowStore.setState({
+      nodes: [
+        { id: "end", type: "end", position: { x: 0, y: 0 }, data: { label: "End", config: {} } },
+        { id: "llm", type: "llm", position: { x: 0, y: 0 }, data: { label: "LLM", config: {} } },
+        { id: "start", type: "start", position: { x: 0, y: 0 }, data: { label: "Start", config: {} } },
+        { id: "check", type: "condition", position: { x: 0, y: 0 }, data: { label: "Condition", config: {} } },
+      ] as never,
+      edges: [
+        { id: "1", source: "start", target: "llm" },
+        { id: "2", source: "llm", target: "check" },
+        { id: "3", source: "check", target: "end", sourceHandle: "true" },
+      ],
+    });
+
+    useWorkflowStore.getState().applyAutoLayout();
+    const positions = Object.fromEntries(
+      useWorkflowStore.getState().nodes.map((node) => [node.id, node.position])
+    );
+    expect(positions.start.x).toBeLessThan(positions.llm.x);
+    expect(positions.llm.x).toBeLessThan(positions.check.x);
+    expect(positions.check.x).toBeLessThan(positions.end.x);
+  });
+
+  it("splits an edge when inserting a node into it, in one undo step", () => {
+    const ok = useWorkflowStore.getState().insertNodeIntoEdge("llm-end", paletteLlm, { x: 520, y: 260 });
+    expect(ok).toBe(true);
+    const state = useWorkflowStore.getState();
+    const added = state.nodes.find((node) => node.type === "rag");
+    expect(added?.position).toEqual({ x: 520, y: 260 });
+    expect(state.edges.some((edge) => edge.source === "llm" && edge.target === added?.id)).toBe(true);
+    expect(state.edges.some((edge) => edge.source === added?.id && edge.target === "end")).toBe(true);
+    expect(state.edges.some((edge) => edge.id === "llm-end")).toBe(false);
+    expect(state.history.past).toHaveLength(1);
+
+    state.undo();
+    expect(useWorkflowStore.getState().edges.map((edge) => edge.id)).toContain("llm-end");
+  });
+
+  it("keeps the condition branch on the upstream half when inserting into a branch edge", () => {
+    useWorkflowStore.setState({
+      nodes: [
+        { id: "start", type: "start", position: { x: 0, y: 0 }, data: { label: "Start", config: {} } },
+        { id: "check", type: "condition", position: { x: 200, y: 0 }, data: { label: "Condition", config: {} } },
+        { id: "end", type: "end", position: { x: 400, y: 0 }, data: { label: "End", config: {} } },
+      ] as never,
+      edges: [
+        { id: "start-check", source: "start", target: "check" },
+        { id: "check-end-true", source: "check", target: "end", sourceHandle: "true" },
+      ],
+    });
+
+    useWorkflowStore.getState().insertNodeIntoEdge("check-end-true", paletteLlm, { x: 300, y: 0 });
+    const state = useWorkflowStore.getState();
+    const added = state.nodes.find((node) => node.type === "rag");
+    const upstream = state.edges.find((edge) => edge.source === "check" && edge.target === added?.id);
+    const downstream = state.edges.find((edge) => edge.source === added?.id && edge.target === "end");
+    expect(upstream?.sourceHandle).toBe("true");
+    expect(downstream?.sourceHandle).toBeUndefined();
+  });
+
+  it("renames a node through saved display metadata", () => {
+    useWorkflowStore.getState().renameNode("llm", "起草答复");
+    expect(
+      useWorkflowStore.getState().nodes.find((node) => node.id === "llm")?.data.config?.display_name
+    ).toBe("起草答复");
+
+    useWorkflowStore.getState().undo();
+    expect(
+      useWorkflowStore.getState().nodes.find((node) => node.id === "llm")?.data.config?.display_name
+    ).toBeUndefined();
+  });
+
+  it("copies and pastes nodes with relative offsets, skipping protected nodes", () => {
+    useWorkflowStore.setState({ selectedNodeId: "llm" });
+    expect(useWorkflowStore.getState().copySelection()).toBe(1);
+
+    const pasted = useWorkflowStore.getState().pasteClipboard({ x: 900, y: 400 });
+    expect(pasted).toBe(1);
+    const copy = useWorkflowStore.getState().nodes.find((node) => node.type === "llm" && node.id !== "llm");
+    expect(copy?.position).toEqual({ x: 900, y: 400 });
+    expect(copy?.data.config).toMatchObject({ provider: "p", model: "m" });
+  });
+
+  it("selects every node on demand", () => {
+    useWorkflowStore.getState().selectAllNodes();
+    expect(useWorkflowStore.getState().nodes.every((node) => node.selected)).toBe(true);
+  });
+});

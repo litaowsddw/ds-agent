@@ -6,6 +6,7 @@ gateway 等模块中，避免入口文件变成难以维护的"大杂烩"。
 启动时自动初始化数据库连接和 Redis 健康检查。
 """
 
+import os
 from contextlib import asynccontextmanager
 
 from fastapi import FastAPI
@@ -44,6 +45,38 @@ from apps.api.app.routes.metrics import router as metrics_router
 from apps.api.app.routes.metering import router as metering_router
 
 
+async def _check_alembic_version(logger: "logging.Logger") -> None:
+    """生产环境校验数据库迁移版本，只告警不自动迁移。"""
+    try:
+        import logging  # noqa: F401
+        from pathlib import Path
+
+        from alembic.config import Config
+        from alembic.script import ScriptDirectory
+        from sqlalchemy import text
+
+        from app.database import async_engine
+
+        alembic_cfg = Config()
+        alembic_cfg.set_main_option(
+            "script_location",
+            str(Path(__file__).resolve().parents[1] / "alembic"),
+        )
+        script = ScriptDirectory.from_config(alembic_cfg)
+        head = script.get_current_head()
+
+        async with async_engine.connect() as connection:
+            result = await connection.execute(text("SELECT version_num FROM alembic_version"))
+            current = result.scalar()
+
+        if current != head:
+            logger.warning("数据库迁移版本落后：current=%s head=%s，请执行 alembic upgrade head", current, head)
+        else:
+            logger.info("数据库迁移版本一致：%s", current)
+    except Exception as exc:
+        logger.warning("Alembic 版本校验失败（非致命）：%s", exc)
+
+
 @asynccontextmanager
 async def lifespan(app: FastAPI):
     """应用生命周期管理 - 启动和关闭时的操作。"""
@@ -58,11 +91,17 @@ async def lifespan(app: FastAPI):
     init_otel()
     logger.info("OpenTelemetry 初始化完成")
 
-    # 初始化数据库表
+    # 初始化数据库表。
+    # 开发/测试环境直接 create_all；生产环境以 Alembic 迁移为准，仅校验版本并告警，
+    # 避免 create_all 与迁移脚本并存导致的表结构漂移。
+    app_env = os.getenv("APP_ENV", "development")
     try:
         from app.database import init_db
-        await init_db()
-        logger.info("数据库初始化完成")
+        if app_env == "production":
+            await _check_alembic_version(logger)
+        else:
+            await init_db()
+            logger.info("数据库初始化完成")
     except Exception as exc:
         logger.warning(f"数据库初始化失败（非致命）：{exc}")
 
@@ -103,16 +142,18 @@ def create_app() -> FastAPI:
     app = FastAPI(title=app_title, version=app_version, lifespan=lifespan)
     app.add_middleware(RequestLoggingMiddleware)
     app.add_middleware(TracingMiddleware)
+    # 生产环境经 Caddy 同源访问，无需 CORS；跨域来源通过 AGENTFLOW_CORS_ORIGINS 显式配置。
+    allowed_origins = [
+        origin.strip()
+        for origin in os.getenv(
+            "AGENTFLOW_CORS_ORIGINS",
+            "http://localhost:3000,http://127.0.0.1:3000,http://localhost:13000,http://127.0.0.1:13000",
+        ).split(",")
+        if origin.strip()
+    ]
     app.add_middleware(
         CORSMiddleware,
-        allow_origins=[
-            "http://localhost:3000",
-            "http://127.0.0.1:3000",
-            "http://localhost:3001",
-            "http://127.0.0.1:3001",
-            "http://localhost:13000",
-            "http://127.0.0.1:13000",
-        ],
+        allow_origins=allowed_origins,
         allow_credentials=True,
         allow_methods=["*"],
         allow_headers=["*"],

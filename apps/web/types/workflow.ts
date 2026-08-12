@@ -84,6 +84,8 @@ export interface WorkflowNodeConfig {
   id: string;
   type: string;
   config: Record<string, unknown>;
+  /** Canvas coordinates. Persisted as editor metadata; the backend ignores it. */
+  position?: { x: number; y: number };
 }
 
 export interface WorkflowEdgeConfig {
@@ -98,6 +100,10 @@ export interface CustomNodeData extends Record<string, unknown> {
   description?: string;
   capability?: "executable" | "schema";
   config?: Record<string, unknown>;
+  /** Latest run status for this node, mapped from node runs. */
+  runStatus?: string;
+  /** Opens the quick-add menu anchored to this node (Dify-style "+" affordance). */
+  onQuickAdd?: (nodeId: string, branch?: "true" | "false") => void;
 }
 
 export const CUSTOM_NODE_TYPES = {
