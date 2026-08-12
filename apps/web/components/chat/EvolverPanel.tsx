@@ -117,13 +117,13 @@ export default function EvolverPanel({ agentId, orgId }: { agentId: string; orgI
                 </div>
                 <div className="flex gap-1">
                   <button
-                    onClick={() => approveEvolution(record.record_id, true)}
+                    onClick={() => approveEvolution(record.record_id, true, orgId)}
                     className="px-2 py-0.5 bg-green-500 text-white rounded hover:bg-green-600"
                   >
                     Approve
                   </button>
                   <button
-                    onClick={() => approveEvolution(record.record_id, false)}
+                    onClick={() => approveEvolution(record.record_id, false, orgId)}
                     className="px-2 py-0.5 bg-red-500 text-white rounded hover:bg-red-600"
                   >
                     Reject

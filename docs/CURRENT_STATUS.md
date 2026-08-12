@@ -1,5 +1,32 @@
 # 当前开发状态
 
+## v0.5 安全收口与工具链通电（2026-08-12）
+
+- **ReAct 工具循环通电**（此前生产从未工作）：
+  - `LLMCallResponse.raw` 现包含供应商响应的 `choices`（`gateway/llm.py`）
+  - `GatewayChatModel` 读取属性名修正为 `raw`（此前读不存在的 `raw_response`，tool_calls 永远为空）
+  - `langgraph_supervisor` 增加 `_normalize_subtasks`：容忍 LLM 输出字符串列表/缺字段的子任务
+- **认证统一收口**：约 30 个端点从 `actor_user_id` 明文自报改为 `AuthenticatedUser`/`CurrentUser`
+  + `resolve_actor`（生产强制 JWT，开发期 body/query actor 降级兼容）；
+  删除越权端点 `GET /model-providers/{id}/decrypted-key`；
+  `/chat/sessions/{id}/messages`、`/evolver/*` 等裸奔端点已加成员校验；
+  model_providers 读写增加组织成员校验
+- **双导入根统一**：`app/__init__.py` 安装 meta-path finder，`app.*` 与 `apps.api.app.*`
+  归一为单实例（此前 llm_gateway/限流器/缓存双实例）；删除 `workflow_runs.py` 三处猴子补丁
+- **Evolver 链修通**：补齐 `sync_session_factory`；routes/worker 均按组织 provider 配置真实
+  构建 `SkillEvolverLLMCaller`（此前构造即抛）；修复 `SkillEvoverLLMCaller` 拼写 NameError
+- **Agent kind 对齐**：`AgentCreateRequest`/`AgentUpdateRequest` 暴露 `kind`（此前 API 无法创建
+  SUPERVISOR Agent——Supervisor 能力完全不可达），白名单校验
+- **体验修复**：
+  - provider 引用兼容 provider_id/provider_key，报错如实化并给出行动指引
+  - `/workflow-runs` 无过滤条件时按 JWT 组织过滤（不再静默返回空列表）
+  - Agent 未配置模型的错误信息改为可行动的中文指引
+- **evolver 审批**：请求体增加 `org_id` 用于审批权限校验（前端 EvolverPanel 已同步）
+
+生产验证（2026-08-12，deepseek-v4-pro 真实调用）：Supervisor Agent 经 `/chat/` 完成
+plan → delegate → ReAct（多次 `knowledge_search` 工具调用）→ reflect → respond 全链路，
+检索结果命中知识库 chunk 并正确汇报分数。
+
 ## v0.4 运行时收敛与清理（2026-08-11）
 
 - **Supervisor 断链修复**：`/chat/` 与 A2A Task 现在为 Supervisor 构建真实的

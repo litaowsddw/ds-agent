@@ -1185,19 +1185,32 @@ def _chunk_text(text: str, size: int = 24) -> list[str]:
 @router.get("/sessions/{session_id}/messages")
 async def get_session_messages(
     session_id: str,
+    auth: AuthenticatedUser,
     limit: int = Query(default=50, le=200),
     db: AsyncSession = Depends(get_db_session),
 ) -> dict[str, object]:
     """Return persisted messages for a chat session."""
 
     try:
-        from apps.api.app.services.db.session_db import session_message_db
+        from apps.api.app.services.db.identity_db import membership_db
+        from apps.api.app.services.db.session_db import session_db, session_message_db
+
+        # 会话消息是租户数据：读取前必须校验成员身份
+        session = await session_db.get_session_required(db, session_id)
+        try:
+            await membership_db.assert_org_access(db, user_id=auth.user_id, org_id=session.org_id)
+        except ValueError:
+            raise HTTPException(status_code=403, detail="Forbidden")
 
         messages = await session_message_db.list_session_messages(db, session_id, limit=limit)
         return {
             "session_id": session_id,
             "messages": [_to_chat_message_response(message) for message in messages] if messages else [],
         }
+    except HTTPException:
+        raise
+    except ValueError as exc:
+        raise HTTPException(status_code=404, detail=str(exc)) from exc
     except Exception as exc:
         raise HTTPException(status_code=500, detail=f"Failed to load chat messages: {exc}") from exc
 
@@ -1205,7 +1218,7 @@ async def get_session_messages(
 @router.get("/agents/{agent_id}/latest-session")
 async def get_latest_agent_session(
     agent_id: str,
-    actor_user_id: str = Query(description="Actor user ID"),
+    auth: AuthenticatedUser,
     db: AsyncSession = Depends(get_db_session),
 ) -> dict[str, object]:
     """Return the newest persisted chat session for an Agent."""
@@ -1217,7 +1230,7 @@ async def get_latest_agent_session(
         from apps.api.app.services.db.session_db import session_message_db
 
         agent = await agent_db.get_agent_required(db, agent_id)
-        await membership_db.assert_org_access(db, user_id=actor_user_id, org_id=agent.org_id)
+        await membership_db.assert_org_access(db, user_id=auth.user_id, org_id=agent.org_id)
 
         result = await db.execute(
             select(SessionModel)

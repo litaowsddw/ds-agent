@@ -9,7 +9,13 @@ from datetime import datetime, timezone
 import pytest
 from fastapi import HTTPException
 
+from app.core.auth import AuthContext
 from apps.api.app.routes import workflow_runs, workflows
+
+
+def _auth(user_id: str) -> AuthContext:
+    """路由认证签名改造后，直接调用测试统一构造认证上下文。"""
+    return AuthContext(user_id=user_id, email="", org_id=None, role=None, is_authenticated=True)
 
 
 @dataclass
@@ -130,7 +136,7 @@ async def test_list_workflows_rejects_missing_scope(
 
     with pytest.raises(HTTPException) as exc_info:
         await workflows.list_workflows(
-            actor_user_id="user-a",
+            auth=_auth("user-a"),
             org_id=None,
             agent_id=None,
             session=object(),  # type: ignore[arg-type]
@@ -154,7 +160,7 @@ async def test_list_workflows_rejects_cross_org_user_for_agent_id(
 
     with pytest.raises(HTTPException) as exc_info:
         await workflows.list_workflows(
-            actor_user_id="user-b",
+            auth=_auth("user-b"),
             org_id=None,
             agent_id="agent-a",
             session=object(),  # type: ignore[arg-type]
@@ -178,7 +184,7 @@ async def test_list_workflows_accepts_same_org_agent_id(
     monkeypatch.setattr(workflows, "workflow_db", workflow_db)
 
     response = await workflows.list_workflows(
-        actor_user_id="user-a",
+        auth=_auth("user-a"),
         org_id=None,
         agent_id="agent-a",
         session=object(),  # type: ignore[arg-type]
@@ -208,7 +214,7 @@ async def test_list_workflows_rejects_org_id_that_does_not_match_agent(
 
     with pytest.raises(HTTPException) as exc_info:
         await workflows.list_workflows(
-            actor_user_id="user-a",
+            auth=_auth("user-a"),
             org_id="org-b",
             agent_id="agent-a",
             session=object(),  # type: ignore[arg-type]
@@ -232,7 +238,7 @@ async def test_list_runs_rejects_cross_org_user_for_workflow_id(
 
     with pytest.raises(HTTPException) as exc_info:
         await workflow_runs.list_runs(
-            actor_user_id="user-b",
+            auth=_auth("user-b"),
             workflow_id="workflow-a",
             org_id=None,
             session=object(),  # type: ignore[arg-type]
@@ -256,7 +262,7 @@ async def test_list_runs_accepts_same_org_workflow_id(
     monkeypatch.setattr(workflow_runs, "workflow_run_db", _WorkflowRunDB([run]))
 
     response = await workflow_runs.list_runs(
-        actor_user_id="user-a",
+        auth=_auth("user-a"),
         workflow_id="workflow-a",
         org_id=None,
         session=object(),  # type: ignore[arg-type]
@@ -283,7 +289,7 @@ async def test_list_runs_rejects_org_id_that_does_not_match_workflow(
 
     with pytest.raises(HTTPException) as exc_info:
         await workflow_runs.list_runs(
-            actor_user_id="user-a",
+            auth=_auth("user-a"),
             workflow_id="workflow-a",
             org_id="org-b",
             session=object(),  # type: ignore[arg-type]

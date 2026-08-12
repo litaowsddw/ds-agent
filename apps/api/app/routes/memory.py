@@ -11,6 +11,7 @@ from app.models.runtime import MemoryModel
 from app.schemas.memory import MemoryCreateRequest, MemoryRecallRequest, MemoryResponse
 from app.services.db.agent_db import agent_db
 from app.services.db.identity_db import membership_db
+from app.core.auth import AuthenticatedUser, resolve_actor, CurrentUser
 from app.services.db.runtime_db import memory_db
 from app.services.memory_vector import memory_vector_service
 
@@ -20,12 +21,14 @@ router = APIRouter()
 @router.post("", response_model=MemoryResponse)
 async def create_memory(
     request: MemoryCreateRequest,
+    auth: CurrentUser,
     session: AsyncSession = Depends(get_db_session),
 ) -> MemoryResponse:
     """写入 Agent 长期记忆。"""
 
     agent = await _get_agent_or_404(session, request.agent_id)
-    await _assert_memory_org_access(session, request.actor_user_id, agent.org_id)
+    actor_user_id = resolve_actor(auth, request.actor_user_id)
+    await _assert_memory_org_access(session, actor_user_id, agent.org_id)
 
     try:
         memory = await memory_db.create_memory(
@@ -50,38 +53,40 @@ async def create_memory(
         await session.rollback()
         raise HTTPException(status_code=400, detail=str(exc)) from exc
 
-    return _to_memory_response(memory, user_id=request.actor_user_id)
+    return _to_memory_response(memory, user_id=actor_user_id)
 
 
 @router.get("", response_model=list[MemoryResponse])
 async def list_memories(
-    actor_user_id: str = Query(description="操作用户 ID"),
+    auth: AuthenticatedUser,
     agent_id: str = Query(description="Agent ID"),
     session: AsyncSession = Depends(get_db_session),
 ) -> list[MemoryResponse]:
     """列出 Agent 下的记忆。"""
 
     agent = await _get_agent_or_404(session, agent_id)
-    await _assert_memory_org_access(session, actor_user_id, agent.org_id)
+    await _assert_memory_org_access(session, auth.user_id, agent.org_id)
     memories, _ = await memory_db.list_agent_memories(session, agent_id)
 
-    return [_to_memory_response(memory, user_id=actor_user_id) for memory in memories]
+    return [_to_memory_response(memory, user_id=auth.user_id) for memory in memories]
 
 
 @router.post("/recall", response_model=list[MemoryResponse])
 async def recall_memories(
     request: MemoryRecallRequest,
+    auth: CurrentUser,
     session: AsyncSession = Depends(get_db_session),
 ) -> list[MemoryResponse]:
     """召回 Agent 长期记忆。"""
 
     agent = await _get_agent_or_404(session, request.agent_id)
-    await _assert_memory_org_access(session, request.actor_user_id, agent.org_id)
+    actor_user_id = resolve_actor(auth, request.actor_user_id)
+    await _assert_memory_org_access(session, actor_user_id, agent.org_id)
     memories, _ = await memory_db.list_agent_memories(session, request.agent_id)
 
     ranked = _rank_memories(memories, request.query)
     return [
-        _to_memory_response(memory, user_id=request.actor_user_id)
+        _to_memory_response(memory, user_id=actor_user_id)
         for memory in ranked[: request.limit]
     ]
 

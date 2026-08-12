@@ -22,6 +22,7 @@ from app.services.db.session_db import session_db, session_message_db
 from app.services.db.agent_db import agent_db
 from app.services.db.identity_db import membership_db
 from app.domain.identity import new_id
+from app.core.auth import AuthenticatedUser, resolve_actor, CurrentUser
 
 router = APIRouter()
 
@@ -29,11 +30,13 @@ router = APIRouter()
 @router.post("", response_model=SessionResponse)
 async def create_session(
     request: SessionCreateRequest,
+    auth: CurrentUser,
     session: AsyncSession = Depends(get_db_session),
 ) -> SessionResponse:
     """创建 Agent Session。"""
     agent = await _get_agent_or_404(session, request.agent_id)
-    await _assert_session_org_access(session, request.actor_user_id, agent.org_id)
+    actor_user_id = resolve_actor(auth, request.actor_user_id)
+    await _assert_session_org_access(session, actor_user_id, agent.org_id)
 
     try:
         s = await session_db.create_session(
@@ -41,7 +44,7 @@ async def create_session(
             session_id=new_id("ses"),
             org_id=agent.org_id,
             agent_id=agent.agent_id,
-            user_id=request.actor_user_id,
+            user_id=actor_user_id,
             queue_mode=request.queue_mode,
         )
         await session.commit()
@@ -54,13 +57,13 @@ async def create_session(
 
 @router.get("", response_model=list[SessionResponse])
 async def list_sessions(
+    auth: AuthenticatedUser,
     agent_id: str = Query(description="Agent ID"),
-    actor_user_id: str = Query(description="操作者用户 ID"),
     session: AsyncSession = Depends(get_db_session),
 ) -> list[SessionResponse]:
     """列出 Agent 下的 Session。"""
     agent = await _get_agent_or_404(session, agent_id)
-    await _assert_session_org_access(session, actor_user_id, agent.org_id)
+    await _assert_session_org_access(session, auth.user_id, agent.org_id)
     sessions, _ = await session_db.list_agent_sessions(session, agent_id)
 
     return [_to_session_response(s) for s in sessions]
@@ -69,12 +72,12 @@ async def list_sessions(
 @router.get("/{session_id}", response_model=SessionResponse)
 async def get_session(
     session_id: str,
-    actor_user_id: str = Query(description="操作者用户 ID"),
+    auth: AuthenticatedUser,
     db_session: AsyncSession = Depends(get_db_session),
 ) -> SessionResponse:
     """读取 Agent Session。"""
     s = await _get_session_or_404(db_session, session_id)
-    await _assert_session_org_access(db_session, actor_user_id, s.org_id)
+    await _assert_session_org_access(db_session, auth.user_id, s.org_id)
 
     return _to_session_response(s)
 
@@ -83,11 +86,12 @@ async def get_session(
 async def append_message(
     session_id: str,
     request: MessageAppendRequest,
+    auth: CurrentUser,
     session: AsyncSession = Depends(get_db_session),
 ) -> MessageResponse:
     """向 Session 追加消息。"""
     s = await _get_session_or_404(session, session_id)
-    await _assert_session_org_access(session, request.actor_user_id, s.org_id)
+    await _assert_session_org_access(session, resolve_actor(auth, request.actor_user_id), s.org_id)
 
     try:
         if s.status == "closed":
@@ -115,12 +119,12 @@ async def append_message(
 @router.get("/{session_id}/messages", response_model=list[MessageResponse])
 async def list_messages(
     session_id: str,
-    actor_user_id: str = Query(description="操作者用户 ID"),
+    auth: AuthenticatedUser,
     session: AsyncSession = Depends(get_db_session),
 ) -> list[MessageResponse]:
     """列出 Session 消息。"""
     s = await _get_session_or_404(session, session_id)
-    await _assert_session_org_access(session, actor_user_id, s.org_id)
+    await _assert_session_org_access(session, auth.user_id, s.org_id)
     messages = await session_message_db.list_session_messages(session, session_id)
 
     return [_to_message_response(m) for m in messages]
@@ -130,11 +134,12 @@ async def list_messages(
 async def compact_session(
     session_id: str,
     request: SessionCompactRequest,
+    auth: CurrentUser,
     db_session: AsyncSession = Depends(get_db_session),
 ) -> SessionResponse:
     """写入 Session 压缩摘要。"""
     s = await _get_session_or_404(db_session, session_id)
-    await _assert_session_org_access(db_session, request.actor_user_id, s.org_id)
+    await _assert_session_org_access(db_session, resolve_actor(auth, request.actor_user_id), s.org_id)
 
     try:
         s = await session_db.compact_session(db_session, s.session_id, request.summary)

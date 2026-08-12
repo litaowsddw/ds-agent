@@ -133,6 +133,45 @@ def _rule_based_plan(user_input: str, available_subagents: list[dict[str, Any]])
     }
 
 
+# ---------- 子任务归一化 ----------
+
+
+def _normalize_subtasks(raw_subtasks: Any) -> list[dict[str, Any]]:
+    """把 LLM 输出的 subtasks 归一化为标准结构。
+
+    LLM 有时返回纯字符串列表（如 ["检索知识库", "总结"]），
+    有时返回缺字段的 dict。统一补齐，避免下游 task.get 崩溃。
+    """
+    normalized: list[dict[str, Any]] = []
+    if not isinstance(raw_subtasks, list):
+        return normalized
+    for item in raw_subtasks:
+        if isinstance(item, str):
+            task_text = item.strip()
+            if task_text:
+                normalized.append(
+                    {"task": task_text, "subagent_kind": "USER_SUB", "execution_order": 0, "depends_on": []}
+                )
+        elif isinstance(item, dict):
+            task_text = str(item.get("task") or "").strip()
+            if not task_text:
+                continue
+            try:
+                order = int(item.get("execution_order", 0) or 0)
+            except (TypeError, ValueError):
+                order = 0
+            depends_on = item.get("depends_on", [])
+            normalized.append(
+                {
+                    "task": task_text,
+                    "subagent_kind": str(item.get("subagent_kind") or "USER_SUB"),
+                    "execution_order": order,
+                    "depends_on": depends_on if isinstance(depends_on, list) else [],
+                }
+            )
+    return normalized
+
+
 # ---------- 节点函数 ----------
 
 
@@ -176,7 +215,7 @@ async def plan_node(state: SupervisorState, *, chat_model: Any = None) -> dict[s
     return {
         "intent": plan_result.get("intent", "general_query"),
         "reasoning": plan_result.get("reasoning", ""),
-        "subtasks": plan_result.get("subtasks", []),
+        "subtasks": _normalize_subtasks(plan_result.get("subtasks", [])),
     }
 
 
@@ -286,7 +325,7 @@ async def reflect_node(state: SupervisorState, *, chat_model: Any = None) -> dic
     }
 
     if not satisfied:
-        follow_up_tasks = reflection.get("follow_up_tasks", [])
+        follow_up_tasks = _normalize_subtasks(reflection.get("follow_up_tasks", []))
         if follow_up_tasks:
             result["subtasks"] = follow_up_tasks
     else:

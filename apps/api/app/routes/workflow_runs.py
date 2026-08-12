@@ -18,7 +18,6 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from app.core.auth import AuthenticatedUser
 from app.database import get_db_session
 from app.domain.identity import new_id
-from app.gateway.llm import OpenAICompatibleProvider
 from app.models.workflow import NodeRunModel, WorkflowApprovalRequestModel, WorkflowRunModel
 from app.schemas.workflow_run import (
     NodeRunResponse,
@@ -35,7 +34,6 @@ from app.services.db.workflow_db import (
     workflow_run_db,
     workflow_version_db,
 )
-from app.services import workflow_execution as workflow_execution_module
 from app.services.workflow_execution import workflow_execution_service
 
 router = APIRouter()
@@ -88,7 +86,6 @@ async def create_run(
             await session.commit()
             await _submit_async_run(run=run)
         else:
-            workflow_execution_module.OpenAICompatibleProvider = OpenAICompatibleProvider
             run = await workflow_execution_service.create_and_execute(
                 session,
                 version_id=version.version_id,
@@ -113,7 +110,6 @@ async def execute_workflow_version_for_chat(
 ) -> WorkflowRunModel:
     """创建并同步执行 Workflow Run，供 Chat 流程模式复用。"""
 
-    workflow_execution_module.OpenAICompatibleProvider = OpenAICompatibleProvider
     return await workflow_execution_service.create_and_execute(
         session,
         version_id=version_id,
@@ -138,7 +134,6 @@ async def stream_workflow_version_for_chat(
         payload["token_limit"] = token_limit
         await queue.put(payload)
 
-    workflow_execution_module.OpenAICompatibleProvider = OpenAICompatibleProvider
     task = asyncio.create_task(
         workflow_execution_service.create_and_execute(
             session,
@@ -180,38 +175,40 @@ async def stream_workflow_version_for_chat(
 
 @router.get("", response_model=list[WorkflowRunResponse])
 async def list_runs(
-    actor_user_id: str = Query(description="操作用户 ID"),
+    auth: AuthenticatedUser,
     workflow_id: str | None = Query(default=None, description="Workflow ID"),
     org_id: str | None = Query(default=None, description="Organization ID"),
     session: AsyncSession = Depends(get_db_session),
 ) -> list[WorkflowRunResponse]:
     """列出用户可访问的 Workflow Run。"""
-
+    # 缺过滤条件时按 JWT 中的组织过滤，不再静默返回空列表造成“数据丢失”假象
+    effective_org_id = org_id or auth.org_id
     try:
         if workflow_id is not None:
             workflow = await workflow_db.get_workflow_required(session, workflow_id)
             if org_id is not None and org_id != workflow.org_id:
                 raise ValueError("workflow_id 与 org_id 不属于同一组织")
             await membership_db.assert_org_access(
-                session, user_id=actor_user_id, org_id=workflow.org_id
+                session, user_id=auth.user_id, org_id=workflow.org_id
             )
             runs, _ = await workflow_run_db.list_workflow_runs(session, workflow_id)
-        elif org_id is not None:
+        elif effective_org_id is not None:
             await membership_db.assert_org_access(
-                session, user_id=actor_user_id, org_id=org_id
+                session, user_id=auth.user_id, org_id=effective_org_id
             )
-            runs, _ = await workflow_run_db.list_org_runs(session, org_id)
+            runs, _ = await workflow_run_db.list_org_runs(session, effective_org_id)
         else:
-            runs = []
+            raise HTTPException(status_code=400, detail="缺少 workflow_id 或 org_id 过滤条件")
     except ValueError as exc:
         raise HTTPException(status_code=403, detail=str(exc)) from exc
+
     return [_to_run_response(run) for run in runs]
 
 
 @router.get("/{run_id}", response_model=WorkflowRunResponse)
 async def get_run(
     run_id: str,
-    actor_user_id: str = Query(description="操作用户 ID"),
+    auth: AuthenticatedUser,
     session: AsyncSession = Depends(get_db_session),
 ) -> WorkflowRunResponse:
     """读取 Workflow Run。"""
@@ -219,7 +216,7 @@ async def get_run(
     try:
         run = await workflow_run_db.get_run_required(session, run_id)
         await membership_db.assert_org_access(
-            session, user_id=actor_user_id, org_id=run.org_id
+            session, user_id=auth.user_id, org_id=run.org_id
         )
     except ValueError as exc:
         raise HTTPException(status_code=404, detail=str(exc)) from exc
@@ -230,7 +227,7 @@ async def get_run(
 @router.get("/{run_id}/nodes", response_model=list[NodeRunResponse])
 async def list_node_runs(
     run_id: str,
-    actor_user_id: str = Query(description="操作用户 ID"),
+    auth: AuthenticatedUser,
     session: AsyncSession = Depends(get_db_session),
 ) -> list[NodeRunResponse]:
     """列出 Workflow Run 节点日志。"""
@@ -242,7 +239,7 @@ async def list_node_runs(
 
     try:
         await membership_db.assert_org_access(
-            session, user_id=actor_user_id, org_id=run.org_id
+            session, user_id=auth.user_id, org_id=run.org_id
         )
     except ValueError as exc:
         # The run exists, so never disguise a cross-organization denial as a

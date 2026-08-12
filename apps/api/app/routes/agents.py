@@ -19,7 +19,7 @@ from app.services.db.agent_db import agent_db, workspace_db
 from app.services.db.identity_db import membership_db, team_db
 from app.services.db.workflow_db import workflow_db
 from app.domain.identity import new_id
-from app.core.auth import AuthenticatedUser, require_org
+from app.core.auth import AuthenticatedUser, require_org, resolve_actor, CurrentUser
 
 router = APIRouter()
 
@@ -39,6 +39,8 @@ async def create_agent(
 
     actor_user_id = auth.user_id
     require_org(auth, request.org_id)
+    if request.kind not in ("USER_SUB", "SUPERVISOR"):
+        raise HTTPException(status_code=400, detail="kind 仅支持 USER_SUB / SUPERVISOR")
     try:
         # 权限校验
         await membership_db.assert_org_access(
@@ -70,6 +72,7 @@ async def create_agent(
             max_tokens=request.max_tokens,
             context_token_limit=request.context_token_limit,
             default_workflow_id=request.default_workflow_id,
+            kind=request.kind or "USER_SUB",
             created_by=actor_user_id,
         )
         await _validate_default_workflow(session, agent, request.default_workflow_id)
@@ -95,14 +98,18 @@ async def create_agent(
 async def update_agent(
     agent_id: str,
     request: AgentUpdateRequest,
+    auth: CurrentUser,
     session: AsyncSession = Depends(get_db_session),
 ) -> AgentResponse:
     """更新 Agent 参数。"""
 
     try:
+        actor_user_id = resolve_actor(auth, request.actor_user_id)
+        if request.kind is not None and request.kind not in ("USER_SUB", "SUPERVISOR"):
+            raise ValueError("kind 仅支持 USER_SUB / SUPERVISOR")
         agent = await agent_db.get_agent_required(session, agent_id)
         await membership_db.assert_org_access(
-            session, user_id=request.actor_user_id, org_id=agent.org_id
+            session, user_id=actor_user_id, org_id=agent.org_id
         )
         update_data = request.model_dump(exclude={"actor_user_id"}, exclude_unset=True)
         for key in ("name", "description", "system_prompt", "model_provider", "model_name"):
@@ -121,14 +128,14 @@ async def update_agent(
 
 @router.get("", response_model=list[AgentResponse])
 async def list_agents(
+    auth: AuthenticatedUser,
     org_id: str = Query(description="组织 ID"),
-    actor_user_id: str = Query(description="操作者用户 ID"),
     session: AsyncSession = Depends(get_db_session),
 ) -> list[AgentResponse]:
     """列出组织内 Agent。"""
     try:
         await membership_db.assert_org_access(
-            session, user_id=actor_user_id, org_id=org_id
+            session, user_id=auth.user_id, org_id=org_id
         )
         agents = await agent_db.list_org_agents(session, org_id=org_id)
     except ValueError as exc:
@@ -140,14 +147,14 @@ async def list_agents(
 @router.get("/{agent_id}", response_model=AgentResponse)
 async def get_agent(
     agent_id: str,
-    actor_user_id: str = Query(description="操作者用户 ID"),
+    auth: AuthenticatedUser,
     session: AsyncSession = Depends(get_db_session),
 ) -> AgentResponse:
     """读取 Agent。"""
     try:
         agent = await agent_db.get_agent_required(session, agent_id)
         await membership_db.assert_org_access(
-            session, user_id=actor_user_id, org_id=agent.org_id
+            session, user_id=auth.user_id, org_id=agent.org_id
         )
     except ValueError as exc:
         raise HTTPException(status_code=404, detail=str(exc)) from exc
@@ -158,7 +165,7 @@ async def get_agent(
 @router.get("/{agent_id}/workspace", response_model=WorkspaceResponse)
 async def get_workspace(
     agent_id: str,
-    actor_user_id: str = Query(description="操作者用户 ID"),
+    auth: AuthenticatedUser,
     session: AsyncSession = Depends(get_db_session),
 ) -> WorkspaceResponse:
     """读取 Agent Workspace。"""
@@ -169,7 +176,7 @@ async def get_workspace(
 
     try:
         await membership_db.assert_org_access(
-            session, user_id=actor_user_id, org_id=agent.org_id
+            session, user_id=auth.user_id, org_id=agent.org_id
         )
     except ValueError as exc:
         raise HTTPException(status_code=403, detail=str(exc)) from exc
@@ -186,6 +193,7 @@ async def get_workspace(
 async def update_workspace_file(
     agent_id: str,
     request: WorkspaceFileUpdateRequest,
+    auth: CurrentUser,
     session: AsyncSession = Depends(get_db_session),
 ) -> WorkspaceResponse:
     """更新 Agent Workspace 文件。"""
@@ -203,8 +211,9 @@ async def update_workspace_file(
 
     try:
         agent = await agent_db.get_agent_required(session, agent_id)
+        actor_user_id = resolve_actor(auth, request.actor_user_id)
         await membership_db.assert_org_access(
-            session, user_id=request.actor_user_id, org_id=agent.org_id
+            session, user_id=actor_user_id, org_id=agent.org_id
         )
 
         field_name = kind_to_field.get(str(request.file_kind))
@@ -213,7 +222,7 @@ async def update_workspace_file(
 
         workspace = await workspace_db.update_workspace_file(
             session, agent_id=agent_id, file_field=field_name,
-            content=request.content, updated_by=request.actor_user_id,
+            content=request.content, updated_by=actor_user_id,
         )
         await session.commit()
     except ValueError as exc:

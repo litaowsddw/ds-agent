@@ -13,8 +13,43 @@ from pydantic import BaseModel
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.database import get_db_session
+from app.core.auth import AuthenticatedUser, CurrentUser
 
 router = APIRouter()
+
+
+async def _assert_evolution_access(
+    db: AsyncSession, auth, org_id: str, required_role: str | None = None
+) -> None:
+    """进化会真实消耗 LLM 费用并改动 Skill，必须校验组织成员身份。"""
+    from app.services.db.identity_db import membership_db
+
+    try:
+        await membership_db.assert_org_access(
+            db, user_id=auth.user_id, org_id=org_id, required_role=required_role
+        )
+    except ValueError as exc:
+        raise HTTPException(status_code=403, detail=str(exc)) from exc
+
+
+async def _build_evolver_llm_caller(db: AsyncSession, agent, actor_user_id: str):
+    """按 Agent 的 provider 配置构建真实的 Skill Evolver LLM 调用器。"""
+    from app.services.chat_llm_stack import build_chat_llm_stack
+    from packages.runtime.llm_caller import SkillEvolverLLMCaller
+
+    gateway, _adapter, _chat_model = await build_chat_llm_stack(
+        db,
+        agent=agent,
+        actor_user_id=actor_user_id,
+        source="skill_evolver",
+        session_id="",
+    )
+    return SkillEvolverLLMCaller(
+        gateway=gateway,
+        provider=agent.model_provider or "",
+        model=agent.model_name or "",
+        org_id=str(agent.org_id),
+    )
 
 
 class TriggerEvolutionRequest(BaseModel):
@@ -29,6 +64,7 @@ class ApproveEvolutionRequest(BaseModel):
     """审批进化请求。"""
     record_id: str
     approved: bool
+    org_id: str  # 审批是高权限操作，必须显式带入组织用于成员校验
 
 
 class EvolutionResponse(BaseModel):
@@ -45,9 +81,11 @@ class EvolutionResponse(BaseModel):
 @router.post("/trigger")
 async def trigger_evolution(
     request: TriggerEvolutionRequest,
+    auth: CurrentUser,
     db: AsyncSession = Depends(get_db_session),
 ):
     """触发一次 Skill 进化循环。"""
+    await _assert_evolution_access(db, auth, request.org_id)
     try:
         if request.async_exec:
             # 异步执行
@@ -63,10 +101,11 @@ async def trigger_evolution(
             }
         else:
             # 同步执行
+            from app.services.db.agent_db import agent_db
             from packages.runtime.skill_evolver import HarmesSkillEvolver
-            from packages.runtime.llm_caller import SkillEvolverLLMCaller
 
-            caller = SkillEvoverLLMCaller(org_id=request.org_id)
+            agent = await agent_db.get_agent_required(db, request.agent_id)
+            caller = await _build_evolver_llm_caller(db, agent, auth.user_id)
             evolver = HarmesSkillEvolver(llm_caller=caller)
             records = await evolver.evolve(request.agent_id, request.org_id)
 
@@ -94,15 +133,18 @@ async def trigger_evolution(
 @router.get("/analysis/{agent_id}")
 async def get_run_analysis(
     agent_id: str,
+    auth: CurrentUser,
     org_id: str = Query(...),
     db: AsyncSession = Depends(get_db_session),
 ):
     """获取 Agent 运行分析。"""
+    await _assert_evolution_access(db, auth, org_id)
     try:
+        from app.services.db.agent_db import agent_db
         from packages.runtime.skill_evolver import HarmesSkillEvolver
-        from packages.runtime.llm_caller import SkillEvolverLLMCaller
 
-        caller = SkillEvoverLLMCaller(org_id=org_id)
+        agent = await agent_db.get_agent_required(db, agent_id)
+        caller = await _build_evolver_llm_caller(db, agent, auth.user_id)
         evolver = HarmesSkillEvolver(llm_caller=caller)
         analysis = await evolver.analyze(agent_id, org_id)
 
@@ -122,10 +164,12 @@ async def get_run_analysis(
 @router.get("/history/{agent_id}")
 async def get_evolution_history(
     agent_id: str,
+    auth: CurrentUser,
     org_id: str = Query(...),
     db: AsyncSession = Depends(get_db_session),
 ):
     """获取 Agent 进化历史。"""
+    await _assert_evolution_access(db, auth, org_id)
     try:
         from packages.runtime.skill_evolver import HarmesSkillEvolver
 
@@ -156,10 +200,13 @@ async def get_evolution_history(
 
 @router.get("/pending")
 async def get_pending_approvals(
+    auth: CurrentUser,
     org_id: str = Query(...),
     agent_id: str | None = None,
+    db: AsyncSession = Depends(get_db_session),
 ):
     """获取待审批的进化记录。"""
+    await _assert_evolution_access(db, auth, org_id)
     try:
         from packages.runtime.feedback_loop import FeedbackLoop
 
@@ -186,8 +233,21 @@ async def get_pending_approvals(
 
 
 @router.post("/approve")
-async def approve_evolution(request: ApproveEvolutionRequest):
+async def approve_evolution(
+    request: ApproveEvolutionRequest,
+    auth: CurrentUser,
+    db: AsyncSession = Depends(get_db_session),
+):
     """审批或拒绝一条进化记录。"""
+    try:
+        from app.services.db.identity_db import membership_db
+
+        try:
+            await membership_db.assert_org_access(db, user_id=auth.user_id, org_id=request.org_id)
+        except ValueError as exc:
+            raise HTTPException(status_code=403, detail=str(exc)) from exc
+    except HTTPException:
+        raise
     try:
         from packages.runtime.feedback_loop import FeedbackLoop
 
@@ -206,15 +266,19 @@ async def approve_evolution(request: ApproveEvolutionRequest):
 @router.get("/feedback-loop/{agent_id}")
 async def run_feedback_loop(
     agent_id: str,
+    auth: CurrentUser,
     org_id: str = Query(...),
+    db: AsyncSession = Depends(get_db_session),
 ):
     """执行一次完整的反馈循环。"""
+    await _assert_evolution_access(db, auth, org_id)
     try:
+        from app.services.db.agent_db import agent_db
         from packages.runtime.feedback_loop import FeedbackLoop
         from packages.runtime.skill_evolver import HarmesSkillEvolver
-        from packages.runtime.llm_caller import SkillEvolverLLMCaller
 
-        caller = SkillEvolverLLMCaller(org_id=org_id)
+        agent = await agent_db.get_agent_required(db, agent_id)
+        caller = await _build_evolver_llm_caller(db, agent, auth.user_id)
         evolver = HarmesSkillEvolver(llm_caller=caller)
         loop = FeedbackLoop(evolver=evolver)
         result = await loop.run_cycle(agent_id, org_id)

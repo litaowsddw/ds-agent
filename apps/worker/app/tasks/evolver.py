@@ -14,6 +14,56 @@ from celery import shared_task
 logger = logging.getLogger(__name__)
 
 
+def _build_evolver_llm_caller(org_id: str):
+    """按组织 provider 配置构建真实的 Skill Evolver LLM 调用器。
+
+    此前任务只用 org_id 构造调用器（缺 provider/model）必然失败，
+    且 worker 进程没有预置 gateway provider，因此统一在这里按 DB 配置组装。
+    """
+    from sqlalchemy import select
+
+    from app.core.security import decrypt_api_key
+    from apps.api.app.database import sync_session_factory
+    from apps.api.app.gateway.llm import LLMGateway, OpenAICompatibleProvider, llm_gateway
+    from apps.api.app.models.runtime import ModelProviderModel
+    from packages.runtime.llm_caller import SkillEvolverLLMCaller
+
+    with sync_session_factory() as session:
+        row = session.execute(
+            select(ModelProviderModel)
+            .where(
+                ModelProviderModel.org_id == org_id,
+                ModelProviderModel.is_enabled == True,  # noqa: E712
+            )
+            .order_by(ModelProviderModel.created_at.desc())
+            .limit(1)
+        ).scalars().first()
+
+    if row is None:
+        raise ValueError(f"组织 {org_id} 未配置可用的模型供应商，无法执行 Skill 进化")
+    if not row.default_model:
+        raise ValueError(f"组织 {org_id} 的模型供应商 {row.provider_key} 未配置默认模型")
+
+    gateway = LLMGateway(
+        providers={
+            row.provider_key: OpenAICompatibleProvider(
+                base_url=row.base_url,
+                api_key=(
+                    decrypt_api_key(row.api_key_encrypted) if row.api_key_encrypted else ""
+                ),
+                provider_key=row.provider_key,
+            )
+        },
+        limiter=llm_gateway.limiter,
+    )
+    return SkillEvolverLLMCaller(
+        gateway=gateway,
+        provider=row.provider_key,
+        model=row.default_model,
+        org_id=org_id,
+    )
+
+
 @shared_task(
     name="evolver.run_cycle",
     bind=True,
@@ -36,9 +86,8 @@ def run_evolution_cycle(self, agent_id: str, org_id: str) -> dict[str, Any]:
     try:
         import asyncio
         from packages.runtime.skill_evolver import HarmesSkillEvolver
-        from packages.runtime.llm_caller import SkillEvolverLLMCaller
 
-        caller = SkillEvolverLLMCaller(org_id=org_id)
+        caller = _build_evolver_llm_caller(org_id)
         evolver = HarmesSkillEvolver(llm_caller=caller)
 
         records = asyncio.run(evolver.evolve(agent_id, org_id))
@@ -97,13 +146,12 @@ def batch_evolution(self, org_id: str) -> dict[str, Any]:
 
     try:
         from apps.api.app.database import sync_session_factory
-        from apps.api.app.services.db.agent_db import agent_db
-        from apps.api.app.models.agent import Agent
+        from apps.api.app.models.agent import AgentModel
         from sqlalchemy import select
 
         # 获取组织内所有 Agent
         with sync_session_factory() as session:
-            stmt = select(Agent).where(Agent.org_id == org_id)
+            stmt = select(AgentModel).where(AgentModel.org_id == org_id)
             result = session.execute(stmt)
             agents = result.scalars().all()
 
@@ -160,9 +208,8 @@ def run_feedback_loop(self, agent_id: str, org_id: str) -> dict[str, Any]:
         import asyncio
         from packages.runtime.feedback_loop import FeedbackLoop, FeedbackLoopConfig
         from packages.runtime.skill_evolver import HarmesSkillEvolver
-        from packages.runtime.llm_caller import SkillEvolverLLMCaller
 
-        caller = SkillEvolverLLMCaller(org_id=org_id)
+        caller = _build_evolver_llm_caller(org_id)
         evolver = HarmesSkillEvolver(llm_caller=caller)
         loop = FeedbackLoop(
             evolver=evolver,

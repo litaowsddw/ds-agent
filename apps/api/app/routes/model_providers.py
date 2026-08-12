@@ -34,6 +34,13 @@ async def create_model_provider(
     if not actor_user_id:
         raise HTTPException(status_code=401, detail="需要登录")
 
+    from apps.api.app.services.db.identity_db import membership_db
+
+    try:
+        await membership_db.assert_org_access(session, user_id=actor_user_id, org_id=request.org_id)
+    except ValueError as exc:
+        raise HTTPException(status_code=403, detail=str(exc)) from exc
+
     # 检查是否已存在同 org + provider_key 的配置
     existing = await model_provider_db.get_by_key(session, request.org_id, request.provider_key)
 
@@ -85,34 +92,22 @@ async def list_model_providers(
     session: AsyncSession = Depends(get_db_session),
 ) -> list[ModelProviderResponse]:
     """列出组织可用模型供应商配置。API Key 自动脱敏。"""
+    from apps.api.app.services.db.identity_db import membership_db
+
+    actor = auth.user_id or actor_user_id
+    if not actor:
+        raise HTTPException(status_code=401, detail="需要登录")
+    try:
+        await membership_db.assert_org_access(session, user_id=actor, org_id=org_id)
+    except ValueError as exc:
+        raise HTTPException(status_code=403, detail=str(exc)) from exc
     providers = await model_provider_db.list_org_providers(session, org_id)
     return [_to_provider_response(p) for p in providers]
 
 
-@router.get("/{provider_id}/decrypted-key")
-async def get_decrypted_api_key(
-    provider_id: str,
-    auth: CurrentUser,
-    session: AsyncSession = Depends(get_db_session),
-) -> dict:
-    """获取解密后的 API Key（仅限服务间调用，需认证）。
-
-    此端点供 Gateway 等内部服务调用，前端不应使用。
-    """
-    if not auth.is_authenticated:
-        raise HTTPException(status_code=401, detail="需要认证")
-
-    provider = await model_provider_db.get_by_id(session, provider_id)
-    if provider is None:
-        raise HTTPException(status_code=404, detail="供应商配置不存在")
-
-    # 解密 API Key
-    try:
-        decrypted = decrypt_api_key(provider.api_key_encrypted) if provider.api_key_encrypted else ""
-    except Exception:
-        raise HTTPException(status_code=500, detail="API Key 解密失败")
-
-    return {"provider_id": provider_id, "api_key": decrypted}
+# 历史遗留的 /{provider_id}/decrypted-key 端点已删除：
+# 它允许任何认证用户解密任意组织的 API Key，而服务端内部解密
+# （services/chat_llm_stack.build_chat_llm_stack）已覆盖全部合法用途。
 
 
 def _to_provider_response(provider: ModelProviderModel) -> ModelProviderResponse:

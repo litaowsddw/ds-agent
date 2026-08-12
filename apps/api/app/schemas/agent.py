@@ -23,12 +23,14 @@ class AgentCreateRequest(BaseModel):
     max_tokens: int | None = Field(default=None, ge=128, le=32768, description="最大输出 tokens")
     context_token_limit: int | None = Field(default=None, ge=800, le=2000000, description="上下文压缩阈值 tokens")
     default_workflow_id: str | None = Field(default=None, description="默认 Workflow ID，空值表示自主模式")
+    kind: str = Field(default="USER_SUB", description="Agent 类型：USER_SUB / SUPERVISOR")
 
 
 class AgentUpdateRequest(BaseModel):
     """更新 Agent 参数请求。"""
 
     actor_user_id: str = Field(description="操作者用户 ID")
+    kind: str | None = Field(default=None, description="Agent 类型：USER_SUB / SUPERVISOR")
     name: str | None = Field(default=None, min_length=1, max_length=80, description="Agent 名称")
     description: str | None = Field(default=None, max_length=500, description="Agent 描述")
     model_provider: str | None = Field(default=None, description="默认模型供应商 key")

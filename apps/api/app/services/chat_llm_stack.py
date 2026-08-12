@@ -38,22 +38,38 @@ async def build_chat_llm_stack(
     model_provider = agent.model_provider or ""
     model_name = agent.model_name or ""
     if not model_provider or not model_name:
-        raise HTTPException(status_code=400, detail="Agent has no model provider or model configured")
+        raise HTTPException(
+            status_code=400,
+            detail="Agent 未配置模型供应商或模型，请先在 Agent 设置中选择模型供应商和模型",
+        )
 
+    # provider_key 优先；兼容历史数据把 provider_id(mdl_xxx) 存进 model_provider 的情况
     provider_config = await model_provider_db.get_by_key(db, org_id, model_provider)
+    if provider_config is None:
+        provider_config = await model_provider_db.get_by_id(db, model_provider, "provider_id")
     if provider_config is None or not provider_config.is_enabled:
-        raise HTTPException(status_code=400, detail=f"Model provider not configured: {model_provider}")
+        raise HTTPException(
+            status_code=400,
+            detail=(
+                f"模型供应商不可用：{model_provider}。"
+                "请核对 Agent 的供应商配置使用 provider_key（而非 provider_id），或到 Models 页重新配置"
+            ),
+        )
+
+    # 统一使用供应商行的真实 provider_key，避免 Agent 存了 provider_id 时
+    # 请求路由键与配置键不一致
+    provider_key = str(provider_config.provider_key)
 
     gateway = LLMGateway(
         providers={
-            model_provider: OpenAICompatibleProvider(
+            provider_key: OpenAICompatibleProvider(
                 base_url=provider_config.base_url,
                 api_key=(
                     decrypt_api_key(provider_config.api_key_encrypted)
                     if provider_config.api_key_encrypted
                     else ""
                 ),
-                provider_key=model_provider,
+                provider_key=provider_key,
             )
         },
         limiter=llm_gateway.limiter,
@@ -61,7 +77,7 @@ async def build_chat_llm_stack(
     )
     adapter = LLMCallerAdapter(
         gateway=gateway,
-        provider=model_provider,
+        provider=provider_key,
         model=model_name,
         org_id=org_id,
         actor_user_id=actor_user_id,
@@ -76,7 +92,7 @@ async def build_chat_llm_stack(
     )
     chat_model = GatewayChatModel.from_gateway(
         gateway=gateway,
-        provider=model_provider,
+        provider=provider_key,
         model=model_name,
         org_id=org_id,
         actor_user_id=actor_user_id,

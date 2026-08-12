@@ -10,6 +10,7 @@ from app.services.db.agent_db import agent_db, workspace_db
 from app.services.db.identity_db import membership_db
 from app.services.db.runtime_db import memory_db, skill_db
 from app.services.db.session_db import session_db, session_message_db
+from app.core.auth import AuthenticatedUser
 from packages.runtime.context_engine import ContextEngine
 
 router = APIRouter()
@@ -18,7 +19,7 @@ router = APIRouter()
 @router.get("/sessions/{session_id}/assemble")
 async def assemble_session_context(
     session_id: str,
-    actor_user_id: str = Query(description="操作用户 ID"),
+    auth: AuthenticatedUser,
     current_input: str = Query(default="", description="当前回合输入"),
     token_budget: int = Query(default=4096, description="上下文 token 预算"),
     db_session: AsyncSession = Depends(get_db_session),
@@ -28,7 +29,7 @@ async def assemble_session_context(
     try:
         session = await session_db.get_session_required(db_session, session_id)
         await membership_db.assert_org_access(
-            db_session, user_id=actor_user_id, org_id=session.org_id
+            db_session, user_id=auth.user_id, org_id=session.org_id
         )
         workspace = await workspace_db.get_by_agent_id_required(db_session, session.agent_id)
         messages = await session_message_db.list_session_messages(db_session, session_id)

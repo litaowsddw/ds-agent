@@ -9,7 +9,7 @@ import os
 from sqlalchemy import create_engine as sync_create_engine
 from sqlalchemy import inspect, text
 from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker, create_async_engine
-from sqlalchemy.orm import DeclarativeBase
+from sqlalchemy.orm import DeclarativeBase, sessionmaker
 
 # 数据库连接配置 - 从环境变量读取
 DATABASE_URL = os.getenv(
@@ -73,6 +73,9 @@ try:
 except Exception:
     # pymysql 未安装时降级
     engine = None
+
+# 同步会话工厂（Worker Celery 任务使用，如 evolver/workflow 任务）
+sync_session_factory = sessionmaker(bind=engine) if engine is not None else None
 
 
 # ── 数据库初始化 ──

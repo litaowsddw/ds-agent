@@ -23,6 +23,7 @@ from app.services.db.workflow_db import workflow_db, workflow_version_db
 from app.services.db.agent_db import agent_db
 from app.services.db.identity_db import membership_db
 from app.domain.identity import new_id
+from app.core.auth import AuthenticatedUser, resolve_actor, CurrentUser
 from packages.workflow.validator import WorkflowValidator
 from packages.workflow.dsl import WorkflowDefinition, WorkflowEdge, WorkflowNode
 
@@ -89,13 +90,15 @@ def _validate_draft_definition(draft: dict[str, object]) -> dict[str, object]:
 @router.post("", response_model=WorkflowResponse)
 async def create_workflow(
     request: WorkflowCreateRequest,
+    auth: CurrentUser,
     session: AsyncSession = Depends(get_db_session),
 ) -> WorkflowResponse:
     """创建 Workflow 草稿。"""
     try:
+        actor_user_id = resolve_actor(auth, request.actor_user_id)
         agent = await agent_db.get_agent_required(session, request.agent_id)
         await membership_db.assert_org_access(
-            session, user_id=request.actor_user_id, org_id=agent.org_id
+            session, user_id=actor_user_id, org_id=agent.org_id
         )
 
         workflow = await workflow_db.create_workflow(
@@ -106,7 +109,7 @@ async def create_workflow(
             name=request.name,
             description=request.description,
             draft_definition=request.draft_definition,
-            created_by=request.actor_user_id,
+            created_by=actor_user_id,
         )
         await session.commit()
     except ValueError as exc:
@@ -118,7 +121,7 @@ async def create_workflow(
 
 @router.get("", response_model=list[WorkflowResponse])
 async def list_workflows(
-    actor_user_id: str = Query(description="操作者用户 ID"),
+    auth: AuthenticatedUser,
     org_id: str | None = Query(default=None, description="组织 ID"),
     agent_id: str | None = Query(default=None, description="Agent ID"),
     session: AsyncSession = Depends(get_db_session),
@@ -134,12 +137,12 @@ async def list_workflows(
             if org_id is not None and org_id != agent.org_id:
                 raise ValueError("agent_id 与 org_id 不属于同一组织")
             await membership_db.assert_org_access(
-                session, user_id=actor_user_id, org_id=agent.org_id
+                session, user_id=auth.user_id, org_id=agent.org_id
             )
             effective_org_id = agent.org_id
         elif org_id is not None:
             await membership_db.assert_org_access(
-                session, user_id=actor_user_id, org_id=org_id
+                session, user_id=auth.user_id, org_id=org_id
             )
         workflows, _ = await workflow_db.list_workflows(
             session, org_id=effective_org_id, agent_id=agent_id
@@ -153,14 +156,14 @@ async def list_workflows(
 @router.get("/{workflow_id}", response_model=WorkflowResponse)
 async def get_workflow(
     workflow_id: str,
-    actor_user_id: str = Query(description="操作者用户 ID"),
+    auth: AuthenticatedUser,
     session: AsyncSession = Depends(get_db_session),
 ) -> WorkflowResponse:
     """读取 Workflow。"""
     try:
         workflow = await workflow_db.get_workflow_required(session, workflow_id)
         await membership_db.assert_org_access(
-            session, user_id=actor_user_id, org_id=workflow.org_id
+            session, user_id=auth.user_id, org_id=workflow.org_id
         )
     except ValueError as exc:
         raise HTTPException(status_code=404, detail=str(exc)) from exc
@@ -172,13 +175,15 @@ async def get_workflow(
 async def update_draft(
     workflow_id: str,
     request: WorkflowUpdateDraftRequest,
+    auth: CurrentUser,
     session: AsyncSession = Depends(get_db_session),
 ) -> WorkflowResponse:
     """更新 Workflow 草稿。"""
     try:
+        actor_user_id = resolve_actor(auth, request.actor_user_id)
         workflow = await workflow_db.get_workflow_required(session, workflow_id)
         await membership_db.assert_org_access(
-            session, user_id=request.actor_user_id, org_id=workflow.org_id
+            session, user_id=actor_user_id, org_id=workflow.org_id
         )
         workflow = await workflow_db.update_draft(
             session, workflow_id, request.draft_definition
@@ -195,14 +200,16 @@ async def update_draft(
 async def validate_workflow_draft(
     workflow_id: str,
     request: WorkflowValidateRequest,
+    auth: CurrentUser,
     session: AsyncSession = Depends(get_db_session),
 ) -> WorkflowValidationResponse:
     """Validate the caller's current canvas before they save, publish, or run it."""
 
     try:
+        actor_user_id = resolve_actor(auth, request.actor_user_id)
         workflow = await workflow_db.get_workflow_required(session, workflow_id)
         await membership_db.assert_org_access(
-            session, user_id=request.actor_user_id, org_id=workflow.org_id
+            session, user_id=actor_user_id, org_id=workflow.org_id
         )
     except ValueError as exc:
         raise HTTPException(status_code=404, detail=str(exc)) from exc
@@ -215,13 +222,15 @@ async def validate_workflow_draft(
 async def publish_workflow(
     workflow_id: str,
     request: WorkflowPublishRequest,
+    auth: CurrentUser,
     session: AsyncSession = Depends(get_db_session),
 ) -> WorkflowVersionResponse:
     """发布 Workflow 版本。"""
     try:
+        actor_user_id = resolve_actor(auth, request.actor_user_id)
         workflow = await workflow_db.get_workflow_required(session, workflow_id)
         await membership_db.assert_org_access(
-            session, user_id=request.actor_user_id, org_id=workflow.org_id
+            session, user_id=actor_user_id, org_id=workflow.org_id
         )
 
         draft = await workflow_db.get_draft_definition(session, workflow_id)
@@ -238,7 +247,7 @@ async def publish_workflow(
             version_number=version_number,
             definition=draft,
             release_note=request.release_note,
-            created_by=request.actor_user_id,
+            created_by=actor_user_id,
         )
 
         await workflow_db.set_published_version(session, workflow_id, version.version_id)
@@ -255,6 +264,7 @@ async def restore_version_to_draft(
     workflow_id: str,
     version_id: str,
     request: WorkflowRestoreDraftRequest,
+    auth: CurrentUser,
     session: AsyncSession = Depends(get_db_session),
 ) -> WorkflowResponse:
     """Copy an immutable published snapshot into the editable draft.
@@ -265,9 +275,10 @@ async def restore_version_to_draft(
     """
 
     try:
+        actor_user_id = resolve_actor(auth, request.actor_user_id)
         workflow = await workflow_db.get_workflow_required(session, workflow_id)
         await membership_db.assert_org_access(
-            session, user_id=request.actor_user_id, org_id=workflow.org_id
+            session, user_id=actor_user_id, org_id=workflow.org_id
         )
         version = await workflow_version_db.get_workflow_version_required(
             session, workflow_id, version_id
@@ -286,14 +297,14 @@ async def restore_version_to_draft(
 @router.get("/{workflow_id}/versions", response_model=list[WorkflowVersionResponse])
 async def list_versions(
     workflow_id: str,
-    actor_user_id: str = Query(description="操作者用户 ID"),
+    auth: AuthenticatedUser,
     session: AsyncSession = Depends(get_db_session),
 ) -> list[WorkflowVersionResponse]:
     """列出 Workflow 发布版本。"""
     try:
         workflow = await workflow_db.get_workflow_required(session, workflow_id)
         await membership_db.assert_org_access(
-            session, user_id=actor_user_id, org_id=workflow.org_id
+            session, user_id=auth.user_id, org_id=workflow.org_id
         )
         versions = await workflow_version_db.list_workflow_versions(session, workflow_id)
     except ValueError as exc:

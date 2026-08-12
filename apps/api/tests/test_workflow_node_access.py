@@ -7,7 +7,13 @@ from dataclasses import dataclass
 import pytest
 from fastapi import HTTPException
 
+from app.core.auth import AuthContext
 from apps.api.app.routes import workflow_runs
+
+
+def _auth(user_id: str) -> AuthContext:
+    """路由认证签名改造后，直接调用测试统一构造认证上下文。"""
+    return AuthContext(user_id=user_id, email="", org_id=None, role=None, is_authenticated=True)
 
 
 @dataclass
@@ -48,7 +54,7 @@ async def test_list_node_runs_returns_404_when_run_does_not_exist(
     with pytest.raises(HTTPException) as exc_info:
         await workflow_runs.list_node_runs(
             run_id="missing-run",
-            actor_user_id="user-a",
+            auth=_auth("user-a"),
             session=object(),  # type: ignore[arg-type]
         )
 
@@ -69,7 +75,7 @@ async def test_list_node_runs_returns_403_for_existing_cross_org_run(
     with pytest.raises(HTTPException) as exc_info:
         await workflow_runs.list_node_runs(
             run_id="run-org-a",
-            actor_user_id="user-b",
+            auth=_auth("user-b"),
             session=object(),  # type: ignore[arg-type]
         )
 

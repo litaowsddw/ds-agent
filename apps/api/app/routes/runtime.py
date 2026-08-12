@@ -8,6 +8,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from app.database import get_db_session
 from app.services.db.agent_db import agent_db
 from app.services.db.identity_db import membership_db
+from app.core.auth import AuthenticatedUser
 from packages.runtime.agent_runtime import AgentRuntime
 from packages.runtime.context_engine import ContextEngine
 from packages.runtime.prompt_compiler import PromptContextCompiler
@@ -18,8 +19,8 @@ router = APIRouter()
 
 @router.get("/describe")
 async def describe_runtime(
+    auth: AuthenticatedUser,
     agent_id: str = Query(description="Agent ID"),
-    actor_user_id: str = Query(description="操作用户 ID"),
     session: AsyncSession = Depends(get_db_session),
 ) -> dict[str, object]:
     """返回真实 Agent Runtime 能力描述。"""
@@ -27,7 +28,7 @@ async def describe_runtime(
     try:
         agent = await agent_db.get_agent_required(session, agent_id)
         await membership_db.assert_org_access(
-            session, user_id=actor_user_id, org_id=agent.org_id
+            session, user_id=auth.user_id, org_id=agent.org_id
         )
     except ValueError as exc:
         raise HTTPException(status_code=404, detail=str(exc)) from exc
@@ -44,7 +45,7 @@ async def describe_runtime(
 
 
 @router.post("/context/assemble")
-async def assemble_context(payload: dict[str, object]) -> dict[str, object]:
+async def assemble_context(payload: dict[str, object], auth: AuthenticatedUser) -> dict[str, object]:
     """组装一次调用方显式传入的上下文。"""
 
     token_budget = int(payload.get("token_budget", 4096))
@@ -67,7 +68,7 @@ async def assemble_context(payload: dict[str, object]) -> dict[str, object]:
 
 
 @router.post("/prompt/compile")
-async def compile_prompt(payload: dict[str, object]) -> dict[str, object]:
+async def compile_prompt(payload: dict[str, object], auth: AuthenticatedUser) -> dict[str, object]:
     """编译 Reasonix 风格的 prefix-cache 友好 Prompt。"""
 
     compiler = PromptContextCompiler()

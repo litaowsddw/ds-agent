@@ -727,7 +727,7 @@ interface EvolverState {
   triggerEvolution: (agentId: string, orgId: string) => Promise<void>;
   loadHistory: (agentId: string, orgId: string) => Promise<void>;
   loadPendingApprovals: (orgId: string) => Promise<void>;
-  approveEvolution: (recordId: string, approved: boolean) => Promise<void>;
+  approveEvolution: (recordId: string, approved: boolean, orgId: string) => Promise<void>;
   runAnalysis: (agentId: string, orgId: string) => Promise<void>;
   runFeedbackLoop: (agentId: string, orgId: string) => Promise<void>;
 }
@@ -762,10 +762,10 @@ export const useEvolverStore = create<EvolverState>((set) => ({
     set({ pendingApprovals: result.records || [] });
   },
 
-  approveEvolution: async (recordId, approved) => {
+  approveEvolution: async (recordId, approved, orgId) => {
     await apiRequest("/evolver/approve", {
       method: "POST",
-      body: { record_id: recordId, approved },
+      body: { record_id: recordId, approved, org_id: orgId },
     });
   },
 

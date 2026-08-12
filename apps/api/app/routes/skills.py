@@ -21,6 +21,7 @@ from app.services.db.agent_db import agent_db
 from app.services.db.identity_db import membership_db
 from app.services.db.runtime_db import agent_skill_policy_db, skill_db
 from app.services.external_import import ExternalImportError, fetch_github_skill
+from app.core.auth import AuthenticatedUser, resolve_actor, CurrentUser
 
 router = APIRouter()
 
@@ -28,13 +29,15 @@ router = APIRouter()
 @router.post("", response_model=SkillResponse)
 async def register_skill(
     request: SkillRegisterRequest,
+    auth: CurrentUser,
     session: AsyncSession = Depends(get_db_session),
 ) -> SkillResponse:
     """注册 Skill。"""
 
     try:
+        actor_user_id = resolve_actor(auth, request.actor_user_id)
         await membership_db.assert_org_access(
-            session, user_id=request.actor_user_id, org_id=request.org_id
+            session, user_id=actor_user_id, org_id=request.org_id
         )
         if request.agent_id:
             agent = await agent_db.get_agent_required(session, request.agent_id)
@@ -52,7 +55,7 @@ async def register_skill(
             name=metadata["name"],
             description=metadata["description"],
             content=request.content,
-            created_by=request.actor_user_id,
+            created_by=actor_user_id,
         )
         await session.commit()
     except ValueError as exc:
@@ -65,6 +68,7 @@ async def register_skill(
 @router.post("/import", response_model=SkillResponse)
 async def import_github_skill(
     request: SkillImportRequest,
+    auth: CurrentUser,
     session: AsyncSession = Depends(get_db_session),
 ) -> SkillResponse:
     """Import exactly one public GitHub SKILL.md and authorize the target Agent.
@@ -74,7 +78,8 @@ async def import_github_skill(
     """
 
     try:
-        await membership_db.assert_org_access(session, user_id=request.actor_user_id, org_id=request.org_id)
+        actor_user_id = resolve_actor(auth, request.actor_user_id)
+        await membership_db.assert_org_access(session, user_id=actor_user_id, org_id=request.org_id)
         agent = await agent_db.get_agent_required(session, request.agent_id)
         if agent.org_id != request.org_id:
             raise ValueError("Agent 不属于该组织")
@@ -93,7 +98,7 @@ async def import_github_skill(
             # imported SKILL.md lives in the database and its instructions are
             # still available to progressive disclosure.
             file_path=None,
-            created_by=request.actor_user_id,
+            created_by=actor_user_id,
         )
         await agent_skill_policy_db.set_policy(
             session, agent_id=agent.agent_id, skill_id=skill.skill_id, allowed=True
@@ -108,14 +113,14 @@ async def import_github_skill(
 
 @router.get("", response_model=list[SkillResponse])
 async def list_skills(
+    auth: AuthenticatedUser,
     org_id: str = Query(description="组织 ID"),
-    actor_user_id: str = Query(description="操作用户 ID"),
     session: AsyncSession = Depends(get_db_session),
 ) -> list[SkillResponse]:
     """列出组织内可见 Skill。"""
 
     try:
-        await membership_db.assert_org_access(session, user_id=actor_user_id, org_id=org_id)
+        await membership_db.assert_org_access(session, user_id=auth.user_id, org_id=org_id)
         skills = await skill_db.list_org_skills(session, org_id)
     except ValueError as exc:
         raise HTTPException(status_code=403, detail=str(exc)) from exc
@@ -144,6 +149,7 @@ async def list_skills(
 async def set_agent_skill_policy(
     agent_id: str,
     request: AgentSkillPolicyRequest,
+    auth: CurrentUser,
     session: AsyncSession = Depends(get_db_session),
 ) -> dict[str, object]:
     """设置 Agent Skill 授权策略。"""
@@ -153,7 +159,8 @@ async def set_agent_skill_policy(
         skill = await skill_db.get_by_id_required(session, request.skill_id, "skill_id")
         if skill.org_id != agent.org_id:
             raise ValueError("Skill 不属于该 Agent 的组织")
-        await membership_db.assert_org_access(session, user_id=request.actor_user_id, org_id=agent.org_id)
+        actor_user_id = resolve_actor(auth, request.actor_user_id)
+        await membership_db.assert_org_access(session, user_id=actor_user_id, org_id=agent.org_id)
         policy = await agent_skill_policy_db.set_policy(
             session, agent_id=agent_id, skill_id=request.skill_id, allowed=request.allowed
         )
@@ -168,14 +175,14 @@ async def set_agent_skill_policy(
 @router.get("/agents/{agent_id}/summaries", response_model=list[SkillSummaryResponse])
 async def list_agent_skill_summaries(
     agent_id: str,
-    actor_user_id: str = Query(description="操作用户 ID"),
+    auth: AuthenticatedUser,
     session: AsyncSession = Depends(get_db_session),
 ) -> list[SkillSummaryResponse]:
     """列出 Agent 可用 Skill 摘要。"""
 
     try:
         agent = await agent_db.get_agent_required(session, agent_id)
-        await membership_db.assert_org_access(session, user_id=actor_user_id, org_id=agent.org_id)
+        await membership_db.assert_org_access(session, user_id=auth.user_id, org_id=agent.org_id)
         skills = await skill_db.list_agent_allowed_skills(session, agent_id=agent_id, org_id=agent.org_id)
     except ValueError as exc:
         raise HTTPException(status_code=403, detail=str(exc)) from exc
@@ -195,12 +202,12 @@ async def list_agent_skill_summaries(
 async def get_agent_skill(
     agent_id: str,
     skill_id: str,
-    actor_user_id: str = Query(description="操作用户 ID"),
+    auth: AuthenticatedUser,
     session: AsyncSession = Depends(get_db_session),
 ) -> SkillResponse:
     """读取 Agent 已授权 Skill 的完整元信息。"""
 
-    summaries = await list_agent_skill_summaries(agent_id, actor_user_id, session)
+    summaries = await list_agent_skill_summaries(agent_id, auth, session)
     if not any(summary.skill_id == skill_id for summary in summaries):
         raise HTTPException(status_code=403, detail="Agent 未被授权使用该 Skill")
     skill = await skill_db.get_by_id_required(session, skill_id, "skill_id")

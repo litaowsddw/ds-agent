@@ -15,21 +15,22 @@ from app.schemas.skill_evaluation import (
 from app.services.db.agent_db import agent_db
 from app.services.db.identity_db import membership_db
 from app.services.db.runtime_db import skill_db, skill_evaluation_db
+from app.core.auth import AuthenticatedUser, resolve_actor, CurrentUser
 
 router = APIRouter()
 
 
 @router.get("", response_model=list[SkillEvaluationResponse])
 async def list_skill_evaluations(
+    auth: AuthenticatedUser,
     org_id: str = Query(description="组织 ID"),
-    actor_user_id: str = Query(description="操作者用户 ID"),
     agent_id: str | None = Query(default=None, description="Agent ID"),
     skill_id: str | None = Query(default=None, description="Skill ID"),
     limit: int = Query(default=50, ge=1, le=200),
     session: AsyncSession = Depends(get_db_session),
 ) -> list[SkillEvaluationResponse]:
     try:
-        await membership_db.assert_org_access(session, user_id=actor_user_id, org_id=org_id)
+        await membership_db.assert_org_access(session, user_id=auth.user_id, org_id=org_id)
         evaluations = await skill_evaluation_db.list_org_evaluations(
             session,
             org_id=org_id,
@@ -46,11 +47,12 @@ async def list_skill_evaluations(
 async def evaluate_skill_use(
     evaluation_id: str,
     request: SkillEvaluationUpdateRequest,
+    auth: CurrentUser,
     session: AsyncSession = Depends(get_db_session),
 ) -> SkillEvaluationResponse:
     try:
         evaluation = await skill_evaluation_db.get_by_id_required(session, evaluation_id, "evaluation_id")
-        await membership_db.assert_org_access(session, user_id=request.actor_user_id, org_id=evaluation.org_id)
+        await membership_db.assert_org_access(session, user_id=resolve_actor(auth, request.actor_user_id), org_id=evaluation.org_id)
         evaluation = await skill_evaluation_db.update_evaluation(
             session,
             evaluation_id,
@@ -70,13 +72,14 @@ async def evaluate_skill_use(
 async def suggest_skill_patch(
     evaluation_id: str,
     request: SkillEvaluationSuggestRequest,
+    auth: CurrentUser,
     session: AsyncSession = Depends(get_db_session),
 ) -> SkillEvaluationResponse:
     """Generate a conservative candidate patch from one evaluation record."""
 
     try:
         evaluation = await skill_evaluation_db.get_by_id_required(session, evaluation_id, "evaluation_id")
-        await membership_db.assert_org_access(session, user_id=request.actor_user_id, org_id=evaluation.org_id)
+        await membership_db.assert_org_access(session, user_id=resolve_actor(auth, request.actor_user_id), org_id=evaluation.org_id)
         skill = await skill_db.get_by_id_required(session, evaluation.skill_id, "skill_id")
         suggestion = _build_candidate_patch(
             skill_name=skill.name,
@@ -102,11 +105,12 @@ async def suggest_skill_patch(
 async def decide_skill_patch(
     evaluation_id: str,
     request: SkillEvaluationDecisionRequest,
+    auth: CurrentUser,
     session: AsyncSession = Depends(get_db_session),
 ) -> SkillEvaluationResponse:
     try:
         evaluation = await skill_evaluation_db.get_by_id_required(session, evaluation_id, "evaluation_id")
-        await membership_db.assert_org_access(session, user_id=request.actor_user_id, org_id=evaluation.org_id)
+        await membership_db.assert_org_access(session, user_id=resolve_actor(auth, request.actor_user_id), org_id=evaluation.org_id)
         evaluation = await skill_evaluation_db.update_evaluation(
             session,
             evaluation_id,

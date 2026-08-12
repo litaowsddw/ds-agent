@@ -15,6 +15,7 @@ from app.schemas.background_agent import (
 )
 from app.services.db.identity_db import membership_db
 from app.services.db.runtime_db import background_agent_db
+from app.core.auth import AuthenticatedUser, resolve_actor, CurrentUser
 
 router = APIRouter()
 
@@ -22,12 +23,14 @@ router = APIRouter()
 @router.post("", response_model=BackgroundAgentResponse)
 async def register_background_agent(
     request: BackgroundAgentRegisterRequest,
+    auth: CurrentUser,
     session: AsyncSession = Depends(get_db_session),
 ) -> BackgroundAgentResponse:
     """注册后台 Agent 配置。"""
 
     try:
-        await membership_db.assert_org_access(session, user_id=request.actor_user_id, org_id=request.org_id)
+        actor_user_id = resolve_actor(auth, request.actor_user_id)
+        await membership_db.assert_org_access(session, user_id=actor_user_id, org_id=request.org_id)
         config = await background_agent_db.create_config(
             session,
             config_id=new_id("bga"),
@@ -35,7 +38,7 @@ async def register_background_agent(
             agent_type=request.agent_type,
             interval_seconds=request.interval_seconds,
             enabled=True,
-            created_by=request.actor_user_id,
+            created_by=actor_user_id,
         )
         await session.commit()
     except ValueError as exc:
@@ -46,14 +49,14 @@ async def register_background_agent(
 
 @router.get("", response_model=list[BackgroundAgentResponse])
 async def list_background_agents(
+    auth: AuthenticatedUser,
     org_id: str = Query(description="组织 ID"),
-    actor_user_id: str = Query(description="操作用户 ID"),
     session: AsyncSession = Depends(get_db_session),
 ) -> list[BackgroundAgentResponse]:
     """列出组织内后台 Agent 配置。"""
 
     try:
-        await membership_db.assert_org_access(session, user_id=actor_user_id, org_id=org_id)
+        await membership_db.assert_org_access(session, user_id=auth.user_id, org_id=org_id)
         configs = await background_agent_db.list_org_configs(session, org_id)
     except ValueError as exc:
         raise HTTPException(status_code=403, detail=str(exc)) from exc
@@ -64,13 +67,14 @@ async def list_background_agents(
 async def trigger_background_agent(
     config_id: str,
     request: BackgroundAgentTriggerRequest,
+    auth: CurrentUser,
     session: AsyncSession = Depends(get_db_session),
 ) -> BackgroundAgentResponse:
     """手动触发后台 Agent。"""
 
     try:
         config = await background_agent_db.get_by_id_required(session, config_id, "config_id")
-        await membership_db.assert_org_access(session, user_id=request.actor_user_id, org_id=config.org_id)
+        await membership_db.assert_org_access(session, user_id=resolve_actor(auth, request.actor_user_id), org_id=config.org_id)
         config.status = "queued"
         await session.commit()
     except ValueError as exc:
@@ -83,13 +87,14 @@ async def trigger_background_agent(
 async def disable_background_agent(
     config_id: str,
     request: BackgroundAgentTriggerRequest,
+    auth: CurrentUser,
     session: AsyncSession = Depends(get_db_session),
 ) -> BackgroundAgentResponse:
     """禁用后台 Agent。"""
 
     try:
         config = await background_agent_db.get_by_id_required(session, config_id, "config_id")
-        await membership_db.assert_org_access(session, user_id=request.actor_user_id, org_id=config.org_id)
+        await membership_db.assert_org_access(session, user_id=resolve_actor(auth, request.actor_user_id), org_id=config.org_id)
         config.enabled = False
         config.status = "disabled"
         await session.commit()

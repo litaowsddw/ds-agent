@@ -131,7 +131,12 @@ class OpenAICompatibleProvider:
             provider=self.provider_key,
             model=request.model,
             usage=usage,
-            raw={"id": body.get("id"), "object": body.get("object")},
+            raw={
+                "id": body.get("id"),
+                "object": body.get("object"),
+                # 保留 choices 供工具调用解析（ReAct 循环依赖 tool_calls）
+                "choices": body.get("choices", []),
+            },
         )
 
     def stream_generate(self, request: LLMCallRequest):

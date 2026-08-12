@@ -192,8 +192,8 @@ class GatewayChatModel(BaseChatModel):
             logger.error(f"Gateway 调用失败: {exc}")
             raise
 
-        # 尝试解析 tool_calls
-        tool_calls = self._extract_tool_calls(response.raw_response if hasattr(response, "raw_response") else {})
+        # 尝试解析 tool_calls（LLMCallResponse 的字段名是 raw，不是 raw_response）
+        tool_calls = self._extract_tool_calls(getattr(response, "raw", None) or {})
 
         ai_message = AIMessage(
             content=response.text,

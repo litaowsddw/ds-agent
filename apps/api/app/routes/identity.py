@@ -33,7 +33,7 @@ from app.services.db.identity_db import (
 )
 from app.domain.identity import AuditAction, new_id
 from app.core.security import hash_password, verify_password, create_access_token
-from app.core.auth import CurrentUser, AuthenticatedUser, AuthContext, require_auth
+from app.core.auth import CurrentUser, AuthenticatedUser, AuthContext, require_auth, resolve_actor
 
 router = APIRouter()
 
@@ -182,9 +182,12 @@ async def create_organization(
 @router.get("/users/{user_id}/organizations", response_model=list[OrganizationResponse])
 async def list_user_organizations(
     user_id: str,
+    auth: AuthenticatedUser,
     session: AsyncSession = Depends(get_db_session),
 ) -> list[OrganizationResponse]:
-    """列出用户所属组织。"""
+    """列出用户所属组织（仅允许查询本人）。"""
+    if user_id != auth.user_id:
+        raise HTTPException(status_code=403, detail="只能查询本人的组织列表")
     orgs = await org_db.list_user_orgs(session, user_id)
     return [_to_organization_response(org) for org in orgs]
 
@@ -193,25 +196,27 @@ async def list_user_organizations(
 async def create_team(
     org_id: str,
     request: TeamCreateRequest,
+    auth: CurrentUser,
     session: AsyncSession = Depends(get_db_session),
 ) -> TeamResponse:
     """在组织内创建群组。"""
     try:
+        actor_user_id = resolve_actor(auth, request.actor_user_id)
         await membership_db.assert_org_access(
-            session, user_id=request.actor_user_id, org_id=org_id, required_role="admin"
+            session, user_id=actor_user_id, org_id=org_id, required_role="admin"
         )
         team = await team_db.create_team(
             session,
             team_id=new_id("team"),
             org_id=org_id,
             name=request.name,
-            created_by=request.actor_user_id,
+            created_by=actor_user_id,
         )
         await audit_log_db.append_log(
             session,
             log_id=new_id("aud"),
             org_id=org_id,
-            actor_user_id=request.actor_user_id,
+            actor_user_id=actor_user_id,
             action=AuditAction.TEAM_CREATED,
             resource_type="team",
             resource_id=team.team_id,
@@ -228,13 +233,13 @@ async def create_team(
 @router.get("/organizations/{org_id}/teams", response_model=list[TeamResponse])
 async def list_teams(
     org_id: str,
-    actor_user_id: str = Query(description="操作者用户 ID"),
+    auth: AuthenticatedUser,
     session: AsyncSession = Depends(get_db_session),
 ) -> list[TeamResponse]:
     """列出组织内群组。"""
     try:
         await membership_db.assert_org_access(
-            session, user_id=actor_user_id, org_id=org_id
+            session, user_id=auth.user_id, org_id=org_id
         )
         teams = await team_db.list_org_teams(session, org_id)
     except ValueError as exc:
@@ -247,12 +252,14 @@ async def list_teams(
 async def add_member(
     org_id: str,
     request: AddMemberRequest,
+    auth: CurrentUser,
     session: AsyncSession = Depends(get_db_session),
 ) -> MembershipResponse:
     """向组织添加成员。"""
     try:
+        actor_user_id = resolve_actor(auth, request.actor_user_id)
         await membership_db.assert_org_access(
-            session, user_id=request.actor_user_id, org_id=org_id, required_role="admin"
+            session, user_id=actor_user_id, org_id=org_id, required_role="admin"
         )
         membership = await membership_db.add_member(
             session,
@@ -266,7 +273,7 @@ async def add_member(
             session,
             log_id=new_id("aud"),
             org_id=org_id,
-            actor_user_id=request.actor_user_id,
+            actor_user_id=actor_user_id,
             action=AuditAction.MEMBER_JOINED,
             resource_type="membership",
             resource_id=membership.membership_id,
@@ -287,13 +294,13 @@ async def add_member(
 @router.get("/organizations/{org_id}/audit-logs", response_model=list[AuditLogResponse])
 async def list_audit_logs(
     org_id: str,
-    actor_user_id: str = Query(description="操作者用户 ID"),
+    auth: AuthenticatedUser,
     session: AsyncSession = Depends(get_db_session),
 ) -> list[AuditLogResponse]:
     """列出组织审计日志。"""
     try:
         await membership_db.assert_org_access(
-            session, user_id=actor_user_id, org_id=org_id
+            session, user_id=auth.user_id, org_id=org_id
         )
         logs, _ = await audit_log_db.list_org_logs(session, org_id)
     except ValueError as exc:

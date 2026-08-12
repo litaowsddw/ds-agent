@@ -120,6 +120,24 @@ def require_auth(auth: AuthContext) -> AuthContext:
     return auth
 
 
+def resolve_actor(auth: AuthContext, legacy_actor: str | None = None) -> str:
+    """计算请求的有效操作者。
+
+    优先级（与安全边界一致）：
+    1. JWT 身份（生产 STRICT_JWT 模式下永远走这里）
+    2. 开发降级期历史契约里的 body/query actor_user_id
+    两者皆空时拒绝为 401。生产环境因 get_auth_context 强制 JWT，
+    legacy 参数永远不会被采纳；开发/测试环境保留旧契约可用性。
+    """
+    actor = auth.user_id or (legacy_actor or "").strip()
+    if not actor:
+        raise HTTPException(
+            status_code=status.HTTP_401_UNAUTHORIZED,
+            detail="缺少认证信息，请提供 Bearer Token",
+        )
+    return actor
+
+
 def require_org(auth: AuthContext, org_id: str) -> AuthContext:
     """要求用户属于指定组织，否则 403。"""
     require_auth(auth)

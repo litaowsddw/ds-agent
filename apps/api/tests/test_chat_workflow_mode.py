@@ -7,7 +7,7 @@ from fastapi.testclient import TestClient
 
 from apps.api.app.gateway.llm import LLMCallRequest, LLMCallResponse, LLMStreamChunk
 from apps.api.app.main import app
-from apps.api.app.routes import workflow_runs as workflow_runs_route
+from apps.api.app.services import workflow_execution
 
 
 class _ChunkedWorkflowProvider:
@@ -213,7 +213,9 @@ def test_chat_workflow_mode_executes_published_workflow_and_saves_session(client
     assert body["workflow_run_id"]
     assert "稳定输入" in body["response"]
 
-    messages = client.get(f"/chat/sessions/{body['session_id']}/messages").json()["messages"]
+    messages = client.get(
+        f"/chat/sessions/{body['session_id']}/messages", headers=headers
+    ).json()["messages"]
     assert [message["role"] for message in messages][-2:] == ["user", "assistant"]
     assistant_message = messages[-1]
     assert assistant_message["meta_info"]["execution_mode"] == "workflow"
@@ -295,7 +297,7 @@ def test_streaming_workflow_emits_llm_usage_before_run_finished(
     owner_user_id, org_id, agent_id, headers = _create_owner_org_agent(client, suffix)
     _create_model_provider(client, owner_user_id, org_id, headers)
     workflow_id = _create_published_llm_workflow(client, owner_user_id, agent_id)
-    monkeypatch.setattr(workflow_runs_route, "OpenAICompatibleProvider", _ChunkedWorkflowProvider)
+    monkeypatch.setattr(workflow_execution, "OpenAICompatibleProvider", _ChunkedWorkflowProvider)
 
     with client.stream(
         "POST",
@@ -333,7 +335,7 @@ def test_streaming_workflow_reports_unavailable_usage_when_provider_omits_usage(
     _create_model_provider(client, owner_user_id, org_id, headers)
     workflow_id = _create_published_llm_workflow(client, owner_user_id, agent_id)
     monkeypatch.setattr(
-        workflow_runs_route, "OpenAICompatibleProvider", _UnavailableUsageWorkflowProvider
+        workflow_execution, "OpenAICompatibleProvider", _UnavailableUsageWorkflowProvider
     )
 
     with client.stream(
@@ -396,7 +398,7 @@ def test_normal_and_stream_workflow_mode_emit_matching_metadata(client: TestClie
 
 def test_chat_history_preserves_empty_metadata_for_autonomous_messages(client: TestClient) -> None:
     suffix = _suffix("chat-auto-meta")
-    owner_user_id, _org_id, agent_id, _headers = _create_owner_org_agent(client, suffix)
+    owner_user_id, _org_id, agent_id, headers = _create_owner_org_agent(client, suffix)
     session_id = client.post(
         "/sessions",
         json={"actor_user_id": owner_user_id, "agent_id": agent_id},
@@ -408,7 +410,7 @@ def test_chat_history_preserves_empty_metadata_for_autonomous_messages(client: T
     )
 
     assert append_response.status_code == 200
-    messages_response = client.get(f"/chat/sessions/{session_id}/messages")
+    messages_response = client.get(f"/chat/sessions/{session_id}/messages", headers=headers)
     assert messages_response.status_code == 200
     message = messages_response.json()["messages"][0]
     assert message["role"] == "assistant"

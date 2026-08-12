@@ -7,6 +7,7 @@ from fastapi import APIRouter, File, Form, HTTPException, Query, UploadFile, Dep
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.database import get_db_session
+from app.core.auth import AuthenticatedUser, resolve_actor, CurrentUser
 from app.models.workflow import KnowledgeBaseModel, DocumentModel, ChunkModel
 from app.schemas.knowledge import (
     ChunkResponse,
@@ -57,12 +58,14 @@ def _get_vector_index() -> VectorIndex:
 @router.post("", response_model=KnowledgeBaseResponse)
 async def create_knowledge_base(
     request: KnowledgeBaseCreateRequest,
+    auth: CurrentUser,
     session: AsyncSession = Depends(get_db_session),
 ) -> KnowledgeBaseResponse:
     """创建知识库。"""
     try:
+        actor_user_id = resolve_actor(auth, request.actor_user_id)
         await membership_db.assert_org_access(
-            session, user_id=request.actor_user_id, org_id=request.org_id
+            session, user_id=actor_user_id, org_id=request.org_id
         )
         kb = await knowledge_base_db.create_kb(
             session,
@@ -71,7 +74,7 @@ async def create_knowledge_base(
             name=request.name,
             description=request.description,
             embedding_model=_get_embedding_provider().model_name,
-            created_by=request.actor_user_id,
+            created_by=actor_user_id,
         )
         await session.commit()
     except ValueError as exc:
@@ -82,14 +85,14 @@ async def create_knowledge_base(
 
 @router.get("", response_model=list[KnowledgeBaseResponse])
 async def list_knowledge_bases(
+    auth: AuthenticatedUser,
     org_id: str = Query(description="组织 ID"),
-    actor_user_id: str = Query(description="操作者用户 ID"),
     session: AsyncSession = Depends(get_db_session),
 ) -> list[KnowledgeBaseResponse]:
     """列出组织内的知识库。"""
     try:
         await membership_db.assert_org_access(
-            session, user_id=actor_user_id, org_id=org_id
+            session, user_id=auth.user_id, org_id=org_id
         )
         kbs, _ = await knowledge_base_db.list_org_kbs(session, org_id)
     except ValueError as exc:
@@ -101,13 +104,15 @@ async def list_knowledge_bases(
 async def upload_document(
     kb_id: str,
     request: DocumentUploadRequest,
+    auth: CurrentUser,
     session: AsyncSession = Depends(get_db_session),
 ) -> DocumentResponse:
     """上传文档并自动切分索引。"""
     try:
+        actor_user_id = resolve_actor(auth, request.actor_user_id)
         kb = await knowledge_base_db.get_by_id_required(session, kb_id, "kb_id")
         await membership_db.assert_org_access(
-            session, user_id=request.actor_user_id, org_id=kb.org_id
+            session, user_id=actor_user_id, org_id=kb.org_id
         )
 
         doc = await document_db.create_document(
@@ -116,7 +121,7 @@ async def upload_document(
             kb_id=kb_id,
             title=request.title,
             content=request.content,
-            created_by=request.actor_user_id,
+            created_by=actor_user_id,
             chunk_size=request.chunk_size,
             chunk_overlap=request.chunk_overlap,
         )
@@ -139,7 +144,8 @@ async def upload_document(
 @router.post("/{kb_id}/documents/upload", response_model=DocumentResponse)
 async def upload_document_file(
     kb_id: str,
-    actor_user_id: str = Form(description="操作用户 ID"),
+    auth: CurrentUser,
+    actor_user_id: str = Form(default="", description="操作用户 ID（开发降级）"),
     chunk_size: int = Form(default=800, description="切片长度"),
     chunk_overlap: int = Form(default=100, description="切片重叠长度"),
     file: UploadFile = File(description="待上传知识库文件"),
@@ -150,9 +156,10 @@ async def upload_document_file(
         payload = await file.read()
         parsed = document_parser.parse(filename=file.filename or "document.txt", payload=payload)
 
+        resolved_actor = resolve_actor(auth, actor_user_id)
         kb = await knowledge_base_db.get_by_id_required(session, kb_id, "kb_id")
         await membership_db.assert_org_access(
-            session, user_id=actor_user_id, org_id=kb.org_id
+            session, user_id=resolved_actor, org_id=kb.org_id
         )
 
         doc = await document_db.create_document(
@@ -161,7 +168,7 @@ async def upload_document_file(
             kb_id=kb_id,
             title=parsed.title,
             content=parsed.content,
-            created_by=actor_user_id,
+            created_by=resolved_actor,
             chunk_size=chunk_size,
             chunk_overlap=chunk_overlap,
         )
@@ -177,14 +184,14 @@ async def upload_document_file(
 @router.get("/{kb_id}/documents", response_model=list[DocumentResponse])
 async def list_documents(
     kb_id: str,
-    actor_user_id: str = Query(description="操作者用户 ID"),
+    auth: AuthenticatedUser,
     session: AsyncSession = Depends(get_db_session),
 ) -> list[DocumentResponse]:
     """列出知识库内的文档。"""
     try:
         kb = await knowledge_base_db.get_by_id_required(session, kb_id, "kb_id")
         await membership_db.assert_org_access(
-            session, user_id=actor_user_id, org_id=kb.org_id
+            session, user_id=auth.user_id, org_id=kb.org_id
         )
         docs, _ = await document_db.list_kb_documents(session, kb_id)
     except ValueError as exc:
@@ -196,13 +203,15 @@ async def list_documents(
 async def search_knowledge_base(
     kb_id: str,
     request: SearchRequest,
+    auth: CurrentUser,
     session: AsyncSession = Depends(get_db_session),
 ) -> list[ChunkResponse]:
     """检索知识库（向量 + 关键词混合检索）。"""
     try:
+        actor_user_id = resolve_actor(auth, request.actor_user_id)
         kb = await knowledge_base_db.get_by_id_required(session, kb_id, "kb_id")
         await membership_db.assert_org_access(
-            session, user_id=request.actor_user_id, org_id=kb.org_id
+            session, user_id=actor_user_id, org_id=kb.org_id
         )
 
         # 尝试向量检索

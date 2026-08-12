@@ -31,11 +31,12 @@ def client(monkeypatch: pytest.MonkeyPatch) -> TestClient:
             )
 
     from apps.api.app.routes import workflow_runs
+    from apps.api.app.services import workflow_execution
 
     async def fake_submit_async_run(*args, **kwargs) -> None:
         return None
 
-    monkeypatch.setattr(workflow_runs, "OpenAICompatibleProvider", FakeOpenAICompatibleProvider)
+    monkeypatch.setattr(workflow_execution, "OpenAICompatibleProvider", FakeOpenAICompatibleProvider)
     monkeypatch.setattr(workflow_runs, "_submit_async_run", fake_submit_async_run)
     with TestClient(app) as test_client:
         yield test_client
