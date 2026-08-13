@@ -4,7 +4,7 @@ WORKDIR /app
 
 COPY apps/worker/requirements.txt /app/apps/worker/requirements.txt
 COPY apps/api/requirements.txt /app/apps/api/requirements.txt
-RUN pip install --no-cache-dir -r /app/apps/worker/requirements.txt -r /app/apps/api/requirements.txt
+RUN pip install --no-cache-dir -i https://pypi.tuna.tsinghua.edu.cn/simple -r /app/apps/worker/requirements.txt -r /app/apps/api/requirements.txt
 
 COPY apps /app/apps
 COPY packages /app/packages
