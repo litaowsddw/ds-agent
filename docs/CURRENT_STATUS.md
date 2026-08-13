@@ -1,5 +1,22 @@
 # 当前开发状态
 
+## v0.7 模型选择器 + Supervisor 工具契约 + Workflow 审批续跑（2026-08-13）
+
+- **模型选择器（后端）**：`ChatRequest` 增加 `model_provider/model_name` override；
+  `build_chat_llm_stack` 与 `_build_chat_llm_stack` 支持本轮临时替换模型（供应商必须
+  在该组织已配置且启用）；`/chat/` 与 `/chat/stream` 全路径透传。
+- **模型选择器（前端）**：ChatPanel 增加模型下拉（按 Agent 记忆到 localStorage），
+  sendMessage/streamChat 透传 `model_provider/model_name`。
+- **Supervisor 工具契约增强**：`system_prompt.py` 新增 `SUPERVISOR_TOOL_CONTRACT`
+  （只读工具集 + 最小能力调用 + 结果作为证据报告），注入 Supervisor 的 plan/reflect
+  系统提示词。
+- **默认系统工具扩充（安全读集）**：新增 `knowledge_list` 工具（列举组织知识库元数据，
+  不返回文档内容），`build_supervisor_tools` 现装配 knowledge_list / knowledge_search /
+  memory_recall / skill_search / workspace_read；高风险 MCP 仍走 Workflow 审批路径。
+- **Workflow 审批后续跑**：新增 `POST /workflow-runs/{run_id}/resume`。审批通过后的
+  `awaiting_manual_resume` 运行可续跑：已成功节点输出被预置为 `resume_state` 并跳过重复
+  执行，仅执行暂停点之后的下游节点并落盘，最终收敛为 `succeeded`/`failed`。
+
 ## v0.6 管线收敛与语义检索（2026-08-12）
 
 - **Chat 双路径收敛**：`/chat/` 不再有独立的会话/网关/执行栈，改为流通

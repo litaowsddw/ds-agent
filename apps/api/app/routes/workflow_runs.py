@@ -313,6 +313,38 @@ async def decide_run_approval(
     return _to_approval_response(approval)
 
 
+@router.post("/{run_id}/resume", response_model=WorkflowRunResponse)
+async def resume_run(
+    run_id: str,
+    auth: AuthenticatedUser,
+    session: AsyncSession = Depends(get_db_session),
+) -> WorkflowRunResponse:
+    """审批通过后从暂停点续跑剩余 DAG 节点并落盘。"""
+
+    try:
+        _require_server_authenticated_identity(auth)
+        run = await workflow_run_db.get_run_required(session, run_id)
+    except ValueError as exc:
+        raise HTTPException(status_code=404, detail="Workflow run not found") from exc
+    try:
+        await membership_db.assert_org_access(
+            session, user_id=auth.user_id, org_id=run.org_id, required_role="admin"
+        )
+    except ValueError as exc:
+        raise HTTPException(status_code=403, detail="Forbidden") from exc
+    try:
+        run = await workflow_execution_service.resume_existing_run(
+            session,
+            run=run,
+            actor_user_id=auth.user_id,
+        )
+    except ValueError as exc:
+        await session.rollback()
+        raise HTTPException(status_code=409, detail=str(exc)) from exc
+    await session.commit()
+    return _to_run_response(run)
+
+
 async def _submit_async_run(
     run: WorkflowRunModel,
 ) -> None:

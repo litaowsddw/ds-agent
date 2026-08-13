@@ -80,6 +80,17 @@ missing dependency blocks the user's requested result. Return strict JSON
 only."""
 
 
+SUPERVISOR_TOOL_CONTRACT = """[Supervisor tool contract]
+The runtime exposes a read-only tool set (knowledge_list, knowledge_search,
+memory_recall, skill_search, workspace_read). Use the smallest sufficient
+tool: list before searching, search before recalling, and read workspace
+identity only when it is material. Never call a state-changing or external
+action outside this set; high-risk MCP tools require the Workflow approval
+path and are not directly callable here. Report tool results as evidence,
+including the source (kb_id / chunk_id / skill_id) when the runtime returned
+it, and never invent a tool call or result."""
+
+
 def build_agent_system_prompt(
     *,
     agent_name: str,

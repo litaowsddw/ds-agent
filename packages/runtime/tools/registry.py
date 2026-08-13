@@ -11,6 +11,7 @@ from packages.runtime.tools.memory_tool import MemoryRecallTool
 from packages.runtime.tools.rag_tool import RAGSearchTool
 from packages.runtime.tools.skill_search_tool import SkillSearchTool
 from packages.runtime.tools.skill_tool import SkillCreatorTool
+from packages.runtime.tools.knowledge_list_tool import KnowledgeListTool
 
 
 def build_system_tools(
@@ -21,6 +22,7 @@ def build_system_tools(
     memory_accessor: Any = None,
     skill_search_accessor: Any = None,
     skill_creator_accessor: Any = None,
+    knowledge_list_accessor: Any = None,
     mcp_accessor: Any = None,
     available_mcp_tools: list[dict[str, Any]] | None = None,
 ) -> list[BaseTool]:
@@ -32,6 +34,8 @@ def build_system_tools(
     """
 
     tools: list[BaseTool] = []
+    if knowledge_list_accessor is not None:
+        tools.append(KnowledgeListTool(org_id=org_id, agent_id=agent_id, knowledge_list_accessor=knowledge_list_accessor))
     if rag_executor is not None:
         tools.append(RAGSearchTool(org_id=org_id, agent_id=agent_id, rag_executor=rag_executor))
     if memory_accessor is not None:

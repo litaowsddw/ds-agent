@@ -218,19 +218,32 @@ class WorkflowExecutor:
             self._budget_guard.reset(guard_token)
 
     async def execute_async(
-        self, definition: dict[str, Any], input_data: dict[str, Any]
+        self,
+        definition: dict[str, Any],
+        input_data: dict[str, Any],
+        *,
+        resume_state: dict[str, dict[str, Any]] | None = None,
+        completed_node_ids: set[str] | None = None,
     ) -> WorkflowExecutionResult:
         """异步执行工作流。
 
         真实接口会在这里注入数据库、模型供应商、知识库和 MCP 授权能力。
+
+        ``resume_state`` / ``completed_node_ids`` 用于审批后 DAG 续跑：把
+        已成功节点的输出预置进 ``context_by_node``，并跳过这些节点的重复执行，
+        从而只运行暂停点之后的下游节点而不会重放成功过的外部动作。
         """
 
         guard_token = self._budget_guard.set(
             WorkflowBudgetGuard(execution_limits_from_definition(definition))
         )
         try:
-            graph = self._compile_graph(async_mode=True, definition=definition)
-            final_state = await graph.ainvoke(self._initial_state(input_data))
+            graph = self._compile_graph(
+                async_mode=True,
+                definition=definition,
+                completed_node_ids=completed_node_ids or set(),
+            )
+            final_state = await graph.ainvoke(self._initial_state(input_data, resume_state=resume_state))
             return self._to_result(final_state)
         except Exception as exc:
             return WorkflowExecutionResult(
@@ -242,7 +255,12 @@ class WorkflowExecutor:
         finally:
             self._budget_guard.reset(guard_token)
 
-    def _compile_graph(self, definition: dict[str, Any] | None = None, async_mode: bool = False):
+    def _compile_graph(
+        self,
+        definition: dict[str, Any] | None = None,
+        async_mode: bool = False,
+        completed_node_ids: set[str] | None = None,
+    ):
         """把 Workflow DSL 编译成 LangGraph 可执行图。"""
 
         definition = definition or {}
@@ -252,6 +270,7 @@ class WorkflowExecutor:
 
         graph = StateGraph(WorkflowGraphState)
         definition_edges = [dict(edge) for edge in definition.get("edges", [])]
+        completed_node_ids = completed_node_ids or set()
         for node_id, node in nodes_by_id.items():
             node_builder = self._build_async_langgraph_node if async_mode else self._build_sync_langgraph_node
             graph.add_node(
@@ -260,6 +279,7 @@ class WorkflowExecutor:
                     node_id=node_id,
                     node=dict(node),
                     definition_edges=definition_edges,
+                    skip=node_id in completed_node_ids,
                 ),
             )
 
@@ -310,6 +330,7 @@ class WorkflowExecutor:
         node_id: str,
         node: dict[str, Any],
         definition_edges: list[dict[str, Any]],
+        skip: bool = False,
     ):
         """构建同步 LangGraph 节点函数。"""
 
@@ -317,7 +338,7 @@ class WorkflowExecutor:
         config = dict(node.get("config", {}))
 
         def run_node(state: WorkflowGraphState) -> dict[str, Any]:
-            if state.get("failed") or state.get("waiting_approval"):
+            if skip or state.get("failed") or state.get("waiting_approval"):
                 return {}
             return self._run_sync_node(
                 state=state,
@@ -334,6 +355,7 @@ class WorkflowExecutor:
         node_id: str,
         node: dict[str, Any],
         definition_edges: list[dict[str, Any]],
+        skip: bool = False,
     ):
         """构建异步 LangGraph 节点函数。"""
 
@@ -341,7 +363,7 @@ class WorkflowExecutor:
         config = dict(node.get("config", {}))
 
         async def run_node(state: WorkflowGraphState) -> dict[str, Any]:
-            if state.get("failed") or state.get("waiting_approval"):
+            if skip or state.get("failed") or state.get("waiting_approval"):
                 return {}
             return await self._run_async_node(
                 state=state,
@@ -757,12 +779,20 @@ class WorkflowExecutor:
             return {}
         return executed_nodes[-1].output_data
 
-    def _initial_state(self, input_data: dict[str, Any]) -> WorkflowGraphState:
-        """创建 LangGraph 初始状态。"""
+    def _initial_state(
+        self,
+        input_data: dict[str, Any],
+        resume_state: dict[str, dict[str, Any]] | None = None,
+    ) -> WorkflowGraphState:
+        """创建 LangGraph 初始状态。
+
+        ``resume_state`` 预置已成功节点的输出到 ``context_by_node``，
+        供审批后 DAG 续跑时把上游结果原样传给下游节点。
+        """
 
         return {
             "workflow_input": input_data,
-            "context_by_node": {},
+            "context_by_node": {**(resume_state or {})},
             "node_runs": [],
             "failed": False,
             "error_message": "",

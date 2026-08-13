@@ -432,6 +432,81 @@ def test_workflow_high_risk_approval_executes_exactly_one_new_tool_step(monkeypa
         assert tool_nodes[-1]["output_data"]["arguments"]["secret"] == "[redacted]"
 
 
+def test_workflow_high_risk_approval_resume_continues_downstream_dag(monkeypatch) -> None:
+    """审批通过后可续跑：跳过已成功节点，仅执行并落盘下游 end 节点。"""
+
+    def fake_tool_call(url, headers, *, tool_name, arguments):
+        return {"content": [{"type": "text", "text": "approved result"}]}
+
+    monkeypatch.setattr(workflow_execution_module, "invoke_streamable_http_tool", fake_tool_call)
+
+    with TestClient(app) as client:
+        actor_user_id, org_id, agent_id, owner_headers = _create_owner_org_agent(
+            client, _suffix("wf-mcp-approval-resume")
+        )
+        tool_id = _bind_mcp_tool(
+            client,
+            monkeypatch=monkeypatch,
+            actor_user_id=actor_user_id,
+            org_id=org_id,
+            agent_id=agent_id,
+            risk_level="high",
+        )
+        version_id = _publish_tool_workflow(
+            client,
+            actor_user_id=actor_user_id,
+            agent_id=agent_id,
+            tool_id=tool_id,
+            config={"arguments": {"id": "{{input.id}}"}},
+        )
+        created = client.post(
+            "/workflow-runs",
+            json={"version_id": version_id, "input_data": {"id": "record-7"}},
+            headers=owner_headers,
+        )
+        run = created.json()
+        assert run["status"] == "waiting_approval"
+
+        approval_id = client.get(
+            f"/workflow-runs/{run['run_id']}/approvals", headers=owner_headers
+        ).json()[0]["approval_id"]
+        decision = client.post(
+            f"/workflow-runs/{run['run_id']}/approvals/{approval_id}/decision",
+            json={"decision": "approve"},
+            headers=owner_headers,
+        )
+        assert decision.status_code == 200
+        updated = client.get(
+            f"/workflow-runs/{run['run_id']}",
+            params={"actor_user_id": actor_user_id},
+        )
+        assert updated.json()["status"] == "awaiting_manual_resume"
+
+        resumed = client.post(
+            f"/workflow-runs/{run['run_id']}/resume",
+            headers=owner_headers,
+        )
+        assert resumed.status_code == 200, resumed.text
+        assert resumed.json()["status"] == "succeeded"
+
+        nodes = client.get(
+            f"/workflow-runs/{run['run_id']}/nodes",
+            params={"actor_user_id": actor_user_id},
+        ).json()
+        # 已成功节点不重复执行：tool 仍是 waiting_approval + succeeded 两条，
+        # 续跑只新增 end 节点。
+        assert [node["node_id"] for node in nodes] == ["start", "tool", "tool", "end"]
+        assert nodes[-1]["node_id"] == "end"
+        assert nodes[-1]["status"] == "succeeded"
+
+        # resume 只对 awaiting_manual_resume 生效，重复 resume 应被拒绝。
+        repeated = client.post(
+            f"/workflow-runs/{run['run_id']}/resume",
+            headers=owner_headers,
+        )
+        assert repeated.status_code == 409
+
+
 def test_workflow_tool_rejects_arguments_that_violate_imported_schema(monkeypatch) -> None:
     def must_not_call(*_args, **_kwargs):
         raise AssertionError("invalid Tool arguments must not reach the MCP server")

@@ -28,6 +28,7 @@ from packages.runtime.system_prompt import (
     PLATFORM_AGENT_CONTRACT,
     SUPERVISOR_PLANNING_CONTRACT,
     SUPERVISOR_REFLECTION_CONTRACT,
+    SUPERVISOR_TOOL_CONTRACT,
 )
 
 logger = logging.getLogger(__name__)
@@ -78,6 +79,8 @@ PLAN_SYSTEM_PROMPT = """{platform}
 
 {planning}
 
+{tool_contract}
+
 Available subagent kinds:
 - USER_SUB: general assistance
 - SYSTEM_SKILL: skill discovery or lifecycle
@@ -91,11 +94,17 @@ Return exactly this JSON object:
   "subtasks": [
     {{"task": "task", "subagent_kind": "USER_SUB", "execution_order": 0, "depends_on": []}}
   ]
-}}""".format(platform=PLATFORM_AGENT_CONTRACT, planning=SUPERVISOR_PLANNING_CONTRACT)
+}}""".format(
+    platform=PLATFORM_AGENT_CONTRACT,
+    planning=SUPERVISOR_PLANNING_CONTRACT,
+    tool_contract=SUPERVISOR_TOOL_CONTRACT,
+)
 
 REFLECT_SYSTEM_PROMPT = """{platform}
 
 {reflection}
+
+{tool_contract}
 
 Return exactly this JSON object:
 {{
@@ -103,7 +112,11 @@ Return exactly this JSON object:
   "reasoning": "brief evidence-based assessment",
   "follow_up_tasks": [],
   "final_response": "final user-facing answer when satisfied"
-}}""".format(platform=PLATFORM_AGENT_CONTRACT, reflection=SUPERVISOR_REFLECTION_CONTRACT)
+}}""".format(
+    platform=PLATFORM_AGENT_CONTRACT,
+    reflection=SUPERVISOR_REFLECTION_CONTRACT,
+    tool_contract=SUPERVISOR_TOOL_CONTRACT,
+)
 
 
 # ---------- 规则降级 ----------

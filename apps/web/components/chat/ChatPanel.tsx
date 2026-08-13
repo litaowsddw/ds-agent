@@ -3,6 +3,7 @@
 import { useEffect, useMemo, useRef, useState } from "react";
 import Link from "next/link";
 import { useChatStore, type ChatExecutionMode } from "@/stores/chat";
+import { useRuntimeStore } from "@/stores/runtime";
 import ChatComposer from "@/components/chat/ChatComposer";
 import MessageBubble from "@/components/chat/MessageBubble";
 import ThinkingTrace from "@/components/chat/ThinkingTrace";
@@ -51,6 +52,9 @@ export default function ChatPanel({
   const contextTokenLimit = agent?.context_token_limit ?? 2400;
   const [executionMode, setExecutionMode] = useState<ChatExecutionMode>("autonomous");
   const [workflowId, setWorkflowId] = useState("");
+  // 模型选择器：空值表示跟随 Agent 默认模型；非空为 "provider_key|model"
+  const modelProviders = useRuntimeStore((state) => state.modelProviders);
+  const [modelOverride, setModelOverride] = useState("");
   const messageListRef = useRef<HTMLDivElement>(null);
   const isNearBottomRef = useRef(true);
   const [hasUnreadMessages, setHasUnreadMessages] = useState(false);
@@ -127,13 +131,41 @@ export default function ChatPanel({
     setWorkflowId(defaultWorkflow?.workflow_id || publishedWorkflows[0]?.workflow_id || "");
   }, [agentId, defaultWorkflowId, publishedWorkflows]);
 
+  // 模型选择持久化（按 Agent 分别记忆）
+  useEffect(() => {
+    const saved = window.localStorage.getItem(`agentflow_chat_model_${agentId}`) || "";
+    setModelOverride(saved);
+  }, [agentId]);
+
+  const modelOptions = useMemo(
+    () =>
+      modelProviders
+        .filter((provider) => provider.is_enabled)
+        .flatMap((provider) =>
+          provider.models.map((model) => ({
+            value: `${provider.provider_key}|${model}`,
+            label: `${provider.display_name} · ${model}`,
+          }))
+        ),
+    [modelProviders]
+  );
+
+  const handleModelOverrideChange = (value: string) => {
+    setModelOverride(value);
+    if (value) window.localStorage.setItem(`agentflow_chat_model_${agentId}`, value);
+    else window.localStorage.removeItem(`agentflow_chat_model_${agentId}`);
+  };
+
   const handleSend = async (msg: string) => {
     if (isComposerDisabled) return;
     isNearBottomRef.current = true;
     setHasUnreadMessages(false);
+    const [overrideProvider, overrideModel] = modelOverride ? modelOverride.split("|", 2) : [];
     await sendMessage(agentId, orgId, msg, actorUserId, {
       executionMode,
       workflowId: executionMode === "workflow" ? workflowId : undefined,
+      modelProvider: overrideProvider,
+      modelName: overrideModel,
     });
   };
 
@@ -237,6 +269,19 @@ export default function ChatPanel({
             }
           >
             <div className="mb-3 flex flex-wrap items-center gap-2">
+              <select
+                aria-label="选择模型"
+                className="max-w-64 rounded-md border border-[#dfe4ee] bg-white px-2 py-1.5 text-xs text-[#475467] disabled:opacity-50"
+                disabled={visibleIsGenerating}
+                onChange={(event) => handleModelOverrideChange(event.target.value)}
+                title="本轮对话临时选用的模型；默认跟随 Agent 配置"
+                value={modelOverride}
+              >
+                <option value="">跟随 Agent 默认模型</option>
+                {modelOptions.map((option) => (
+                  <option key={option.value} value={option.value}>{option.label}</option>
+                ))}
+              </select>
               <div className="inline-flex rounded-lg border border-[#dfe4ee] bg-white p-1 text-xs">
                 <button
                   className={`rounded-md px-3 py-1.5 ${executionMode === "autonomous" ? "bg-[#2f6feb] text-white" : "text-[#667085]"}`}

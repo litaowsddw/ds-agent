@@ -75,6 +75,9 @@ class ChatRequest(BaseModel):
     async_exec: bool = False
     execution_mode: Literal["autonomous", "workflow"] = "autonomous"
     workflow_id: str | None = None
+    # 允许用户在本轮对话里临时选用其他已配置模型；缺省跟随 Agent 配置
+    model_provider: str | None = None
+    model_name: str | None = None
 
 
 class ChatResponse(BaseModel):
@@ -126,6 +129,8 @@ async def _build_chat_llm_stack(
     actor_user_id: str,
     source: str,
     session_id: str,
+    model_provider_override: str | None = None,
+    model_name_override: str | None = None,
 ) -> tuple["LLMGateway", Any, Any]:
     """Delegate to the shared chat LLM stack builder (see services.chat_llm_stack)."""
     from app.services.chat_llm_stack import build_chat_llm_stack
@@ -136,6 +141,8 @@ async def _build_chat_llm_stack(
         actor_user_id=actor_user_id,
         source=source,
         session_id=session_id,
+        model_provider_override=model_provider_override,
+        model_name_override=model_name_override,
     )
 
 
@@ -356,14 +363,16 @@ async def _chat_stream_events(
                 )
                 return
 
-        model_provider = agent.model_provider or ""
-        model_name = agent.model_name or ""
+        model_provider = (request.model_provider or "").strip() or agent.model_provider or ""
+        model_name = (request.model_name or "").strip() or agent.model_name or ""
         gateway, adapter, chat_model = await _build_chat_llm_stack(
             db,
             agent=agent,
             actor_user_id=actor_user_id,
             source="chat_stream",
             session_id=str(session_id),
+            model_provider_override=request.model_provider,
+            model_name_override=request.model_name,
         )
         # Persist the current input before dispatch for resilience, but do not
         # feed it back as historical context.  It is appended exactly once as
@@ -400,308 +409,379 @@ async def _chat_stream_events(
             token_threshold=_memory_compaction_threshold(agent.context_token_limit),
         )
 
-        skill_intent = detect_skill_creation_request(request.message)
-        allowed_skills = []
-        skill_catalog = ""
-        if not skill_intent.is_skill_request:
-            from app.services.bundled_skills import list_bundled_skills
-
-            allowed_skills = [
-                *await skill_db.list_agent_allowed_skills(
-                    db,
-                    agent_id=agent.agent_id,
-                    org_id=org_id,
-                ),
-                *list_bundled_skills(),
-            ]
-            skill_catalog = format_skill_description_catalog(allowed_skills)
-
-        supervisors = await agent_db.list_org_agents(db, org_id, kind="SUPERVISOR")
-        supervisor = sorted(supervisors, key=lambda item: item.created_at, reverse=True)[0] if supervisors else None
-        planner = supervisor or agent
-
-        yield await emit(
-            "node_started",
-            node="planning",
-            label="开始规划",
-            supervisor_id=planner.agent_id,
-            supervisor_name=planner.name,
-            supervisor_kind=planner.kind,
-        )
-        planned_action = "create_skill" if skill_intent.is_skill_request else "chat"
-        yield await emit(
-            "node_finished",
-            node="planning",
-            label="开始规划",
-            action=planned_action,
-            supervisor_id=planner.agent_id,
-            supervisor_name=planner.name,
-            fallback_to_agent=supervisor is None,
-        )
-
+        is_supervisor_run = str(getattr(agent, "kind", "") or "").upper() == "SUPERVISOR"
         selected_skill_context = None
         actual_usage = None
 
-        if skill_intent.is_skill_request:
+        if is_supervisor_run:
+            # Supervisor：LangGraph plan → delegate(ReAct 工具循环) → reflect → respond。
+            # 装配默认系统工具（opencode 风格注册表：安全读路径），高风险工具仍走 Workflow。
+            from packages.runtime.agent_runtime import AgentRuntime
+            from packages.runtime.system_prompt import build_agent_system_prompt
+            from app.services.default_chat_tools import build_supervisor_tools
+
             yield await emit(
                 "node_started",
-                node="skill_creator",
-                label="使用 Skill Creator",
-                agent_id=agent.agent_id,
-                agent_name=agent.name,
-                skill_topic=skill_intent.topic,
+                node="planning",
+                label="开始规划",
+                supervisor_id=str(agent.agent_id),
+                supervisor_name=agent.name,
+                supervisor_kind="SUPERVISOR",
             )
-            skill_prompt = _build_skill_prompt(skill_intent.topic)
-            skill_system_prompt = (
-                "You are a Skill Creator Agent. Output only a complete SKILL.md document."
-            )
-            skill_messages = [
-                {"role": "system", "content": skill_system_prompt},
-                {"role": "user", "content": skill_prompt},
-            ]
-            skill_compiled_prompt = f"[System]\n{skill_system_prompt}\n\n[User]\n{skill_prompt}"
-            skill_components = [
-                {
-                    "key": "system",
-                    "label": "System prompt",
-                    "content": skill_system_prompt,
-                    "stable_prefix": True,
-                },
-                {
-                    "key": "current_user",
-                    "label": "Current user message",
-                    "content": skill_prompt,
-                },
-            ]
-            from app.services.context_tokens import preflight_chat_context
-
-            skill_preflight = preflight_chat_context(
-                provider=model_provider,
-                model=model_name,
-                compiled_prompt=skill_compiled_prompt,
-                components=skill_components,
-                messages=skill_messages,
-            )
-            skill_reporter = StreamUsageReporter(
-                provider=model_provider,
-                model=model_name,
-                preflight=skill_preflight,
-                usage_scope="skill_create",
-                usage_key=f"{run_id}:skill_creator",
-                token_limit=_memory_compaction_threshold(agent.context_token_limit),
-            )
-            skill_request = LLMCallRequest(
-                provider=model_provider,
-                model=model_name,
-                prompt=skill_compiled_prompt,
-                messages=skill_messages,
-                parameters={"temperature": 0.2, "max_tokens": 4096},
-                metadata={
-                    "source": "chat_skill_create",
-                    "org_id": org_id,
-                    "actor_user_id": actor_user_id,
-                    "agent_id": agent.agent_id,
-                    "session_id": session_id,
-                },
-            )
-            raw_skill_parts: list[str] = []
-            skill_final_payload: dict[str, object] | None = None
-            try:
-                async for update in _iterate_call_with_usage(
-                    gateway, skill_request, skill_reporter
-                ):
-                    if update.kind == "preflight":
-                        yield await emit("context_preflight", **update.payload)
-                    elif update.kind == "chunk":
-                        raw_skill_parts.append(update.text)
-                        yield await emit("context_progress", **update.payload)
-                    else:
-                        skill_final_payload = update.payload
-                actual_usage = gateway.last_normalized_usage
-                skill_markdown = extract_skill_markdown("".join(raw_skill_parts))
-                metadata = _parse_skill_markdown(skill_markdown)
-                skill_root = Path(
-                    os.getenv(
-                        "AGENTFLOW_USER_SKILLS_DIR",
-                        str(Path.home() / ".codex" / "skills" / "agentflow-user"),
-                    )
-                )
-                skill_path = write_skill_file(skill_root, metadata["name"], skill_markdown)
-                skill = await skill_db.create_skill(
-                    db,
-                    skill_id=new_id("skl"),
-                    org_id=org_id,
-                    team_id=agent.team_id,
-                    agent_id=agent.agent_id,
-                    scope="agent",
-                    name=metadata["name"],
-                    description=metadata["description"],
-                    content=skill_markdown,
-                    file_path=str(skill_path),
-                    created_by=actor_user_id,
-                )
-                await agent_skill_policy_db.set_policy(
-                    db,
-                    agent_id=agent.agent_id,
-                    skill_id=skill.skill_id,
-                    allowed=True,
-                )
-            except Exception:
-                if skill_final_payload is not None:
-                    yield await emit("context_usage", **skill_reporter.unavailable_final_event())
-                raise
             yield await emit(
-                "context_usage",
-                **(
-                    skill_final_payload
-                    if skill_final_payload is not None
-                    else skill_reporter.unavailable_final_event()
+                "node_finished",
+                node="planning",
+                label="开始规划",
+                action="supervisor_run",
+                supervisor_id=str(agent.agent_id),
+                supervisor_name=agent.name,
+            )
+
+            runtime = AgentRuntime(
+                agent_id=str(agent.agent_id),
+                org_id=org_id,
+                model_provider=model_provider,
+                model_name=model_name,
+                workspace_id=str(getattr(agent, "workspace_id", "") or ""),
+                llm_caller=adapter,
+                system_prompt=build_agent_system_prompt(
+                    agent_name=str(agent.name or "Agent"),
+                    agent_description=str(agent.description or ""),
+                    agent_instructions=str(getattr(agent, "system_prompt", "") or ""),
                 ),
             )
-            response_text = f"已创建 Skill：{skill.name}\n路径：{skill_path}"
-            yield await emit(
-                "skill_created",
-                node="skill_creator",
-                skill_id=skill.skill_id,
-                name=skill.name,
-                path=str(skill_path),
-            )
-            yield await emit(
-                "node_finished",
-                node="skill_creator",
-                label="使用 Skill Creator",
-                skill_id=skill.skill_id,
-                name=skill.name,
-            )
-        else:
-            yield await emit(
-                "node_started",
-                node="skill_discovery",
-                label="检索可用 Skill",
-                agent_id=agent.agent_id,
-                agent_name=agent.name,
-            )
-            skill_selection = None
-            if skill_catalog:
-                router_response = await adapter.call(
-                    prompt=build_skill_router_prompt(request.message, skill_catalog),
-                    system_prompt=(
-                        "You are a skill router. You only decide whether a user request clearly "
-                        "matches one available skill description. Return strict JSON only."
-                    ),
-                    temperature=0,
-                    max_tokens=512,
-                )
-                skill_selection = parse_skill_selection(router_response, allowed_skills)
-                if skill_selection is not None:
-                    selected_skill_context = load_selected_skill_context(skill_selection, allowed_skills)
-            yield await emit(
-                "node_finished",
-                node="skill_discovery",
-                label="检索可用 Skill",
-                available_count=len(allowed_skills),
-                selected_count=1 if selected_skill_context is not None else 0,
-                selected_skills=[selected_skill_context.name] if selected_skill_context is not None else [],
-            )
-            if selected_skill_context is not None:
-                skill_label = f"使用 Skill：{selected_skill_context.name}"
-                yield await emit(
-                    "node_started",
-                    node="skill_use",
-                    label=skill_label,
-                    skill_ids=[selected_skill_context.skill_id],
-                    skill_names=[selected_skill_context.name],
-                    loaded_resources=[path for path, _ in selected_skill_context.resources],
-                )
-                yield await emit(
-                    "node_finished",
-                    node="skill_use",
-                    label=skill_label,
-                    skill_ids=[selected_skill_context.skill_id],
-                    skill_names=[selected_skill_context.name],
-                    loaded_resources=[path for path, _ in selected_skill_context.resources],
-                )
+            runtime.init_supervisor(chat_model=chat_model, llm_caller=adapter)
+            runtime.system_tools = build_supervisor_tools(db, org_id=org_id, agent_id=str(agent.agent_id))
+
             yield await emit(
                 "node_started",
                 node="agent_call",
-                label=f"调用 Agent：{agent.name}",
-                agent_id=request.agent_id,
+                label=f"执行 Supervisor：{agent.name}",
+                agent_id=str(agent.agent_id),
                 agent_name=agent.name,
                 model_provider=model_provider,
                 model_name=model_name,
             )
-            response_parts: list[str] = []
-            compiled_prompt = _compile_agent_chat_prompt(
-                agent,
-                request.message,
-                # Native compilation receives the three memory layers as
-                # separate inputs below.  Do not pass the rendered legacy
-                # block, otherwise an empty vector recall could duplicate the
-                # summary and recent history.
-                memory_context="",
-                skill_catalog=skill_catalog,
-                skill_context=(
-                    selected_skill_context.prompt_context
-                    if selected_skill_context is not None
-                    else ""
-                ),
-                recent_messages=recent_messages,
-                compact_summary=memory_context.compact_summary,
-                long_term_context=memory_context.long_term_context,
-            )
-            from app.services.context_tokens import preflight_chat_context
-
-            preflight = preflight_chat_context(
-                provider=model_provider,
-                model=model_name,
-                compiled_prompt=str(compiled_prompt["compiled_prompt"]),
-                components=compiled_prompt["context_breakdown"],
-                messages=compiled_prompt["messages"],
-            )
-            llm_request = LLMCallRequest(
-                provider=model_provider,
-                model=model_name,
-                prompt=str(compiled_prompt["compiled_prompt"]),
-                messages=compiled_prompt["messages"],
-                parameters={
-                    "temperature": agent.temperature if agent.temperature is not None else 0.3,
-                    "max_tokens": agent.max_tokens or _default_chat_max_tokens(),
-                },
-                metadata={
-                    "source": "chat_stream",
-                    "org_id": org_id,
-                    "actor_user_id": actor_user_id,
-                    "agent_id": agent.agent_id,
-                    "session_id": session_id,
-                },
-                prefix_hash=str(compiled_prompt["prefix_hash"]),
-            )
-            reporter = StreamUsageReporter(
-                provider=model_provider,
-                model=model_name,
-                preflight=preflight,
-                usage_scope="chat",
-                usage_key=f"{run_id}:agent_call",
-                token_limit=_memory_compaction_threshold(agent.context_token_limit),
-            )
-            async for update in _iterate_call_with_usage(gateway, llm_request, reporter):
-                if update.kind == "preflight":
-                    yield await emit("context_preflight", **update.payload)
-                elif update.kind == "chunk":
-                    response_parts.append(update.text)
-                    yield await emit("token", text=update.text, session_id=session_id)
-                    yield await emit("context_progress", **update.payload)
-                else:
-                    actual_usage = gateway.last_normalized_usage
-                    yield await emit("context_usage", **update.payload)
-            response_text = "".join(response_parts)
+            result = await runtime.chat(request.message, session_id=session_id)
+            if result.get("error"):
+                raise RuntimeError(str(result["error"]))
             yield await emit(
                 "node_finished",
                 node="agent_call",
-                label=f"调用 Agent：{agent.name}",
-                agent_id=agent.agent_id,
+                label=f"执行 Supervisor：{agent.name}",
+                agent_id=str(agent.agent_id),
                 agent_name=agent.name,
+                intent=str(result.get("intent") or ""),
+                subtask_count=int(result.get("subtask_count") or 0),
+                succeeded_count=int(result.get("succeeded_count") or 0),
             )
+            response_text = str(result.get("response") or "")
+            for chunk in _chunk_text(response_text):
+                yield await emit("token", text=chunk, session_id=session_id)
+
+        else:
+            skill_intent = detect_skill_creation_request(request.message)
+            allowed_skills = []
+            skill_catalog = ""
+            if not skill_intent.is_skill_request:
+                from app.services.bundled_skills import list_bundled_skills
+
+                allowed_skills = [
+                    *await skill_db.list_agent_allowed_skills(
+                        db,
+                        agent_id=agent.agent_id,
+                        org_id=org_id,
+                    ),
+                    *list_bundled_skills(),
+                ]
+                skill_catalog = format_skill_description_catalog(allowed_skills)
+
+            supervisors = await agent_db.list_org_agents(db, org_id, kind="SUPERVISOR")
+            supervisor = sorted(supervisors, key=lambda item: item.created_at, reverse=True)[0] if supervisors else None
+            planner = supervisor or agent
+
+            yield await emit(
+                "node_started",
+                node="planning",
+                label="开始规划",
+                supervisor_id=planner.agent_id,
+                supervisor_name=planner.name,
+                supervisor_kind=planner.kind,
+            )
+            planned_action = "create_skill" if skill_intent.is_skill_request else "chat"
+            yield await emit(
+                "node_finished",
+                node="planning",
+                label="开始规划",
+                action=planned_action,
+                supervisor_id=planner.agent_id,
+                supervisor_name=planner.name,
+                fallback_to_agent=supervisor is None,
+            )
+
+            selected_skill_context = None
+            actual_usage = None
+
+            if skill_intent.is_skill_request:
+                yield await emit(
+                    "node_started",
+                    node="skill_creator",
+                    label="使用 Skill Creator",
+                    agent_id=agent.agent_id,
+                    agent_name=agent.name,
+                    skill_topic=skill_intent.topic,
+                )
+                skill_prompt = _build_skill_prompt(skill_intent.topic)
+                skill_system_prompt = (
+                    "You are a Skill Creator Agent. Output only a complete SKILL.md document."
+                )
+                skill_messages = [
+                    {"role": "system", "content": skill_system_prompt},
+                    {"role": "user", "content": skill_prompt},
+                ]
+                skill_compiled_prompt = f"[System]\n{skill_system_prompt}\n\n[User]\n{skill_prompt}"
+                skill_components = [
+                    {
+                        "key": "system",
+                        "label": "System prompt",
+                        "content": skill_system_prompt,
+                        "stable_prefix": True,
+                    },
+                    {
+                        "key": "current_user",
+                        "label": "Current user message",
+                        "content": skill_prompt,
+                    },
+                ]
+                from app.services.context_tokens import preflight_chat_context
+
+                skill_preflight = preflight_chat_context(
+                    provider=model_provider,
+                    model=model_name,
+                    compiled_prompt=skill_compiled_prompt,
+                    components=skill_components,
+                    messages=skill_messages,
+                )
+                skill_reporter = StreamUsageReporter(
+                    provider=model_provider,
+                    model=model_name,
+                    preflight=skill_preflight,
+                    usage_scope="skill_create",
+                    usage_key=f"{run_id}:skill_creator",
+                    token_limit=_memory_compaction_threshold(agent.context_token_limit),
+                )
+                skill_request = LLMCallRequest(
+                    provider=model_provider,
+                    model=model_name,
+                    prompt=skill_compiled_prompt,
+                    messages=skill_messages,
+                    parameters={"temperature": 0.2, "max_tokens": 4096},
+                    metadata={
+                        "source": "chat_skill_create",
+                        "org_id": org_id,
+                        "actor_user_id": actor_user_id,
+                        "agent_id": agent.agent_id,
+                        "session_id": session_id,
+                    },
+                )
+                raw_skill_parts: list[str] = []
+                skill_final_payload: dict[str, object] | None = None
+                try:
+                    async for update in _iterate_call_with_usage(
+                        gateway, skill_request, skill_reporter
+                    ):
+                        if update.kind == "preflight":
+                            yield await emit("context_preflight", **update.payload)
+                        elif update.kind == "chunk":
+                            raw_skill_parts.append(update.text)
+                            yield await emit("context_progress", **update.payload)
+                        else:
+                            skill_final_payload = update.payload
+                    actual_usage = gateway.last_normalized_usage
+                    skill_markdown = extract_skill_markdown("".join(raw_skill_parts))
+                    metadata = _parse_skill_markdown(skill_markdown)
+                    skill_root = Path(
+                        os.getenv(
+                            "AGENTFLOW_USER_SKILLS_DIR",
+                            str(Path.home() / ".codex" / "skills" / "agentflow-user"),
+                        )
+                    )
+                    skill_path = write_skill_file(skill_root, metadata["name"], skill_markdown)
+                    skill = await skill_db.create_skill(
+                        db,
+                        skill_id=new_id("skl"),
+                        org_id=org_id,
+                        team_id=agent.team_id,
+                        agent_id=agent.agent_id,
+                        scope="agent",
+                        name=metadata["name"],
+                        description=metadata["description"],
+                        content=skill_markdown,
+                        file_path=str(skill_path),
+                        created_by=actor_user_id,
+                    )
+                    await agent_skill_policy_db.set_policy(
+                        db,
+                        agent_id=agent.agent_id,
+                        skill_id=skill.skill_id,
+                        allowed=True,
+                    )
+                except Exception:
+                    if skill_final_payload is not None:
+                        yield await emit("context_usage", **skill_reporter.unavailable_final_event())
+                    raise
+                yield await emit(
+                    "context_usage",
+                    **(
+                        skill_final_payload
+                        if skill_final_payload is not None
+                        else skill_reporter.unavailable_final_event()
+                    ),
+                )
+                response_text = f"已创建 Skill：{skill.name}\n路径：{skill_path}"
+                yield await emit(
+                    "skill_created",
+                    node="skill_creator",
+                    skill_id=skill.skill_id,
+                    name=skill.name,
+                    path=str(skill_path),
+                )
+                yield await emit(
+                    "node_finished",
+                    node="skill_creator",
+                    label="使用 Skill Creator",
+                    skill_id=skill.skill_id,
+                    name=skill.name,
+                )
+            else:
+                yield await emit(
+                    "node_started",
+                    node="skill_discovery",
+                    label="检索可用 Skill",
+                    agent_id=agent.agent_id,
+                    agent_name=agent.name,
+                )
+                skill_selection = None
+                if skill_catalog:
+                    router_response = await adapter.call(
+                        prompt=build_skill_router_prompt(request.message, skill_catalog),
+                        system_prompt=(
+                            "You are a skill router. You only decide whether a user request clearly "
+                            "matches one available skill description. Return strict JSON only."
+                        ),
+                        temperature=0,
+                        max_tokens=512,
+                    )
+                    skill_selection = parse_skill_selection(router_response, allowed_skills)
+                    if skill_selection is not None:
+                        selected_skill_context = load_selected_skill_context(skill_selection, allowed_skills)
+                yield await emit(
+                    "node_finished",
+                    node="skill_discovery",
+                    label="检索可用 Skill",
+                    available_count=len(allowed_skills),
+                    selected_count=1 if selected_skill_context is not None else 0,
+                    selected_skills=[selected_skill_context.name] if selected_skill_context is not None else [],
+                )
+                if selected_skill_context is not None:
+                    skill_label = f"使用 Skill：{selected_skill_context.name}"
+                    yield await emit(
+                        "node_started",
+                        node="skill_use",
+                        label=skill_label,
+                        skill_ids=[selected_skill_context.skill_id],
+                        skill_names=[selected_skill_context.name],
+                        loaded_resources=[path for path, _ in selected_skill_context.resources],
+                    )
+                    yield await emit(
+                        "node_finished",
+                        node="skill_use",
+                        label=skill_label,
+                        skill_ids=[selected_skill_context.skill_id],
+                        skill_names=[selected_skill_context.name],
+                        loaded_resources=[path for path, _ in selected_skill_context.resources],
+                    )
+                yield await emit(
+                    "node_started",
+                    node="agent_call",
+                    label=f"调用 Agent：{agent.name}",
+                    agent_id=request.agent_id,
+                    agent_name=agent.name,
+                    model_provider=model_provider,
+                    model_name=model_name,
+                )
+                response_parts: list[str] = []
+                compiled_prompt = _compile_agent_chat_prompt(
+                    agent,
+                    request.message,
+                    # Native compilation receives the three memory layers as
+                    # separate inputs below.  Do not pass the rendered legacy
+                    # block, otherwise an empty vector recall could duplicate the
+                    # summary and recent history.
+                    memory_context="",
+                    skill_catalog=skill_catalog,
+                    skill_context=(
+                        selected_skill_context.prompt_context
+                        if selected_skill_context is not None
+                        else ""
+                    ),
+                    recent_messages=recent_messages,
+                    compact_summary=memory_context.compact_summary,
+                    long_term_context=memory_context.long_term_context,
+                )
+                from app.services.context_tokens import preflight_chat_context
+
+                preflight = preflight_chat_context(
+                    provider=model_provider,
+                    model=model_name,
+                    compiled_prompt=str(compiled_prompt["compiled_prompt"]),
+                    components=compiled_prompt["context_breakdown"],
+                    messages=compiled_prompt["messages"],
+                )
+                llm_request = LLMCallRequest(
+                    provider=model_provider,
+                    model=model_name,
+                    prompt=str(compiled_prompt["compiled_prompt"]),
+                    messages=compiled_prompt["messages"],
+                    parameters={
+                        "temperature": agent.temperature if agent.temperature is not None else 0.3,
+                        "max_tokens": agent.max_tokens or _default_chat_max_tokens(),
+                    },
+                    metadata={
+                        "source": "chat_stream",
+                        "org_id": org_id,
+                        "actor_user_id": actor_user_id,
+                        "agent_id": agent.agent_id,
+                        "session_id": session_id,
+                    },
+                    prefix_hash=str(compiled_prompt["prefix_hash"]),
+                )
+                reporter = StreamUsageReporter(
+                    provider=model_provider,
+                    model=model_name,
+                    preflight=preflight,
+                    usage_scope="chat",
+                    usage_key=f"{run_id}:agent_call",
+                    token_limit=_memory_compaction_threshold(agent.context_token_limit),
+                )
+                async for update in _iterate_call_with_usage(gateway, llm_request, reporter):
+                    if update.kind == "preflight":
+                        yield await emit("context_preflight", **update.payload)
+                    elif update.kind == "chunk":
+                        response_parts.append(update.text)
+                        yield await emit("token", text=update.text, session_id=session_id)
+                        yield await emit("context_progress", **update.payload)
+                    else:
+                        actual_usage = gateway.last_normalized_usage
+                        yield await emit("context_usage", **update.payload)
+                response_text = "".join(response_parts)
+                yield await emit(
+                    "node_finished",
+                    node="agent_call",
+                    label=f"调用 Agent：{agent.name}",
+                    agent_id=agent.agent_id,
+                    agent_name=agent.name,
+                )
 
         yield await emit("node_started", node="final_answer", label="汇总结果")
         yield await emit("node_finished", node="final_answer", label="汇总结果")

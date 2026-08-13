@@ -79,6 +79,9 @@ export type ChatExecutionMode = "autonomous" | "workflow";
 export interface SendMessageOptions {
   executionMode?: ChatExecutionMode;
   workflowId?: string;
+  /** 本轮对话临时选用的模型（跟随 Agent 默认时省略） */
+  modelProvider?: string;
+  modelName?: string;
 }
 
 export interface FailedSendSnapshot {
@@ -149,6 +152,8 @@ export const useChatStore = create<ChatState>((set, get) => ({
       options: {
         executionMode: options?.executionMode ?? "autonomous",
         workflowId: options?.workflowId,
+        modelProvider: options?.modelProvider,
+        modelName: options?.modelName,
       },
     };
     let streamFailed = false;
@@ -189,6 +194,8 @@ export const useChatStore = create<ChatState>((set, get) => ({
         sessionId: get().sessionId,
         executionMode: options?.executionMode ?? "autonomous",
         workflowId: options?.workflowId,
+        modelProvider: options?.modelProvider,
+        modelName: options?.modelName,
         signal: controller.signal,
         onEvent: (event, data) => {
           if (!isActive()) return;
@@ -553,6 +560,8 @@ async function streamChat({
   sessionId,
   executionMode,
   workflowId,
+  modelProvider,
+  modelName,
   onEvent,
   signal,
 }: {
@@ -563,6 +572,8 @@ async function streamChat({
   sessionId: string | null;
   executionMode: ChatExecutionMode;
   workflowId?: string;
+  modelProvider?: string;
+  modelName?: string;
   onEvent: (event: string, data: Record<string, unknown>) => void;
   signal?: AbortSignal;
 }) {
@@ -583,6 +594,8 @@ async function streamChat({
       stream: true,
       execution_mode: executionMode,
       workflow_id: workflowId || null,
+      ...(modelProvider ? { model_provider: modelProvider } : {}),
+      ...(modelName ? { model_name: modelName } : {}),
     }),
   });
 

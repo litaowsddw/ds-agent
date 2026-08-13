@@ -20,12 +20,17 @@ async def build_chat_llm_stack(
     actor_user_id: str,
     source: str,
     session_id: str,
+    model_provider_override: str | None = None,
+    model_name_override: str | None = None,
 ) -> tuple[Any, Any, Any]:
     """构建 (LLMGateway, LLMCallerAdapter, GatewayChatModel)。
 
     - gateway：按 Agent 配置的 provider 构造，带计量 recorder
     - adapter：runtime 文本调用协议（legacy caller 接口）
     - chat_model：LangGraph Supervisor / ReAct 执行器的 LangChain 模型
+
+    model_provider_override / model_name_override：为这一轮对话临时替换
+    Agent 的默认模型（供应商行必须已在该组织配置且启用）。
     """
     from fastapi import HTTPException
 
@@ -35,8 +40,8 @@ async def build_chat_llm_stack(
     from packages.runtime.llm_caller import LLMCallerAdapter
 
     org_id = str(agent.org_id)
-    model_provider = agent.model_provider or ""
-    model_name = agent.model_name or ""
+    model_provider = (model_provider_override or "").strip() or (agent.model_provider or "")
+    model_name = (model_name_override or "").strip() or (agent.model_name or "")
     if not model_provider or not model_name:
         raise HTTPException(
             status_code=400,

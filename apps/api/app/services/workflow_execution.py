@@ -147,6 +147,90 @@ class WorkflowExecutionService:
         await session.flush()
         return await workflow_run_db.get_run_required(session, run.run_id)
 
+    async def resume_existing_run(
+        self,
+        session: AsyncSession,
+        *,
+        run: WorkflowRunModel,
+        actor_user_id: str,
+        on_usage_event: UsageEventCallback | None = None,
+    ) -> WorkflowRunModel:
+        """审批通过后从暂停点续跑剩余 DAG 节点并落盘。
+
+        只允许 ``awaiting_manual_resume`` 状态的运行续跑。已成功节点（含审批通过后
+        补录的 Tool 节点）的输出被预置为 ``resume_state``，其节点被标记为已完成而
+        跳过，避免重放已成功的外部动作；仅执行暂停点之后尚未运行的下游节点。
+        """
+        if run.status != "awaiting_manual_resume":
+            raise ValueError("只有等待人工续跑的运行才能 resume")
+
+        version = await workflow_version_db.get_by_id_required(session, run.version_id, "version_id")
+        definition = json.loads(version.definition)
+        input_data = json.loads(run.input_data)
+
+        # 用已成功节点的输出重建 context_by_node；同一 node_id 取最后一次成功结果，
+        # 覆盖审批前那次 waiting_approval 的空输出。
+        existing_node_runs = await node_run_db.list_run_node_runs(session, run.run_id)
+        resume_state: dict[str, dict[str, Any]] = {}
+        completed_node_ids: set[str] = set()
+        for nr in existing_node_runs:
+            if nr.status != "succeeded":
+                continue
+            try:
+                output = json.loads(nr.output_data)
+            except (TypeError, json.JSONDecodeError):
+                output = {}
+            resume_state[nr.node_id] = dict(output)
+            completed_node_ids.add(nr.node_id)
+
+        await workflow_run_db.update_run_status(session, run.run_id, "running")
+        executor = WorkflowExecutor(
+            llm_gateway=lambda config, node_input: self._execute_llm_node(
+                session=session,
+                config=config,
+                node_input=node_input,
+                actor_user_id=actor_user_id,
+                org_id=run.org_id,
+                run=run,
+                on_usage_event=on_usage_event,
+            ),
+            rag_search=lambda config, node_input: self._execute_rag_node(
+                session=session,
+                config=config,
+                node_input=node_input,
+                actor_user_id=actor_user_id,
+                org_id=run.org_id,
+            ),
+            tool_call=lambda config, node_input: self._execute_tool_node(
+                session=session,
+                config={**config, "_workflow_run_id": run.run_id},
+                node_input=node_input,
+                actor_user_id=actor_user_id,
+                org_id=run.org_id,
+                agent_id=run.agent_id,
+            ),
+        )
+        result = await executor.execute_async(
+            definition=definition,
+            input_data=input_data,
+            resume_state=resume_state,
+            completed_node_ids=completed_node_ids,
+        )
+        start_sequence = len(existing_node_runs)
+        for index, executed_node in enumerate(result.node_runs):
+            await self._persist_executed_node(
+                session, run.run_id, executed_node, start_sequence + index
+            )
+        await workflow_run_db.update_run_status(
+            session,
+            run.run_id,
+            result.status,
+            output_data=result.output_data,
+            error_message=result.error_message,
+        )
+        await session.flush()
+        return await workflow_run_db.get_run_required(session, run.run_id)
+
     async def _execute_llm_node(
         self,
         session: AsyncSession,
