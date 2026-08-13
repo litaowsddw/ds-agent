@@ -5,6 +5,7 @@ import Link from "next/link";
 import { Bot } from "lucide-react";
 import { useWorkspaceStore } from "@/stores/workspace";
 import { useWorkflowStore } from "@/stores/workflow";
+import { useRuntimeStore } from "@/stores/runtime";
 import ChatPanel from "@/components/chat/ChatPanel";
 import EvolverPanel from "@/components/chat/EvolverPanel";
 import WorkspaceRequired from "@/components/ui/WorkspaceRequired";
@@ -14,12 +15,14 @@ export default function ChatPage() {
   const { workspace, agents, selectedAgentId } = useWorkspaceStore();
   const workflows = useWorkflowStore((state) => state.workflows);
   const refreshWorkflows = useWorkflowStore((state) => state.refreshWorkflows);
+  const refreshRuntimeData = useRuntimeStore((state) => state.refreshRuntimeData);
   const [activeTab, setActiveTab] = useState<"chat" | "evolver">("chat");
 
   useEffect(() => {
     if (!workspace || !selectedAgentId) return;
     void refreshWorkflows(workspace.orgId, workspace.userId, selectedAgentId);
-  }, [workspace, selectedAgentId, refreshWorkflows]);
+    void refreshRuntimeData(workspace.orgId, workspace.userId, selectedAgentId);
+  }, [workspace, selectedAgentId, refreshWorkflows, refreshRuntimeData]);
 
   if (!workspace) {
     return <WorkspaceRequired />;
