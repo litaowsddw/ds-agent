@@ -82,6 +82,25 @@ def _bounded_tool_result(
     return text[:maximum] + f"\n[Tool result truncated after {maximum} characters]"
 
 
+def _coerce_messages(messages: list[BaseMessage | dict[str, Any]]) -> list[BaseMessage]:
+    """Normalize raw message dicts into LangChain BaseMessage instances."""
+
+    result: list[BaseMessage] = []
+    for message in messages:
+        if isinstance(message, BaseMessage):
+            result.append(message)
+            continue
+        role = str(message.get("role", "user"))
+        content = str(message.get("content", ""))
+        if role == "system":
+            result.append(SystemMessage(content=content))
+        elif role == "assistant":
+            result.append(AIMessage(content=content))
+        else:
+            result.append(HumanMessage(content=content))
+    return result
+
+
 class LangGraphReActExecutor:
     """基于 LangGraph 的 ReAct 执行引擎。
 
@@ -107,30 +126,37 @@ class LangGraphReActExecutor:
         subagent_kind: str = "USER_SUB",
         tools: list[BaseTool] | None = None,
         context: dict[str, Any] | None = None,
+        messages: list[BaseMessage | dict[str, Any]] | None = None,
     ) -> dict[str, Any]:
         """执行一个 SubAgent 任务（ReAct 循环）。
 
         参数：
-            task: 任务描述
+            task: 任务描述（当 ``messages`` 提供时忽略，因为已含用户回合）
             subagent_kind: SubAgent 类型
             tools: 可用的 LangChain 工具列表
             context: 额外上下文
+            messages: 可选的原生消息序列（system/skill/memory/history/user），
+                覆盖默认的 subagent 系统提示词组装。用于让普通 Agent 复用其
+                编译好的富上下文（含自定义 system prompt 与技能/记忆）。
 
         返回：
             包含 status, result_text, tool_calls_made 等的字典
         """
         tools = tools or []
-        system_prompt = SUBAGENT_SYSTEM_PROMPTS.get(subagent_kind, SUBAGENT_SYSTEM_PROMPTS["USER_SUB"])
 
-        # 构建初始消息
-        initial_messages: list[BaseMessage] = [
-            SystemMessage(content=system_prompt),
-        ]
-        if context:
-            # Request-scoped context is data, not a higher-priority system
-            # instruction, and must remain outside the cacheable prefix.
-            initial_messages.append(HumanMessage(content=f"[Runtime context]\n{json.dumps(context, ensure_ascii=False)}"))
-        initial_messages.append(HumanMessage(content=task))
+        if messages is not None:
+            initial_messages: list[BaseMessage] = _coerce_messages(messages)
+        else:
+            system_prompt = SUBAGENT_SYSTEM_PROMPTS.get(subagent_kind, SUBAGENT_SYSTEM_PROMPTS["USER_SUB"])
+            # 构建初始消息
+            initial_messages = [
+                SystemMessage(content=system_prompt),
+            ]
+            if context:
+                # Request-scoped context is data, not a higher-priority system
+                # instruction, and must remain outside the cacheable prefix.
+                initial_messages.append(HumanMessage(content=f"[Runtime context]\n{json.dumps(context, ensure_ascii=False)}"))
+            initial_messages.append(HumanMessage(content=task))
 
         try:
             agent = self._get_or_create_agent(tools)

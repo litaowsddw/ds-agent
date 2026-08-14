@@ -4,7 +4,11 @@ import json
 
 import pytest
 
-from packages.runtime.langgraph_executor import _bounded_tool_result, _tool_call_fingerprint
+from packages.runtime.langgraph_executor import (
+    _bounded_tool_result,
+    _coerce_messages,
+    _tool_call_fingerprint,
+)
 from packages.runtime.system_prompt import (
     build_agent_system_prompt,
     build_subagent_system_prompt,
@@ -73,6 +77,24 @@ def test_tool_fingerprint_is_order_stable_and_result_has_a_hard_context_cap() ->
     capped = _bounded_tool_result("x" * 20, maximum=8)
     assert capped.startswith("x" * 8)
     assert "truncated" in capped
+
+
+def test_coerce_messages_maps_roles_to_base_messages() -> None:
+    from langchain_core.messages import AIMessage, HumanMessage, SystemMessage
+
+    coerced = _coerce_messages(
+        [
+            {"role": "system", "content": "sys"},
+            {"role": "user", "content": "hello"},
+            {"role": "assistant", "content": "hi"},
+            SystemMessage(content="already-a-message"),
+        ]
+    )
+
+    assert isinstance(coerced[0], SystemMessage) and coerced[0].content == "sys"
+    assert isinstance(coerced[1], HumanMessage) and coerced[1].content == "hello"
+    assert isinstance(coerced[2], AIMessage) and coerced[2].content == "hi"
+    assert coerced[3].content == "already-a-message"
 
 
 def test_tool_result_pruner_keeps_head_and_tail_and_drops_the_middle() -> None:
