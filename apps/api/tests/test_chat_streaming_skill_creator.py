@@ -204,19 +204,20 @@ def test_skill_creation_consultation_uses_agent_without_creating_skill(
     )
 
 
-def test_autonomous_stream_emits_estimates_then_provider_final_usage(
+def test_autonomous_react_emits_preflight_then_provider_final_usage(
     client: TestClient, monkeypatch: pytest.MonkeyPatch
 ) -> None:
+    from apps.api.app.gateway.llm import LLMCallResponse
+
     agent_id, headers = _create_streaming_agent(client)
 
-    async def _stream_generate(self: LLMGateway, _request: object):
-        yield "abcd"
-        yield "efgh"
+    async def _generate(self: LLMGateway, _request: object) -> LLMCallResponse:
         self.last_normalized_usage = normalize_usage(
             {"prompt_tokens": 31, "completion_tokens": 9, "total_tokens": 40}
         )
+        return LLMCallResponse(text="abcd efgh", provider="stub", model="stub")
 
-    monkeypatch.setattr(LLMGateway, "stream_generate", _stream_generate)
+    monkeypatch.setattr(LLMGateway, "generate", _generate)
 
     with client.stream(
         "POST",
@@ -228,24 +229,12 @@ def test_autonomous_stream_emits_estimates_then_provider_final_usage(
         events = _parse_sse_events("".join(response.iter_text()))
 
     usage_events = [event for event in events if event["event"].startswith("context_")]
-    assert [event["event"] for event in usage_events] == [
-        "context_preflight",
-        "context_progress",
-        "context_progress",
-        "context_usage",
-    ]
-    assert usage_events[1]["output_tokens"] < usage_events[2]["output_tokens"]
-    assert [event["usage_phase"] for event in usage_events] == [
-        "preflight",
-        "estimated",
-        "estimated",
-        "provider_final",
-    ]
+    assert [event["event"] for event in usage_events] == ["context_preflight", "context_usage"]
+    assert usage_events[-1]["usage_phase"] == "provider_final"
     assert usage_events[-1]["usage_scope"] == "chat"
     assert usage_events[-1]["usage_key"]
-    assert len({event["usage_key"] for event in usage_events}) == 1
     assert usage_events[-1]["output_tokens"] == 9
-    assert [event["text"] for event in events if event["event"] == "token"] == ["abcd", "efgh"]
+    assert "".join(event["text"] for event in events if event["event"] == "token") == "abcd efgh"
 
 
 def test_explicit_skill_stream_reports_usage_without_emitting_tokens(
@@ -313,16 +302,17 @@ def test_explicit_skill_stream_reports_usage_without_emitting_tokens(
     assert context_usage_index < skill_created_index
 
 
-def test_autonomous_stream_marks_missing_provider_usage_unavailable(
+def test_autonomous_react_marks_missing_provider_usage_unavailable(
     client: TestClient, monkeypatch: pytest.MonkeyPatch
 ) -> None:
+    from apps.api.app.gateway.llm import LLMCallResponse
+
     agent_id, headers = _create_streaming_agent(client)
 
-    async def _stream_generate(_self: LLMGateway, _request: object):
-        yield "abcd"
-        yield "efgh"
+    async def _generate(_self: LLMGateway, _request: object) -> LLMCallResponse:
+        return LLMCallResponse(text="abcd efgh", provider="stub", model="stub")
 
-    monkeypatch.setattr(LLMGateway, "stream_generate", _stream_generate)
+    monkeypatch.setattr(LLMGateway, "generate", _generate)
 
     with client.stream(
         "POST",
@@ -334,26 +324,20 @@ def test_autonomous_stream_marks_missing_provider_usage_unavailable(
         events = _parse_sse_events("".join(response.iter_text()))
 
     usage_events = [event for event in events if event["event"].startswith("context_")]
-    assert [event["event"] for event in usage_events] == [
-        "context_preflight",
-        "context_progress",
-        "context_progress",
-        "context_usage",
-    ]
+    assert [event["event"] for event in usage_events] == ["context_preflight", "context_usage"]
     assert usage_events[-1]["usage_phase"] == "unavailable"
     assert not any(event.get("usage_phase") == "provider_final" for event in usage_events)
 
 
-async def test_autonomous_stream_cancellation_propagates_without_error_event(
+async def test_autonomous_react_cancellation_propagates_without_error_event(
     client: TestClient, monkeypatch: pytest.MonkeyPatch
 ) -> None:
     agent_id, headers = _create_streaming_agent(client)
 
-    async def _stream_generate(_self: LLMGateway, _request: object):
-        yield "partial"
-        raise asyncio.CancelledError("fake stream cancellation")
+    async def _generate(_self: LLMGateway, _request: object):
+        raise asyncio.CancelledError("fake cancellation")
 
-    monkeypatch.setattr(LLMGateway, "stream_generate", _stream_generate)
+    monkeypatch.setattr(LLMGateway, "generate", _generate)
 
     token = headers["Authorization"].removeprefix("Bearer ")
     payload = verify_access_token(token)
@@ -374,25 +358,23 @@ async def test_autonomous_stream_cancellation_propagates_without_error_event(
             auth=AuthContext.from_jwt(payload),
             db=db,
         )
-        with pytest.raises(asyncio.CancelledError, match="fake stream cancellation"):
+        with pytest.raises(asyncio.CancelledError, match="fake cancellation"):
             async for event in stream:
                 events.append(event)
 
-    assert any(event.startswith("event: token\n") for event in events)
     assert not any(event.startswith("event: error\n") for event in events)
     assert rollback_calls == ["rollback"]
 
 
-def test_autonomous_stream_provider_error_emits_error_event(
+def test_autonomous_react_provider_error_emits_error_event(
     client: TestClient, monkeypatch: pytest.MonkeyPatch
 ) -> None:
     agent_id, headers = _create_streaming_agent(client)
 
-    async def _stream_generate(_self: LLMGateway, _request: object):
-        yield "partial"
+    async def _generate(_self: LLMGateway, _request: object):
         raise RuntimeError("provider unavailable")
 
-    monkeypatch.setattr(LLMGateway, "stream_generate", _stream_generate)
+    monkeypatch.setattr(LLMGateway, "generate", _generate)
 
     with client.stream(
         "POST",

@@ -763,24 +763,6 @@ async def _chat_stream_events(
                     components=compiled_prompt["context_breakdown"],
                     messages=compiled_prompt["messages"],
                 )
-                llm_request = LLMCallRequest(
-                    provider=model_provider,
-                    model=model_name,
-                    prompt=str(compiled_prompt["compiled_prompt"]),
-                    messages=compiled_prompt["messages"],
-                    parameters={
-                        "temperature": agent.temperature if agent.temperature is not None else 0.3,
-                        "max_tokens": agent.max_tokens or _default_chat_max_tokens(),
-                    },
-                    metadata={
-                        "source": "chat_stream",
-                        "org_id": org_id,
-                        "actor_user_id": actor_user_id,
-                        "agent_id": agent.agent_id,
-                        "session_id": session_id,
-                    },
-                    prefix_hash=str(compiled_prompt["prefix_hash"]),
-                )
                 reporter = StreamUsageReporter(
                     provider=model_provider,
                     model=model_name,
@@ -789,17 +771,65 @@ async def _chat_stream_events(
                     usage_key=f"{run_id}:agent_call",
                     token_limit=_memory_compaction_threshold(agent.context_token_limit),
                 )
-                async for update in _iterate_call_with_usage(gateway, llm_request, reporter):
-                    if update.kind == "preflight":
-                        yield await emit("context_preflight", **update.payload)
-                    elif update.kind == "chunk":
-                        response_parts.append(update.text)
-                        yield await emit("token", text=update.text, session_id=session_id)
-                        yield await emit("context_progress", **update.payload)
-                    else:
-                        actual_usage = gateway.last_normalized_usage
-                        yield await emit("context_usage", **update.payload)
-                response_text = "".join(response_parts)
+                yield await emit("context_preflight", **reporter.preflight_event())
+
+                from packages.runtime.langgraph_executor import LangGraphReActExecutor
+                from packages.runtime.tools.registry import build_system_tools
+
+                react_executor = LangGraphReActExecutor(chat_model=chat_model, max_iterations=10)
+
+                async def _spawn_subagent(task: str, subagent_kind: str = "USER_SUB"):
+                    # 普通 Agent 通过 ReAct 循环调用该工具，就能拉起独立子代理
+                    # （写作/审稿等），复用同一套系统工具。
+                    return await react_executor.execute(
+                        task=task,
+                        subagent_kind=subagent_kind or "USER_SUB",
+                        tools=subagent_tools,
+                    )
+
+                async def _list_subagents():
+                    delegates = await agent_db.list_org_agents(db, org_id)
+                    return [
+                        {
+                            "agent_id": str(a.agent_id),
+                            "name": str(a.name),
+                            "kind": str(getattr(a, "kind", "USER_SUB") or "USER_SUB"),
+                            "description": str(getattr(a, "description", "") or ""),
+                        }
+                        for a in delegates
+                        if str(a.agent_id) != str(agent.agent_id)
+                    ]
+
+                subagent_tools = build_system_tools(
+                    org_id=org_id,
+                    agent_id=str(agent.agent_id),
+                    subagent_lister=_list_subagents,
+                    subagent_executor=_spawn_subagent,
+                )
+
+                react_result = await react_executor.execute(
+                    task=request.message,
+                    subagent_kind="USER_SUB",
+                    tools=subagent_tools,
+                    messages=compiled_prompt["messages"],
+                )
+                if react_result.get("status") == "failed":
+                    # 主 Agent 的 provider 错误等必须像旧流式路径一样作为 SSE error
+                    # 事件上抛，而不是吞成一段"失败"文本。
+                    raise RuntimeError(react_result.get("error_message") or "agent execution failed")
+                response_text = str(react_result.get("result_text") or "")
+
+                usage = gateway.last_normalized_usage
+                yield await emit(
+                    "context_usage",
+                    **(
+                        reporter.final_event(usage)
+                        if usage is not None
+                        else reporter.unavailable_final_event()
+                    ),
+                )
+                for chunk in _chunk_text(response_text):
+                    yield await emit("token", text=chunk, session_id=session_id)
                 yield await emit(
                     "node_finished",
                     node="agent_call",
