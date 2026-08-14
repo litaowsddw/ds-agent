@@ -101,6 +101,26 @@ function TraceDetail({ event }: { event: ChatTraceEvent }) {
   const model = typeof event.data.model_name === "string" ? event.data.model_name : "";
   const skillTopic = typeof event.data.skill_topic === "string" ? event.data.skill_topic : "";
   const workflowRunId = typeof event.data.workflow_run_id === "string" ? event.data.workflow_run_id : "";
+
+  if (event.node === "subagent") {
+    const status = typeof event.data.subagent_status === "string" ? event.data.subagent_status : "";
+    const toolCalls = typeof event.data.tool_calls_made === "number" ? event.data.tool_calls_made : 0;
+    const resultText = typeof event.data.result_text === "string" ? event.data.result_text : "";
+    return (
+      <div className="mt-0.5 text-[#667085]">
+        <div className="flex items-center gap-2">
+          {status ? (
+            <span className={status === "succeeded" ? "text-emerald-600" : "text-red-500"}>
+              {status === "succeeded" ? "已完成" : "失败"}
+            </span>
+          ) : null}
+          {toolCalls > 0 ? <span>工具调用 {toolCalls} 次</span> : null}
+        </div>
+        {resultText ? <div className="mt-1 line-clamp-2 whitespace-pre-wrap text-[#344054]">{resultText}</div> : null}
+      </div>
+    );
+  }
+
   const detail = workflowRunId ? `Run ${workflowRunId}` : skillTopic || agentName || supervisorName || model || event.event;
   return <div className="mt-0.5 truncate text-[#667085]">{detail}</div>;
 }

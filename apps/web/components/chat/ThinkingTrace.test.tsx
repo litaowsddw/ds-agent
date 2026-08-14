@@ -72,4 +72,27 @@ describe("ThinkingTrace", () => {
     expect(screen.getByText("已停止")).toBeInTheDocument();
     expect(screen.queryByText("执行中")).not.toBeInTheDocument();
   });
+
+  it("renders subagent status, tool calls and a result preview", () => {
+    render(
+      <ThinkingTrace
+        events={[
+          event(1, {
+            node: "subagent",
+            label: "子代理：写一段短文",
+            data: {
+              subagent_status: "succeeded",
+              tool_calls_made: 2,
+              result_text: "这是子代理返回的结果预览",
+            },
+          }),
+        ]}
+      />
+    );
+
+    expect(screen.getByText("子代理：写一段短文")).toBeInTheDocument();
+    expect(screen.getByText("已完成")).toBeInTheDocument();
+    expect(screen.getByText("工具调用 2 次")).toBeInTheDocument();
+    expect(screen.getByText("这是子代理返回的结果预览")).toBeInTheDocument();
+  });
 });

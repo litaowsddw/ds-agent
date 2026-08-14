@@ -778,14 +778,37 @@ async def _chat_stream_events(
 
                 react_executor = LangGraphReActExecutor(chat_model=chat_model, max_iterations=10)
 
+                subagent_trace: list[dict[str, object]] = []
+
                 async def _spawn_subagent(task: str, subagent_kind: str = "USER_SUB"):
-                    # 普通 Agent 通过 ReAct 循环调用该工具，就能拉起独立子代理
-                    # （写作/审稿等），复用同一套系统工具。
-                    return await react_executor.execute(
+                    label = f"子代理：{task[:24]}"
+                    subagent_trace.append(
+                        {
+                            "event": "node_started",
+                            "node": "subagent",
+                            "label": label,
+                            "subagent_kind": subagent_kind or "USER_SUB",
+                            "task": task,
+                        }
+                    )
+                    result = await react_executor.execute(
                         task=task,
                         subagent_kind=subagent_kind or "USER_SUB",
                         tools=subagent_tools,
                     )
+                    subagent_trace.append(
+                        {
+                            "event": "node_finished",
+                            "node": "subagent",
+                            "label": label,
+                            "subagent_kind": subagent_kind or "USER_SUB",
+                            "task": task,
+                            "subagent_status": result.get("status"),
+                            "tool_calls_made": result.get("tool_calls_made", 0),
+                            "result_text": str(result.get("result_text") or "")[:600],
+                        }
+                    )
+                    return result
 
                 async def _list_subagents():
                     delegates = await agent_db.list_org_agents(db, org_id)
@@ -818,6 +841,12 @@ async def _chat_stream_events(
                     # 事件上抛，而不是吞成一段"失败"文本。
                     raise RuntimeError(react_result.get("error_message") or "agent execution failed")
                 response_text = str(react_result.get("result_text") or "")
+
+                # 子代理工作流 Trace：把 ReAct 循环中记录的子代理生命周期
+                # （node_started/node_finished）作为 SSE 事件回传给前端展示。
+                for trace in subagent_trace:
+                    data = {key: value for key, value in trace.items() if key != "event"}
+                    yield await emit(str(trace["event"]), **data)
 
                 usage = gateway.last_normalized_usage
                 yield await emit(
