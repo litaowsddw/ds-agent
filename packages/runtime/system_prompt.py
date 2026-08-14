@@ -124,13 +124,15 @@ feedback and present again."""
 
 SUPERVISOR_TOOL_CONTRACT = """[Supervisor tool contract]
 The runtime exposes a read-only tool set (knowledge_list, knowledge_search,
-memory_recall, skill_search, workspace_read). Use the smallest sufficient
+memory_recall, skill_search, workspace_read) plus subagent control
+(list_subagents, spawn_subagent, subagent_fork). Use the smallest sufficient
 tool: list before searching, search before recalling, and read workspace
-identity only when it is material. Never call a state-changing or external
-action outside this set; high-risk MCP tools require the Workflow approval
-path and are not directly callable here. Report tool results as evidence,
-including the source (kb_id / chunk_id / skill_id) when the runtime returned
-it, and never invent a tool call or result."""
+identity only when it is material. Use spawn_subagent to delegate a
+self-contained subtask (writing, review, research) to a fresh subagent and
+return its observed result; never claim a subagent result you did not observe.
+Report tool results as evidence, including the source (kb_id / chunk_id /
+skill_id) when the runtime returned it, and never invent a tool call or
+result."""
 
 
 def render_tool_catalog(tools: list[dict[str, Any]] | None) -> str:

@@ -23,8 +23,22 @@ from app.services.knowledge_vector_index import (
 from app.services.memory_vector import memory_vector_service
 
 
-def build_supervisor_tools(db: AsyncSession, *, org_id: str, agent_id: str) -> list[BaseTool]:
-    """装配 Supervisor 子代理可用的默认工具。"""
+def build_supervisor_tools(
+    db: AsyncSession,
+    *,
+    org_id: str,
+    agent_id: str,
+    subagent_lister: Any = None,
+    subagent_executor: Any = None,
+    subagent_fork_executor: Any = None,
+) -> list[BaseTool]:
+    """装配 Supervisor 子代理可用的默认工具。
+
+    除安全读路径（知识检索/记忆/技能/工作区读取）外，当运行时注入了
+    subagent_lister/subagent_executor 时，还会装配 DSH 式的子代理控制工具
+    （list_subagents / spawn_subagent / subagent_fork），让 Agent 能动态委派
+    写作/审稿等独立子任务。
+    """
 
     async def rag_executor(query: str, collection: str = "default", top_k: int = 5, **_: Any) -> list[dict[str, Any]]:
         provider = build_embedding_provider_from_env()
@@ -129,6 +143,9 @@ def build_supervisor_tools(db: AsyncSession, *, org_id: str, agent_id: str) -> l
         rag_executor=rag_executor,
         memory_accessor=memory_accessor,
         skill_search_accessor=skill_search_accessor,
+        subagent_lister=subagent_lister,
+        subagent_executor=subagent_executor,
+        subagent_fork_executor=subagent_fork_executor,
     )
     tools.append(WorkspaceReadTool())
     return tools

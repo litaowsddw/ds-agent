@@ -444,14 +444,39 @@ async def _chat_stream_events(
                 model_name=model_name,
                 workspace_id=str(getattr(agent, "workspace_id", "") or ""),
                 llm_caller=adapter,
-                system_prompt=build_agent_system_prompt(
-                    agent_name=str(agent.name or "Agent"),
-                    agent_description=str(agent.description or ""),
-                    agent_instructions=str(getattr(agent, "system_prompt", "") or ""),
-                ),
             )
             runtime.init_supervisor(chat_model=chat_model, llm_caller=adapter)
-            runtime.system_tools = build_supervisor_tools(db, org_id=org_id, agent_id=str(agent.agent_id))
+
+            async def _spawn_subagent(task: str, subagent_kind: str = "USER_SUB"):
+                # 复用 Supervisor 的 ReAct 执行引擎：真正的子代理（写作/审稿等）
+                # 共享同一套系统工具，独立 ReAct 循环后返回 result_text。
+                return await runtime.langgraph_executor.execute(
+                    task=task,
+                    subagent_kind=subagent_kind or "USER_SUB",
+                    tools=list(runtime.system_tools),
+                )
+
+            async def _list_subagents():
+                if runtime.subagent_registry is None:
+                    return []
+                return runtime.subagent_registry.list_available_for_supervisor()
+
+            runtime.system_tools = build_supervisor_tools(
+                db,
+                org_id=org_id,
+                agent_id=str(agent.agent_id),
+                subagent_lister=_list_subagents,
+                subagent_executor=_spawn_subagent,
+            )
+            runtime.system_prompt = build_agent_system_prompt(
+                agent_name=str(agent.name or "Agent"),
+                agent_description=str(agent.description or ""),
+                agent_instructions=str(getattr(agent, "system_prompt", "") or ""),
+                tool_catalog=[
+                    {"name": tool.name, "description": tool.description}
+                    for tool in runtime.system_tools
+                ],
+            )
 
             yield await emit(
                 "node_started",
