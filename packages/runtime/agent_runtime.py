@@ -199,7 +199,13 @@ class AgentRuntime:
             else:
                 from packages.runtime.system_prompt import build_agent_system_prompt
 
-                system_prompt = build_agent_system_prompt(agent_name="Agent")
+                system_prompt = build_agent_system_prompt(
+                    agent_name="Agent",
+                    tool_catalog=[
+                        {"name": tool.name, "description": tool.description}
+                        for tool in self.system_tools
+                    ],
+                )
             response_text = await self.llm_caller.call(
                 prompt=user_input,
                 system_prompt=system_prompt,

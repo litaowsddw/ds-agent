@@ -41,6 +41,7 @@ SUBAGENT_SYSTEM_PROMPTS: dict[str, str] = {
 }
 
 MAX_TOOL_RESULT_CHARS = 12_000
+DEFAULT_TOOL_RESULT_TAIL_CHARS = 1_024
 
 
 def _tool_call_fingerprint(tool_name: str, tool_args: Any) -> str:
@@ -53,8 +54,19 @@ def _tool_call_fingerprint(tool_name: str, tool_args: Any) -> str:
     return f"{tool_name}:{rendered_args}"
 
 
-def _bounded_tool_result(result: Any, maximum: int = MAX_TOOL_RESULT_CHARS) -> str:
-    """Keep tool observations useful without allowing a result to exhaust context."""
+def _bounded_tool_result(
+    result: Any,
+    maximum: int = MAX_TOOL_RESULT_CHARS,
+    tail_chars: int = DEFAULT_TOOL_RESULT_TAIL_CHARS,
+) -> str:
+    """Keep tool observations useful without letting a result exhaust context.
+
+    Results over ``maximum`` characters are pruned the way the DeepSeek Harness
+    tool-result pruner does: keep the leading head and the trailing tail (where
+    terminal answers and errors usually live) and drop the middle.  When
+    ``tail_chars`` is disabled or larger than ``maximum`` the result falls back
+    to a plain head-only cap.
+    """
 
     if isinstance(result, (dict, list)):
         text = json.dumps(result, ensure_ascii=False, sort_keys=True, default=str)
@@ -62,6 +74,11 @@ def _bounded_tool_result(result: Any, maximum: int = MAX_TOOL_RESULT_CHARS) -> s
         text = str(result)
     if len(text) <= maximum:
         return text
+    if tail_chars > 0 and maximum > tail_chars:
+        head = text[: maximum - tail_chars]
+        tail = text[-tail_chars:]
+        dropped = len(text) - maximum
+        return f"{head}\n...[{dropped} characters truncated]...\n{tail}"
     return text[:maximum] + f"\n[Tool result truncated after {maximum} characters]"
 
 

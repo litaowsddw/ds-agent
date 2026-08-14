@@ -82,6 +82,10 @@ async def _run_usage_flow(tmp_path, monkeypatch) -> None:
     database_url = f"sqlite+aiosqlite:///{tmp_path / 'metering-flow.db'}"
     engine = create_async_engine(database_url)
     sessions = async_sessionmaker(engine, expire_on_commit=False)
+    # SessionUsageRecorder persists the terminal usage fact through the
+    # process-global session factory (its own commit), so redirect that factory
+    # to this test's isolated database alongside the request-session override.
+    monkeypatch.setattr("app.database.async_session_factory", sessions)
     async with engine.begin() as connection:
         await connection.run_sync(Base.metadata.create_all)
 

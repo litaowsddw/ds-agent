@@ -23,5 +23,8 @@ alembic==1.14.0
 sse-starlette==2.1.3
 # Official DeepSeek offline tokenizer support for pre-request context accounting.
 transformers==4.49.0
+# transformers.apply_chat_template renders the tokenizer's chat template through
+# Jinja2 at runtime; it is not a transitive dependency of transformers 4.49.0.
+jinja2>=3.1.0
 
 httpx==0.28.1
